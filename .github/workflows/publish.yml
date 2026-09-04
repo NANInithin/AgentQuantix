@@ -1,0 +1,109 @@
+name: Publish
+
+# Trusted publishing: PyPI authenticates this workflow by its OIDC identity
+# (repository + workflow file + environment), so there is no API token stored
+# in the repository, in an environment secret, or on anyone's laptop. Nothing
+# to leak and nothing to rotate.
+#
+# Two ways in:
+#   * publishing a GitHub Release -> goes to PyPI
+#   * running it by hand          -> goes wherever you pick, defaulting to
+#                                    TestPyPI, so the whole path can be
+#                                    rehearsed before the real name is claimed
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish"
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+permissions:
+  contents: read
+
+jobs:
+  # The same suite CI runs, not a copy of it. A release that skips the tests
+  # is how a broken artifact reaches people who did not ask to be testers.
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build wheel and sdist
+        run: |
+          pip install build
+          python -m build
+
+      - name: Validate the metadata PyPI will reject
+        run: |
+          pip install twine
+          twine check dist/*
+
+      - name: The tag matches the package version
+        # Only meaningful on a release. A v0.3.0 release shipping a 0.2.0 wheel
+        # is unfixable after upload: PyPI does not allow re-uploading a version.
+        if: github.event_name == 'release'
+        run: |
+          pip install --quiet dist/*.whl
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(python -c 'import agentquantix; print(agentquantix.__version__)')"
+          echo "tag=$TAG package=$PKG"
+          test "$TAG" = "$PKG"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  testpypi:
+    # A rehearsal target. Worth using at least once: it proves the OIDC trust
+    # is configured correctly without permanently consuming a version number on
+    # the real index.
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/agentquantix
+    permissions:
+      # The whole mechanism. Mints the short-lived OIDC token PyPI verifies.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # TestPyPI accumulates junk from rehearsals; a clash there should not
+          # fail the run.
+          skip-existing: true
+
+  pypi:
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/agentquantix
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        # No skip-existing here on purpose: a silent skip on the real index
+        # would leave a release believing it published when it did not.

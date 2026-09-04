@@ -6,6 +6,10 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  # Callable, so the publish workflow runs THIS suite rather than a copy of it.
+  # A release path with its own slightly-diverged tests is a release path that
+  # eventually ships something the tests would have caught.
+  workflow_call:
 
 # A second push to the same branch makes the first run's result irrelevant.
 concurrency:
