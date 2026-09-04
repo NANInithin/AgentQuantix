@@ -99,6 +99,29 @@ class Candidate:
 # =====================================================
 # STEP 1a — the list
 # =====================================================
+def trending_kwargs(limit):
+    """How to ask for "most trending first", across huggingface_hub versions.
+
+    The two major versions disagree, and the 1.x form is a hard TypeError on
+    0.x and vice versa:
+
+      * 0.x wants sort="trendingScore" plus direction=-1 for descending.
+      * 1.x renamed the sort keys to snake_case ("trending_score") and removed
+        `direction` entirely; these ranking sorts are descending by default,
+        which was verified against the live API rather than assumed.
+
+    Detected from the signature rather than the version string, because that
+    is the thing that actually determines whether the call works.
+    """
+    import inspect
+
+    parameters = inspect.signature(HfApi.list_models).parameters
+    if "direction" in parameters:
+        return {"sort": "trendingScore", "direction": -1,
+                "limit": limit, "full": True}
+    return {"sort": "trending_score", "limit": limit, "full": True}
+
+
 def trending(limit=None):
     """The current top-N trending models, best first.
 
@@ -109,8 +132,7 @@ def trending(limit=None):
     limit = limit or config.TRENDING_LIMIT
     out = []
     for rank, model in enumerate(
-            api().list_models(sort="trendingScore", direction=-1,
-                              limit=limit, full=True), start=1):
+            api().list_models(**trending_kwargs(limit)), start=1):
         out.append(Candidate(
             repo_id=model.id,
             rank=rank,

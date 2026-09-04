@@ -78,6 +78,33 @@ jobs:
           PY
         shell: bash
 
+  hub-compat:
+    # huggingface_hub 0.x and 1.x are not API-compatible: 1.x removed
+    # `direction` from list_models and renamed the sort keys to snake_case, so
+    # a machine that resolved a newer hub crashed on `aqx research` while the
+    # development machine kept working. The dependency range allows both, so
+    # both get tested.
+    name: hub ${{ matrix.hub }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        hub: ["==0.36.*", ">=1.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install with a pinned huggingface_hub
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install "huggingface_hub${{ matrix.hub }}"
+          python -c "import huggingface_hub as h; print('hub', h.__version__)"
+      - run: pytest -q
+      - name: The CLI still starts
+        run: aqx --help
+
   lint:
     name: lint
     runs-on: ubuntu-latest

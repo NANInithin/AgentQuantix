@@ -120,9 +120,15 @@ def for_upload():
 # APPLYING IT
 # =====================================================
 def enabled():
-    """Whether xet is currently enabled in this process."""
+    """Whether xet is currently enabled in this process.
+
+    getattr rather than a plain attribute read: the constant arrived in a
+    particular huggingface_hub release, and a version without it should
+    degrade to "xet is on" rather than crashing the whole command on an
+    AttributeError from a policy helper.
+    """
     from huggingface_hub import constants
-    return not constants.HF_HUB_DISABLE_XET
+    return not getattr(constants, "HF_HUB_DISABLE_XET", False)
 
 
 def pin(want, reason=""):

@@ -26,7 +26,11 @@ classifiers = [
 # environment is not portable. These three the pipeline genuinely cannot do
 # without.
 dependencies = [
-    "huggingface_hub>=0.30",
+    # Floor is a version actually verified, not a guess: 0.30 has neither
+    # constants.HF_HUB_DISABLE_XET nor MAX_HTTP_DOWNLOAD_SIZE, so the xet
+    # policy would AttributeError on first use. 0.36 and 1.30 are both
+    # tested; the API difference between them is handled in hub.py.
+    "huggingface_hub>=0.36",
     "datasets>=3.0",
     "gguf>=0.10",
 ]
