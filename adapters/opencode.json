@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "agentquantix": {
+      "type": "local",
+      "enabled": true,
+      "command": ["aqx", "mcp"],
+      "environment": {
+        "PYTHONUNBUFFERED": "1",
+        "HF_HUB_DISABLE_SYMLINKS_WARNING": "1"
+      }
+    },
+    "huggingface": {
+      "type": "remote",
+      "enabled": true,
+      "url": "https://huggingface.co/mcp"
+    }
+  }
+}

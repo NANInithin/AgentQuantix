@@ -1,0 +1,13 @@
+# Run state and reports are machine-local: they describe what THIS box
+# measured and what it has already published, and mean nothing elsewhere.
+state/
+reports/
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Build artifacts
+build/
+dist/
+*.whl

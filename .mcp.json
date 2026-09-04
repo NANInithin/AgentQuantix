@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "agentquantix": {
+      "command": "aqx",
+      "args": ["mcp"],
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "HF_HUB_DISABLE_SYMLINKS_WARNING": "1"
+      }
+    },
+    "huggingface": {
+      "type": "http",
+      "url": "https://huggingface.co/mcp"
+    }
+  }
+}

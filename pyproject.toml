@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentquantix"
+dynamic = ["version"]
+description = "Research trending Hugging Face models and quantize the approved ones to llama.cpp GGUF."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["gguf", "llama.cpp", "quantization", "huggingface", "agent", "mcp"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Deliberately small. The MCP server is written against raw JSON-RPC and the
+# OpenRouter loop against urllib, so neither the `mcp` nor the `openai` package
+# is required - a portability layer that needs a pip install in someone else's
+# environment is not portable. These three the pipeline genuinely cannot do
+# without.
+dependencies = [
+    "huggingface_hub>=0.30",
+    "datasets>=3.0",
+    "gguf>=0.10",
+]
+
+[project.optional-dependencies]
+# hf_xet lifts huggingface_hub's plain-HTTP download cap (50 decimal GB, which
+# is 46.57 GiB). Required for the largest models; the agent enables it only for
+# those downloads and keeps uploads on the much faster plain-HTTP path.
+big = ["hf_xet>=1.0"]
+# Ninja parallelises a build at file level instead of project level, which is
+# several times faster for ggml's ~100 CUDA sources.
+build = ["ninja>=1.11"]
+dev = ["pytest>=8.0"]
+all = ["hf_xet>=1.0", "ninja>=1.11"]
+
+[project.urls]
+Documentation = "https://github.com/NANInithin/AgentQuantix/blob/main/USAGE.md"
+
+[project.scripts]
+aqx = "agentquantix.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "agentquantix.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

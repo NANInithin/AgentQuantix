@@ -1,0 +1,24 @@
+# AgentQuantix for Codex.
+#
+# Append to ~/.codex/config.toml. Same server, same tools, same instructions as
+# every other harness - only the config format differs.
+#
+# This assumes `aqx` is on PATH (uv tool install / pipx install). If you are
+# running from a source checkout instead, replace command/args with your
+# interpreter and set PYTHONPATH to the checkout's src/ directory:
+#
+#   command = "/path/to/python"
+#   args    = ["-m", "agentquantix.mcp_server"]
+#   env     = { PYTHONPATH = "/path/to/AgentQuantix/src" }
+#
+# `python scripts/install.py` generates exactly this, resolved for your machine.
+
+[mcp_servers.agentquantix]
+command = "aqx"
+args = ["mcp"]
+env = { PYTHONUNBUFFERED = "1", HF_HUB_DISABLE_SYMLINKS_WARNING = "1" }
+
+# The Hugging Face MCP server, for ad-hoc Hub lookups alongside the agent's own
+# deterministic trending query. Get the token from huggingface.co/settings/mcp.
+[mcp_servers.huggingface]
+url = "https://huggingface.co/mcp"
