@@ -88,8 +88,8 @@ def check():
          "install": {"*": "pip install hf_xet"}},
         {"name": "HF token", "ok": bool(config.TOKEN), "required": True,
          "why": "uploading needs a token with write permission",
-         "install": {"linux": "export MLE2=hf_...   (or HF_TOKEN)",
-                     "win32": "$env:MLE2 = 'hf_...'   (or HF_TOKEN)"}},
+         "install": {"linux": "export HF_TOKEN=hf_...   (or: hf auth login)",
+                     "win32": "$env:HF_TOKEN = 'hf_...'   (or: hf auth login)"}},
     ]
     return items
 

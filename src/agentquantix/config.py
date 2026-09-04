@@ -74,10 +74,31 @@ FORKS_DIR = TEMP_DIR / "aqx-forks"
 # =====================================================
 # ENVIRONMENT
 # =====================================================
-# The Hugging Face write token. MLE2 is the name the existing scripts use and
-# is already exported in the user's shell; HF_TOKEN is the conventional
-# fallback for anyone else running this.
-TOKEN = os.getenv("MLE2") or os.getenv("HF_TOKEN")
+def _resolve_token():
+    """The Hugging Face token, found the way the ecosystem expects.
+
+    Order:
+      1. HF_TOKEN / HUGGING_FACE_HUB_TOKEN — huggingface_hub's own variables,
+         so anyone arriving from the Hub docs is already configured.
+      2. `hf auth login`, via huggingface_hub.get_token(), which reads
+         ~/.cache/huggingface/token. Requiring an environment variable when
+         the user has already logged in is a needless second step, and the
+         most common reason a working setup looks unconfigured.
+      3. MLE2 — the private variable this project grew up using. Kept working
+         so an existing machine does not break, but it is not documented
+         anywhere and nothing should rely on it.
+    """
+    for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "MLE2"):
+        if value := os.getenv(name):
+            return value
+    try:
+        from huggingface_hub import get_token
+        return get_token()
+    except Exception:
+        return None
+
+
+TOKEN = _resolve_token()
 
 def migrate_legacy_state():
     """Move state/reports from a source checkout to the user directory, once.

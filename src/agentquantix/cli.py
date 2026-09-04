@@ -362,8 +362,8 @@ def cmd_doctor(args):
     problems, notes = [], []
 
     if not info["hf_token"]:
-        problems.append("No Hugging Face token. Set MLE2 (or HF_TOKEN) with "
-                        "write permission.")
+        problems.append("No Hugging Face token. Set HF_TOKEN, or run "
+                        "`hf auth login`. It needs write permission.")
     if not info["llama"]["present"]:
         problems.append(f"No llama.cpp checkout at {config.UPSTREAM_LLAMA}. "
                         "Clone it there, or set INF_ROOT.")

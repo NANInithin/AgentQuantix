@@ -41,7 +41,7 @@ irm https://raw.githubusercontent.com/NANInithin/AgentQuantix/main/install.ps1 |
 Then:
 
 ```bash
-export MLE2=hf_...        # your Hugging Face token, with write permission
+export HF_TOKEN=hf_...    # write permission; or just run `hf auth login`
 aqx bootstrap             # checks prerequisites, clones + builds llama.cpp
 ```
 

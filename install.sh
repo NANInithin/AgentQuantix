@@ -89,7 +89,8 @@ aqx bootstrap --check-only || true
 cat <<'EOF'
 
 Next:
-  export MLE2=hf_...        your Hugging Face token, with write permission
+  export HF_TOKEN=hf_...    your Hugging Face token, with write permission
+                            (or run: hf auth login)
   aqx bootstrap             clones and builds llama.cpp (a few minutes)
   aqx research              the top trending models, sized for this machine
 

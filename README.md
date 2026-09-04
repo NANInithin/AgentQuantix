@@ -161,7 +161,7 @@ built-in loop asks you directly before letting the call through.
 
 | Variable | Meaning |
 |---|---|
-| `MLE2` / `HF_TOKEN` | Hugging Face token with write permission. Required. |
+| `HF_TOKEN` | Hugging Face token with write permission. Required. `HUGGING_FACE_HUB_TOKEN` also works, as does `hf auth login` (no variable needed). |
 | `INF_ROOT` | Where llama.cpp and the scratch tree live. Default `~/Documents/INF`. |
 | `AQX_NAMESPACE` | Hub namespace to publish under. Defaults to whoever the token belongs to. |
 | `AQX_XET` | `auto` (default), `on` or `off`. Auto enables xet only for downloads over 46.6 GiB, where huggingface_hub requires it, and keeps uploads on the ~10x faster plain-HTTP path. You do not need to set `HF_HUB_DISABLE_XET` yourself. |

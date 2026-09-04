@@ -26,13 +26,22 @@ def offline(monkeypatch, tmp_path):
     history — so a suite that passes locally fails in CI, or worse, the other
     way round.
     """
-    for variable in ("MLE2", "HF_TOKEN", "AQX_NAMESPACE", "AQX_XET",
+    for variable in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "MLE2",
+                     "AQX_NAMESPACE", "AQX_XET", "AQX_HOME",
                      "AQX_WORK_ROOT", "INF_ROOT", "HF_HUB_DISABLE_XET",
                      "AQX_SEQUENTIAL", "AQX_UPLOAD_WORKERS",
                      "AQX_QUANTIZE_WORKERS", "AQX_QUEUE_DEPTH",
                      "AQX_QUANTIZE_THREADS", "GITHUB_TOKEN"):
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.setenv("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
+    # config.TOKEN is resolved at import, and one source is the token file that
+    # `hf auth login` writes — so clearing the environment is not enough to
+    # keep a developer's real credentials out of the tests. Blanked explicitly;
+    # anything that wants a token sets one itself.
+    from agentquantix import config
+    monkeypatch.setattr(config, "TOKEN", None)
+    monkeypatch.setattr(config, "_namespace_cache", None)
     yield
 
 

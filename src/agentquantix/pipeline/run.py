@@ -416,7 +416,8 @@ def run_jobs(jobs, options: RunOptions | None = None, on_event=None,
     """
     options = options or RunOptions.from_config()
     if not config.TOKEN:
-        raise SystemExit("No Hugging Face token - set MLE2 (or HF_TOKEN).")
+        raise SystemExit("No Hugging Face token - set HF_TOKEN, or run "
+                         "`hf auth login`.")
     print(f"Sweep concurrency: {options.describe()}")
     print()
 

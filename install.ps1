@@ -68,7 +68,8 @@ aqx bootstrap --check-only
 Write-Host @'
 
 Next:
-  $env:MLE2 = "hf_..."      your Hugging Face token, with write permission
+  $env:HF_TOKEN = "hf_..."  your Hugging Face token, with write permission
+                            (or run: hf auth login)
   aqx bootstrap             clones and builds llama.cpp (a few minutes)
   aqx research              the top trending models, sized for this machine
 

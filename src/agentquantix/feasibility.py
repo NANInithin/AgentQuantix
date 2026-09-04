@@ -382,7 +382,8 @@ def assess(candidate, sysinfo, arch_ok, arch_detail, fork_leads=None,
     blockers, warnings = [], []
 
     if not sysinfo.get("hf_token"):
-        blockers.append("no Hugging Face token (MLE2 / HF_TOKEN unset)")
+        blockers.append("no Hugging Face token - set HF_TOKEN or run "
+                        "`hf auth login`")
     if not params:
         blockers.append("parameter count unknown - cannot size anything")
     if peak_disk_gb > free_disk * 0.9:
