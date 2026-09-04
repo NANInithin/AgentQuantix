@@ -14,18 +14,30 @@ variables, and the file layout.
 **If you already have Python**, install the CLI straight from the repo:
 
 ```bash
-uv tool install "git+https://github.com/NANInithin/AgentQuantix#egg=agentquantix[all]"
+uv tool install "agentquantix[full] @ git+https://github.com/NANInithin/AgentQuantix"
 ```
 
 or from a local checkout:
 
 ```bash
-uv tool install "./AgentQuantix[all]"
+uv tool install "./AgentQuantix[full]"
 ```
 
 That puts `aqx` on PATH. `pipx install` works identically if you prefer it.
-The `[all]` extra pulls `hf_xet` (large downloads) and `ninja` (much faster
-builds) — both change what the tool can actually do, so take them.
+
+**Which extra?**
+
+| extra | pulls | when |
+|---|---|---|
+| `[all]` | `hf_xet`, `ninja` | you only quantize models whose publisher already ships a BF16 GGUF |
+| `[full]` | the above plus `torch`, `transformers`, `sentencepiece`, `protobuf` | you want to convert safetensors yourself — the general case |
+
+`[full]` is about a gigabyte larger and is what most people want. Without it,
+`aqx run` can only handle models that already have an official GGUF, and says
+so at plan time rather than after downloading the weights.
+
+`hf_xet` and `ninja` both change what the tool can actually do (downloads over
+47 GiB, and much faster builds), so take them either way.
 
 **On a bare machine** — a fresh VM with nothing — use the bootstrap installer,
 which brings its own Python:

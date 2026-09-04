@@ -33,30 +33,48 @@ from .build import run_verbose
 
 GB = 1024 ** 3
 
-# What convert_hf_to_gguf.py imports before it will do anything. Not our
-# dependencies — together they are around a gigabyte, and a model whose
-# publisher ships a BF16 GGUF needs neither — so they are an opt-in extra and
-# their absence has to be reported clearly rather than as a subprocess exit code.
-CONVERTER_REQUIREMENTS = ("torch", "transformers")
+# What convert_hf_to_gguf.py needs before it will do anything, taken from
+# llama.cpp's own requirements-convert_legacy_llama.txt rather than from what
+# happened to be imported the last time it was watched fail.
+#
+# Not our dependencies — torch alone is most of a gigabyte, and a model whose
+# publisher ships a BF16 GGUF needs none of it — so they are the `convert`
+# extra, and their absence has to be reported before a download rather than as
+# a subprocess exit code afterwards.
+#
+# The value is the module actually imported, which is NOT always the package
+# name: `import protobuf` fails on a machine where protobuf is installed and
+# working. Checking the package name would have reported it permanently
+# missing and refused every conversion.
+CONVERTER_REQUIREMENTS = {
+    "torch": "torch",
+    "transformers": "transformers",
+    # SentencePiece vocabularies are the default path for Llama, Qwen, Gemma
+    # and most of what trends. Leaving it out let a run download the weights
+    # and then die in set_vocab(), which is precisely what this check exists
+    # to prevent.
+    "sentencepiece": "sentencepiece",
+    "protobuf": "google.protobuf",
+}
 
 
 def converter_missing():
     """Packages the converter needs that are not importable here."""
     missing = []
-    for module in CONVERTER_REQUIREMENTS:
+    for package, module in CONVERTER_REQUIREMENTS.items():
         try:
             __import__(module)
         except ImportError:
-            missing.append(module)
+            missing.append(package)
     return missing
 
 
 def converter_hint(missing):
     """The exact command that fixes it, for whichever install shape this is."""
-    packages = " ".join(f"--with {m}" for m in missing)
-    return (f"convert_hf_to_gguf.py needs {', '.join(missing)}. Install with:\n"
-            f"  uv tool install --force --reinstall {packages} "
-            '"agentquantix[all] @ git+https://github.com/NANInithin/AgentQuantix"\n'
+    return (f"convert_hf_to_gguf.py needs {', '.join(missing)}. "
+            "The `full` extra is exactly this set:\n"
+            "  uv tool install --force --reinstall "
+            '"agentquantix[full] @ git+https://github.com/NANInithin/AgentQuantix"\n'
             "  (or `pip install " + " ".join(missing) + "` in the environment "
             "aqx runs from)\n"
             "Models whose publisher already ships a BF16 GGUF need none of this.")
@@ -78,9 +96,12 @@ PIP_NAMES = {
     "attrdict": "attrdict3",
 }
 
+# The list ends at the sentence's full stop -- transformers follows it with
+# "Run `pip install ...`", and a character class containing "." swallowed that
+# too, yielding a phantom package called "Run".
 _REMOTE_CODE_DEPS = re.compile(
     r"requires the following packages that were not found in your "
-    r"environment:\s*([A-Za-z0-9_., -]+)")
+    r"environment:\s*([A-Za-z0-9_,\- ]+)")
 
 
 def remote_code_hint(reason: str):
@@ -105,7 +126,7 @@ def remote_code_hint(reason: str):
         "",
         "  uv tool install --force --reinstall "
         + " ".join(f"--with {p}" for p in packages)
-        + ' "agentquantix[all] @ '
+        + ' "agentquantix[full] @ '
         + 'git+https://github.com/NANInithin/AgentQuantix"',
     ]
     if renamed:

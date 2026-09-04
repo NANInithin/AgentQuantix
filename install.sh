@@ -60,17 +60,24 @@ if [ -n "${BASH_SOURCE[0]:-}" ]; then
     fi
 fi
 
+# [all] is hf_xet + ninja. [full] adds torch, transformers, sentencepiece
+# and protobuf -- about a gigabyte, and required to convert safetensors, which
+# is the general case. Default to the light install and say what it costs,
+# rather than making every bootstrap pay for torch it may not need:
+#   AQX_EXTRA=full ./install.sh
+AQX_EXTRA="${AQX_EXTRA:-all}"
+
 if [ -n "$HERE" ] && [ -f "$HERE/pyproject.toml" ]; then
     say "Installing AgentQuantix from $HERE"
     # --reinstall rebuilds rather than reusing uv's cached wheel for this
     # path. Without it, editing the source and reinstalling silently keeps
     # the previous build.
-    uv tool install --force --reinstall "${HERE}[all]"
+    uv tool install --force --reinstall "${HERE}[${AQX_EXTRA}]"
 else
     say "Installing AgentQuantix from $REPO_URL@$REF"
     # PEP 508 direct reference rather than the legacy pip "#egg=" fragment,
     # which uv accepts but which does not carry the extras reliably.
-    uv tool install --force "agentquantix[all] @ git+$REPO_URL@$REF"
+    uv tool install --force "agentquantix[${AQX_EXTRA}] @ git+$REPO_URL@$REF"
 fi
 
 uv tool update-shell >/dev/null 2>&1 || true

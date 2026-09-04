@@ -47,6 +47,7 @@ def check():
     """
     cuda = build_mod.has_cuda_toolkit()
     gpus = sysprobe._gpu()
+    _missing_converter_deps = source_mod.converter_missing()
 
     items = [
         {"name": "git", "ok": bool(build_mod.find_tool("git")), "required": True,
@@ -82,12 +83,21 @@ def check():
         {"name": "gguf", "ok": _python_package("gguf"), "required": True,
          "why": "reads GGUF headers to find imatrix coverage gaps",
          "install": {"*": "pip install gguf"}},
-        {"name": "torch + transformers",
-         "ok": not source_mod.converter_missing(), "required": False,
-         "why": "convert_hf_to_gguf.py needs both; without them only models "
-                "whose publisher already ships a GGUF can be built",
-         "install": {"*": "uv tool install --with torch --with transformers "
-                          "agentquantix   (~1 GB)"}},
+        {"name": "converter deps",
+         "ok": not _missing_converter_deps, "required": False,
+         # Naming the ones actually missing beats naming the set: three of the
+         # four installed and one not is the case that produced a run which
+         # downloaded the weights and then died in set_vocab().
+         "why": (f"missing {', '.join(_missing_converter_deps)} - "
+                 "convert_hf_to_gguf.py needs them; without them only models "
+                 "whose publisher already ships a GGUF can be built"
+                 if _missing_converter_deps else
+                 "torch, transformers, sentencepiece, protobuf - "
+                 "convert_hf_to_gguf.py needs all four"),
+         "install": {"*": 'uv tool install --force --reinstall '
+                          '"agentquantix[full] @ '
+                          'git+https://github.com/NANInithin/AgentQuantix"'
+                          '   (~1 GB)'}},
         {"name": "hf_xet", "ok": transfer.installed(), "required": False,
          "why": f"downloads over {transfer.HTTP_DOWNLOAD_LIMIT_GIB:.0f} GiB "
                 "are impossible without it",
