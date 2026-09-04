@@ -44,7 +44,9 @@ Write-Host "  uv $((uv --version) -split ' ' | Select-Object -Last 1)"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 if ($Here -and (Test-Path (Join-Path $Here "pyproject.toml"))) {
     Say "Installing AgentQuantix from $Here"
-    uv tool install --force "$Here[all]"
+    # --reinstall rebuilds rather than reusing uv's cached wheel for
+    # this path; without it an edited source can install as the old build.
+    uv tool install --force --reinstall "$Here[all]"
 } else {
     Say "Installing AgentQuantix from $RepoUrl@$Ref"
     uv tool install --force "git+$RepoUrl@$Ref#egg=agentquantix[all]"

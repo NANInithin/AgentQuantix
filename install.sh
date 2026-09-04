@@ -53,7 +53,10 @@ fi
 
 if [ -f "$HERE/pyproject.toml" ]; then
     say "Installing AgentQuantix from $HERE"
-    uv tool install --force "${HERE}[all]"
+    # --reinstall rebuilds rather than reusing uv's cached wheel for this
+    # path. Without it, editing the source and reinstalling silently keeps
+    # the previous build.
+    uv tool install --force --reinstall "${HERE}[all]"
 else
     say "Installing AgentQuantix from $REPO_URL@$REF"
     uv tool install --force "git+$REPO_URL@$REF#egg=agentquantix[all]"
