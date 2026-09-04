@@ -21,7 +21,7 @@ import sys
 
 from . import (card, config, feasibility, report, research, sysprobe,
                transfer)
-from .pipeline import run as run_mod
+from .pipeline import run as run_mod, source as source_mod
 from .pipeline.job import Job
 
 
@@ -209,6 +209,23 @@ def cmd_run(args):
                f"({transfer.summary()}).")
         return 1
     jobs = runnable
+
+    # Conversion needs torch and transformers, which are an optional extra.
+    # Reported HERE, before the approval prompt, because the alternative is
+    # finding out after several gigabytes of weights have been downloaded.
+    # Models whose publisher ships a BF16 GGUF are unaffected and stay.
+    if missing := source_mod.converter_missing():
+        convertible = [j for j in jobs if j.source_kind == "convert"]
+        if convertible:
+            _print("")
+            for job in convertible:
+                _print(f"  {job.repo_id}: needs conversion from safetensors, "
+                       f"which requires {', '.join(missing)} - skipping.")
+            _print("")
+            _print(source_mod.converter_hint(missing))
+            jobs = [j for j in jobs if j.source_kind != "convert"]
+        if not jobs:
+            return 1
 
     # Smallest first, so a pipeline problem surfaces on the cheapest model
     # rather than eight hours into the largest one.

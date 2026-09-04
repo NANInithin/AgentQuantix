@@ -25,7 +25,7 @@ import subprocess
 import sys
 
 from . import config, sysprobe, transfer
-from .pipeline import build as build_mod
+from .pipeline import build as build_mod, source as source_mod
 
 
 # =====================================================
@@ -82,8 +82,9 @@ def check():
         {"name": "gguf", "ok": _python_package("gguf"), "required": True,
          "why": "reads GGUF headers to find imatrix coverage gaps",
          "install": {"*": "pip install gguf"}},
-        {"name": "torch", "ok": _python_package("torch"), "required": False,
-         "why": "convert_hf_to_gguf.py needs it; without torch only models "
+        {"name": "torch + transformers",
+         "ok": not source_mod.converter_missing(), "required": False,
+         "why": "convert_hf_to_gguf.py needs both; without them only models "
                 "whose publisher already ships a GGUF can be built",
          "install": {"*": "uv tool install --with torch --with transformers "
                           "agentquantix   (~1 GB)"}},

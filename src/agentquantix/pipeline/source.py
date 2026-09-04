@@ -32,6 +32,34 @@ from .build import run
 
 GB = 1024 ** 3
 
+# What convert_hf_to_gguf.py imports before it will do anything. Not our
+# dependencies — together they are around a gigabyte, and a model whose
+# publisher ships a BF16 GGUF needs neither — so they are an opt-in extra and
+# their absence has to be reported clearly rather than as a subprocess exit code.
+CONVERTER_REQUIREMENTS = ("torch", "transformers")
+
+
+def converter_missing():
+    """Packages the converter needs that are not importable here."""
+    missing = []
+    for module in CONVERTER_REQUIREMENTS:
+        try:
+            __import__(module)
+        except ImportError:
+            missing.append(module)
+    return missing
+
+
+def converter_hint(missing):
+    """The exact command that fixes it, for whichever install shape this is."""
+    packages = " ".join(f"--with {m}" for m in missing)
+    return (f"convert_hf_to_gguf.py needs {', '.join(missing)}. Install with:\n"
+            f"  uv tool install --force --reinstall {packages} "
+            '"agentquantix[all] @ git+https://github.com/NANInithin/AgentQuantix"\n'
+            "  (or `pip install " + " ".join(missing) + "` in the environment "
+            "aqx runs from)\n"
+            "Models whose publisher already ships a BF16 GGUF need none of this.")
+
 
 def _size_gb(path: Path):
     return path.stat().st_size / GB if path.exists() else 0.0
@@ -90,6 +118,13 @@ def ensure_bf16(job, llama_dir: Path, hub_files: set):
         return job.bf16_path
 
     # ---- 3. convert the safetensors ------------------------------------
+    # Checked before the download, not after it. The converter's import error
+    # is a subprocess exit code that says nothing useful, and discovering it
+    # afterwards throws away however many gigabytes of weights were just
+    # fetched.
+    if missing := converter_missing():
+        raise RuntimeError(converter_hint(missing))
+
     job.source_dir.mkdir(parents=True, exist_ok=True)
     if not any(job.source_dir.iterdir()):
         print(f"[{job.base_name}] downloading source weights...")

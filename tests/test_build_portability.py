@@ -9,6 +9,8 @@ hours into a run on someone else's machine.
 
 import shutil
 import sys
+
+import pytest
 from pathlib import Path
 
 from agentquantix.pipeline import build as build_mod
@@ -275,3 +277,52 @@ def test_converter_status_reports_why_it_failed(tmp_path, monkeypatch):
     status = archsupport.converter_status(tmp_path)
     assert status["ok"] and status["source"] == "source-parse"
     assert "torch" in status["error"]
+
+
+# =====================================================
+# CONVERTER DEPENDENCIES
+# =====================================================
+def test_converter_requirements_are_detected(monkeypatch):
+    """REGRESSION. Missing torch surfaced as a subprocess exit code AFTER the
+    weights downloaded -- 5.6 GB for gpt2 -- and the message named neither the
+    package nor the fix."""
+    from agentquantix.pipeline import source
+
+    real_import = __import__
+
+    def no_torch(name, *args, **kwargs):
+        if name == "torch":
+            raise ImportError("No module named 'torch'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", no_torch)
+    assert "torch" in source.converter_missing()
+
+
+def test_the_hint_names_the_packages_and_the_fix():
+    from agentquantix.pipeline import source
+
+    hint = source.converter_hint(["torch", "transformers"])
+    assert "torch" in hint and "transformers" in hint
+    assert "uv tool install" in hint
+    # And that models with a publisher GGUF do not need any of it, so nobody
+    # installs a gigabyte they did not have to.
+    assert "already ships a BF16 GGUF" in hint
+
+
+def test_conversion_refuses_before_downloading(tmp_path, monkeypatch):
+    """The check must happen before snapshot_download, not after."""
+    from agentquantix.pipeline import source
+    from agentquantix.pipeline.job import Job
+
+    monkeypatch.setattr(source, "converter_missing", lambda: ["torch"])
+    monkeypatch.setattr(source, "snapshot_download",
+                        lambda **kw: pytest.fail("downloaded despite no torch"))
+
+    job = Job(repo_id="org/M", base_name="M", target_repo="me/M-GGUF",
+              quants=["Q4_K_M"], source_kind="convert")
+    monkeypatch.setattr(type(job), "work_dir",
+                        property(lambda self: tmp_path / "M"))
+
+    with pytest.raises(RuntimeError, match="torch"):
+        source.ensure_bf16(job, tmp_path, set())
