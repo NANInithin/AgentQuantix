@@ -423,12 +423,22 @@ def cleanup_fork(llama_dir: Path):
     def force_writable(func, path, _exc):
         """git marks .git/objects/pack/*.idx and *.pack read-only, and Windows
         refuses to unlink a read-only file — so rmtree dies with WinError 5
-        partway through. Clear the flag and retry."""
+        partway through. Clear the flag and retry.
+
+        The signature suits both rmtree error hooks: 3.12's onexc passes the
+        exception, 3.11's onerror passes an exc_info triple. Neither is used.
+        """
         os.chmod(path, stat.S_IWRITE)
         func(path)
 
+    # `onexc` only exists from 3.12; on 3.10 and 3.11 it is `onerror`, and
+    # passing the wrong one raises TypeError. The package supports 3.10 — which
+    # is what Ubuntu 22.04 ships — so this cannot assume the newer spelling.
+    hook = ({"onexc": force_writable} if sys.version_info >= (3, 12)
+            else {"onerror": force_writable})
+
     try:
-        shutil.rmtree(llama_dir, onexc=force_writable)
+        shutil.rmtree(llama_dir, **hook)
         print(f"Removed fork checkout {llama_dir}.")
     except FileNotFoundError:
         pass
