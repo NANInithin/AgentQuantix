@@ -41,17 +41,26 @@ echo "  uv $(uv --version | awk '{print $2}')"
 # Installed from a local checkout when this script sits next to pyproject.toml,
 # otherwise from git. [all] pulls hf_xet (large downloads) and ninja (fast
 # builds), both of which materially change what the tool can do.
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Git Bash / MSYS hands out POSIX paths (/c/Users/...), but uv is a native
-# Windows binary and reads that as a relative path under C:\ - producing
-# "Distribution not found at file:///C:/c/Users/...". cygpath -m gives the
-# mixed form (C:/Users/...) that both understand. A no-op everywhere else.
-if command -v cygpath >/dev/null 2>&1; then
-    HERE="$(cygpath -m "$HERE")"
+# Where is this script? There may be no answer.
+#
+# Piped from curl, the script arrives on stdin and BASH_SOURCE is EMPTY — and
+# under `set -u` that is a fatal "unbound variable", which killed the primary
+# documented install path outright. The := default keeps it defined, and an
+# empty HERE simply means "no local checkout", which is exactly right when the
+# script was streamed from the internet.
+HERE=""
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # Git Bash / MSYS hands out POSIX paths (/c/Users/...), but uv is a native
+    # Windows binary and reads that as a relative path under C:\ - producing
+    # "Distribution not found at file:///C:/c/Users/...". cygpath -m gives the
+    # mixed form (C:/Users/...) that both understand. A no-op everywhere else.
+    if command -v cygpath >/dev/null 2>&1; then
+        HERE="$(cygpath -m "$HERE")"
+    fi
 fi
 
-if [ -f "$HERE/pyproject.toml" ]; then
+if [ -n "$HERE" ] && [ -f "$HERE/pyproject.toml" ]; then
     say "Installing AgentQuantix from $HERE"
     # --reinstall rebuilds rather than reusing uv's cached wheel for this
     # path. Without it, editing the source and reinstalling silently keeps
@@ -59,7 +68,9 @@ if [ -f "$HERE/pyproject.toml" ]; then
     uv tool install --force --reinstall "${HERE}[all]"
 else
     say "Installing AgentQuantix from $REPO_URL@$REF"
-    uv tool install --force "git+$REPO_URL@$REF#egg=agentquantix[all]"
+    # PEP 508 direct reference rather than the legacy pip "#egg=" fragment,
+    # which uv accepts but which does not carry the extras reliably.
+    uv tool install --force "agentquantix[all] @ git+$REPO_URL@$REF"
 fi
 
 uv tool update-shell >/dev/null 2>&1 || true
