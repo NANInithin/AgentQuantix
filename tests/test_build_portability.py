@@ -326,3 +326,40 @@ def test_conversion_refuses_before_downloading(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="torch"):
         source.ensure_bf16(job, tmp_path, set())
+
+
+def test_run_verbose_surfaces_the_real_error(tmp_path):
+    """REGRESSION. subprocess.run(check=True) reports the argv and an exit
+    code, so a conversion that died on
+
+        ValueError: Can not map tensor 'h.0.attn.bias'
+
+    was summarised as "returned non-zero exit status 1" -- the one useful line
+    discarded in favour of the command that produced it."""
+    script = tmp_path / "boom.py"
+    script.write_text(
+        "import sys\n"
+        "print('INFO:hf-to-gguf:Exporting model...')\n"
+        "sys.stderr.write(\"ValueError: Can not map tensor 'h.0.attn.bias'\n\")\n"
+        "sys.exit(1)\n")
+
+    with pytest.raises(RuntimeError) as caught:
+        build_mod.run_verbose([sys.executable, str(script)], label="converting X")
+
+    assert "Can not map tensor" in str(caught.value)
+    assert "converting X" in str(caught.value)
+
+
+def test_run_verbose_is_silent_about_success(tmp_path):
+    script = tmp_path / "ok.py"
+    script.write_text("print('done')\n")
+    build_mod.run_verbose([sys.executable, str(script)])       # must not raise
+
+
+def test_run_verbose_falls_back_to_the_last_line(tmp_path):
+    """Not every failure looks like a Python exception."""
+    script = tmp_path / "plain.py"
+    script.write_text("import sys\nprint('something went wrong')\nsys.exit(2)\n")
+
+    with pytest.raises(RuntimeError, match="something went wrong"):
+        build_mod.run_verbose([sys.executable, str(script)])

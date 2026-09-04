@@ -28,7 +28,7 @@ import time
 from huggingface_hub import hf_hub_download, snapshot_download
 
 from .. import config, feasibility, transfer
-from .build import run
+from .build import run, run_verbose
 
 GB = 1024 ** 3
 
@@ -141,8 +141,10 @@ def ensure_bf16(job, llama_dir: Path, hub_files: set):
         _record_download("safetensors", size, time.time() - started)
 
     print(f"[{job.base_name}] converting to BF16 GGUF...")
-    run(["python", llama_dir / "convert_hf_to_gguf.py", job.source_dir,
-         "--outtype", "bf16", "--outfile", job.bf16_path])
+    run_verbose(["python", llama_dir / "convert_hf_to_gguf.py",
+                 job.source_dir, "--outtype", "bf16",
+                 "--outfile", job.bf16_path],
+                label=f"converting {job.repo_id}")
 
     # The vision tower is a separate export and is NOT part of the quant
     # sweep — mmproj files stay at F16 because quantizing them is not
@@ -150,8 +152,10 @@ def ensure_bf16(job, llama_dir: Path, hub_files: set):
     if job.is_multimodal and not job.mmproj_path.exists():
         print(f"[{job.base_name}] exporting the vision tower (mmproj)...")
         try:
-            run(["python", llama_dir / "convert_hf_to_gguf.py", job.source_dir,
-                 "--mmproj", "--outtype", "f16", "--outfile", job.mmproj_path])
+            run_verbose(["python", llama_dir / "convert_hf_to_gguf.py",
+                         job.source_dir, "--mmproj", "--outtype", "f16",
+                         "--outfile", job.mmproj_path],
+                        label="exporting the vision tower")
         except Exception as e:
             # A missing mmproj costs the image path, not the model. The text
             # quants are still perfectly good and worth publishing.

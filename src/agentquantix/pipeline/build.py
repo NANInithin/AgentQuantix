@@ -41,6 +41,52 @@ def run(cmd, **kwargs):
     subprocess.run(cmd, check=True, **kwargs)
 
 
+ERROR_MARKERS = ("Error:", "error:", "ValueError", "TypeError", "KeyError",
+                 "RuntimeError", "NotImplementedError", "AssertionError",
+                 "ModuleNotFoundError", "ImportError", "OSError", "raise ")
+
+
+def run_verbose(cmd, label="command"):
+    """Run a command, stream its output, and raise with the REAL error.
+
+    subprocess.run(check=True) raises CalledProcessError, whose message is the
+    argv and an exit code. For a converter that failed with
+
+        ValueError: Can not map tensor 'h.0.attn.bias'
+
+    that reduces the one useful line to "returned non-zero exit status 1",
+    and the summary at the end of a multi-model run then repeats the argv
+    instead of the reason. The output is still streamed live, because a long
+    conversion with no visible progress looks hung.
+    """
+    import collections
+
+    cmd = [str(c) for c in cmd]
+    if cmd[0].lower() in {"python", "python.exe"}:
+        cmd[0] = sys.executable
+    print("\n" + " ".join(cmd) + "\n", flush=True)
+
+    tail = collections.deque(maxlen=60)
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True,
+                               bufsize=1, env=build_env())
+    for line in process.stdout:
+        print(line, end="", flush=True)
+        tail.append(line.rstrip())
+    code = process.wait()
+    if code == 0:
+        return
+
+    # The last line that looks like an exception is almost always the point.
+    # Falling back to the last non-empty line beats an exit code either way.
+    reason = next((l.strip() for l in reversed(tail)
+                   if any(m in l for m in ERROR_MARKERS) and l.strip()), None)
+    if not reason:
+        reason = next((l.strip() for l in reversed(tail) if l.strip()),
+                      f"exit status {code}")
+    raise RuntimeError(f"{label} failed: {reason}")
+
+
 def find_binary(llama_dir: Path, name):
     """One llama.cpp binary, whichever layout this generator produced."""
     bindir = Path(llama_dir) / "build" / "bin"
