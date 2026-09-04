@@ -94,11 +94,17 @@ def _learned_mbps(history, key, default, match=None):
     return rates[len(rates) // 2], True
 
 
-def record(kind, **fields):
+def record(kind, /, **fields):
     """Append one observation to the timing history. Never raises.
 
     Called from the pipeline as work completes, so estimates improve with use
     instead of staying frozen at the constants above.
+
+    `kind` is POSITIONAL-ONLY, and that matters: **fields is arbitrary
+    observation data, so any caller wanting to record a field of its own
+    called "kind" would otherwise collide with the parameter and raise
+    "record() got multiple values for argument 'kind'" — which is exactly
+    what happened to every download the pipeline tried to time.
     """
     try:
         history = load_history()

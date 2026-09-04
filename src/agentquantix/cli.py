@@ -276,7 +276,15 @@ def cmd_run(args):
     # failure here is worth reporting but must not present a successful run as
     # a failed one, nor abandon the remaining models' verification.
     for job in jobs:
-        if outcome["jobs"].get(job.base_name, {}).get("skipped"):
+        result = outcome["jobs"].get(job.base_name, {})
+        if result.get("skipped"):
+            continue
+        # A model that aborted before the pipeline got going never created its
+        # repo, so verifying it produces a RepositoryNotFoundError wall of text
+        # that buries the actual error above it.
+        if any(quant == "<model>" for quant, _ in (result.get("failures") or [])):
+            _print(f"\n{job.target_repo}: nothing was published, so there is "
+                   "nothing to verify.")
             continue
         _print(f"\nverifying {job.target_repo}...")
         try:

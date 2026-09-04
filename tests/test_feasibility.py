@@ -229,3 +229,39 @@ def test_cheaper_runnable_models_sort_higher():
     rows = [row(40), row(2), row(9)]
     assert [r["hours"]["total"] for r in sorted(rows, key=feasibility.rank_key)] \
         == [2, 9, 40]
+
+
+# =====================================================
+# TIMING HISTORY
+# =====================================================
+def test_record_accepts_a_field_called_kind(tmp_path, monkeypatch):
+    """REGRESSION. record(kind, **fields) collided with a caller recording its
+    own "kind" field:
+
+        TypeError: record() got multiple values for argument 'kind'
+
+    Every download the pipeline timed hit this, aborting the run right after
+    the weights finished downloading. Windows never saw it because the BF16
+    was already on disk from an earlier hand-run, so the download path -- the
+    only caller that passes kind= -- never executed.
+    """
+    from agentquantix import config
+
+    monkeypatch.setattr(config, "TIMING_HISTORY", tmp_path / "timings.json")
+    feasibility.record("downloads", kind="safetensors", mbps=12.5, gb=2.0)
+
+    samples = feasibility.load_history()["downloads"]
+    assert samples[-1]["kind"] == "safetensors"
+    assert samples[-1]["mbps"] == 12.5
+
+
+def test_record_never_raises_on_a_bad_history_file(tmp_path, monkeypatch):
+    """Timing data is a nicety. It must never be able to fail a run."""
+    from agentquantix import config
+
+    broken = tmp_path / "timings.json"
+    broken.write_text("{ not json")
+    monkeypatch.setattr(config, "TIMING_HISTORY", broken)
+
+    feasibility.record("uploads", mbps=1.0)          # must not raise
+    assert feasibility.load_history()["uploads"][-1]["mbps"] == 1.0

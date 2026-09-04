@@ -403,6 +403,13 @@ def call(name, arguments=None):
         finished = []
         for job in jobs:
             entry = {"repo": job.target_repo, "card_published": False}
+            failures = outcome["jobs"].get(job.base_name, {}).get("failures") or []
+            if any(quant == "<model>" for quant, _ in failures):
+                # Aborted before publishing anything; the repo does not exist,
+                # and a 404 here would obscure the real failure.
+                entry["published_nothing"] = True
+                finished.append(entry)
+                continue
             try:
                 verification = card.verify(job)
                 entry.update({
