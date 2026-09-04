@@ -28,7 +28,7 @@ import time
 from huggingface_hub import hf_hub_download, snapshot_download
 
 from .. import config, feasibility, transfer
-from .build import run, run_verbose
+from .build import run_verbose
 
 GB = 1024 ** 3
 

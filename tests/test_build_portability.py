@@ -337,11 +337,12 @@ def test_run_verbose_surfaces_the_real_error(tmp_path):
     was summarised as "returned non-zero exit status 1" -- the one useful line
     discarded in favour of the command that produced it."""
     script = tmp_path / "boom.py"
-    script.write_text(
-        "import sys\n"
-        "print('INFO:hf-to-gguf:Exporting model...')\n"
-        "sys.stderr.write(\"ValueError: Can not map tensor 'h.0.attn.bias'\n\")\n"
-        "sys.exit(1)\n")
+    script.write_text("\n".join([
+        "import sys",
+        "print('INFO:hf-to-gguf:Exporting model...')",
+        "print('ValueError: Can not map tensor', file=sys.stderr)",
+        "sys.exit(1)",
+    ]))
 
     with pytest.raises(RuntimeError) as caught:
         build_mod.run_verbose([sys.executable, str(script)], label="converting X")
