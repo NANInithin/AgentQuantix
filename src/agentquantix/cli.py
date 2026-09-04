@@ -560,6 +560,13 @@ def build_parser():
 
 
 def main(argv=None):
+    # Carry a source checkout's history over to the user directory the first
+    # time an installed build runs. Done here rather than at import so it is
+    # one explicit action per invocation, not a side effect of importing config.
+    if migrated := config.migrate_legacy_state():
+        _print(f"Moved {', '.join(migrated)} to {config.AQX_HOME} "
+               "(state now survives upgrades).")
+
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)

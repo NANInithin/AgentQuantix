@@ -15,8 +15,19 @@ import os
 # =====================================================
 # PATHS
 # =====================================================
-# Where the agent's own files live (code, reports, run state, tuning history).
-AQX_HOME = Path(os.getenv("AQX_HOME") or Path(__file__).resolve().parents[2])
+# Where the agent's own files live: reports, run records, and the timing
+# history the estimator learns from.
+#
+# A stable USER directory, deliberately not derived from __file__. When
+# AgentQuantix is installed as a tool, __file__ points inside the tool's
+# virtualenv — and `uv tool install --force` (which is what upgrading runs)
+# deletes that tree. State kept there would be silently destroyed by every
+# upgrade, taking the learned transfer rates and every run record with it.
+AQX_HOME = Path(os.getenv("AQX_HOME") or Path.home() / ".agentquantix")
+
+# Where a source checkout used to keep it, so an existing install can be
+# migrated rather than losing its history. See migrate_legacy_state().
+_LEGACY_HOME = Path(__file__).resolve().parents[2]
 
 # Where the work happens: the llama.cpp checkout and the temp scratch tree.
 #
@@ -67,6 +78,33 @@ FORKS_DIR = TEMP_DIR / "aqx-forks"
 # is already exported in the user's shell; HF_TOKEN is the conventional
 # fallback for anyone else running this.
 TOKEN = os.getenv("MLE2") or os.getenv("HF_TOKEN")
+
+def migrate_legacy_state():
+    """Move state/reports from a source checkout to the user directory, once.
+
+    Earlier versions kept both next to the code. Anyone who has been running
+    from a checkout has a real timing history there, and the estimator is only
+    as good as that history — losing it silently on upgrade would quietly make
+    every estimate an assumption again.
+
+    Copies rather than moves the checkout's files: leaving the originals in
+    place means an older `python -m agentquantix.cli` still works, and nothing
+    is destroyed if this misfires.
+    """
+    if _LEGACY_HOME == AQX_HOME or os.getenv("AQX_HOME"):
+        return []
+
+    import shutil
+
+    moved = []
+    for name in ("state", "reports"):
+        source, destination = _LEGACY_HOME / name, AQX_HOME / name
+        if source.is_dir() and any(source.iterdir()) and not destination.exists():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source, destination)
+            moved.append(name)
+    return moved
+
 
 _namespace_cache = None
 
