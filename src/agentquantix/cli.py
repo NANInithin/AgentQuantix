@@ -109,15 +109,27 @@ def cmd_show(args):
 # =====================================================
 def _select_interactively(result, preselected):
     """The approval gate. Returns the assessments the user said yes to."""
-    runnable = [a for a in result["assessments"]
+    runnable = [a for a in (result or {}).get("assessments", [])
                 if a["verdict"] not in ("blocked", "done")]
 
     if preselected:
         chosen = []
         for name in preselected:
-            assessment = research.find(result, name)
+            assessment = research.find(result, name) if result else None
+            if not assessment and "/" in name:
+                # A full repo id was named. Assess it on demand rather than
+                # refusing work because it did not happen to be trending on
+                # the day the last report was written.
+                _print(f"{name}: not in the last research run - "
+                       "assessing it now...")
+                try:
+                    assessment = research.assess_one(name)
+                except ValueError as e:
+                    _print(f"  {e}")
+                    continue
             if not assessment:
-                _print(f"{name}: not in the last research run - skipping.")
+                _print(f"{name}: not in the last research run. Name it as a "
+                       "full repo id (org/model) to assess it directly.")
                 continue
             if assessment["verdict"] == "blocked":
                 _print(f"{assessment['repo_id']}: BLOCKED - "
@@ -171,8 +183,9 @@ def cmd_run(args):
         os.environ["AQX_XET"] = args.xet
 
     result = research.load_latest()
-    if not result:
-        _print("No research on file. Run `aqx research` first.")
+    if not result and not args.model:
+        _print("No research on file. Run `aqx research` first, or name a "
+               "model directly: `aqx run org/model`.")
         return 1
 
     chosen = _select_interactively(result, args.model)
@@ -493,7 +506,9 @@ def build_parser():
 
     run_cmd = sub.add_parser("run", help="step 4: quantize and upload (asks first)")
     run_cmd.add_argument("model", nargs="*",
-                         help="models to run; omit to choose interactively")
+                         help="models to run, by name from the last research "
+                              "run or as any full repo id (org/model); omit "
+                              "to choose interactively")
     run_cmd.add_argument("--yes", "-y", action="store_true",
                          help="skip the final confirmation")
     run_cmd.add_argument("--dry-run", action="store_true",

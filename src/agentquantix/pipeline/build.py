@@ -67,8 +67,14 @@ def run_verbose(cmd, label="command"):
     print("\n" + " ".join(cmd) + "\n", flush=True)
 
     tail = collections.deque(maxlen=60)
+    # stdin is closed, not inherited. A model with custom code makes
+    # transformers ask "Do you wish to run the custom code? [y/N]" on stdin,
+    # and a converter running in a quantize worker thread would sit on that
+    # prompt forever with its question buried in interleaved output. Closed
+    # stdin turns the hang into an immediate, reportable failure.
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, text=True,
+                               stderr=subprocess.STDOUT,
+                               stdin=subprocess.DEVNULL, text=True,
                                bufsize=1, env=build_env())
     for line in process.stdout:
         print(line, end="", flush=True)

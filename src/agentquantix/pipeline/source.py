@@ -22,6 +22,7 @@ Three ways in, in order of preference:
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import shutil
 import time
 
@@ -59,6 +60,62 @@ def converter_hint(missing):
             "  (or `pip install " + " ".join(missing) + "` in the environment "
             "aqx runs from)\n"
             "Models whose publisher already ships a BF16 GGUF need none of this.")
+
+
+# Models with custom modeling code (trust_remote_code) pull in whatever their
+# author imported, which is unknowable until the converter runs. transformers
+# reports the failure in IMPORT names and tells you to pip install those
+# verbatim — but `pip install PIL` installs a dead 2005 package, and cv2 and
+# sklearn do not exist on PyPI at all. Translating them is the difference
+# between a command that works and one that fails confusingly.
+PIP_NAMES = {
+    "PIL": "pillow",
+    "cv2": "opencv-python-headless",
+    "sklearn": "scikit-learn",
+    "skimage": "scikit-image",
+    "yaml": "pyyaml",
+    "Image": "pillow",
+    "attrdict": "attrdict3",
+}
+
+_REMOTE_CODE_DEPS = re.compile(
+    r"requires the following packages that were not found in your "
+    r"environment:\s*([A-Za-z0-9_., -]+)")
+
+
+def remote_code_hint(reason: str):
+    """Turn transformers' import-name complaint into a command that works.
+
+    Returns None when `reason` is some other failure, so the caller can
+    re-raise the original untouched.
+    """
+    match = _REMOTE_CODE_DEPS.search(reason)
+    if not match:
+        return None
+    imports = [p.strip() for p in match.group(1).replace(",", " ").split()
+               if p.strip()]
+    if not imports:
+        return None
+    packages = [PIP_NAMES.get(name, name) for name in imports]
+    renamed = [f"{i} -> {p}" for i, p in zip(imports, packages) if i != p]
+
+    lines = [
+        "this model ships custom code that imports "
+        f"{', '.join(imports)}, which are not installed.",
+        "",
+        "  uv tool install --force --reinstall "
+        + " ".join(f"--with {p}" for p in packages)
+        + ' "agentquantix[all] @ '
+        + 'git+https://github.com/NANInithin/AgentQuantix"',
+    ]
+    if renamed:
+        lines += ["",
+                  "(transformers names the imports, not the packages: "
+                  + "; ".join(renamed) + ")"]
+    lines += ["",
+              "These are the model author's dependencies, not AgentQuantix's, "
+              "so they differ per model and cannot be installed up front."]
+    return "\n".join(lines)
 
 
 def _size_gb(path: Path):
@@ -141,10 +198,15 @@ def ensure_bf16(job, llama_dir: Path, hub_files: set):
         _record_download("safetensors", size, time.time() - started)
 
     print(f"[{job.base_name}] converting to BF16 GGUF...")
-    run_verbose(["python", llama_dir / "convert_hf_to_gguf.py",
-                 job.source_dir, "--outtype", "bf16",
-                 "--outfile", job.bf16_path],
-                label=f"converting {job.repo_id}")
+    try:
+        run_verbose(["python", llama_dir / "convert_hf_to_gguf.py",
+                     job.source_dir, "--outtype", "bf16",
+                     "--outfile", job.bf16_path],
+                    label=f"converting {job.repo_id}")
+    except RuntimeError as e:
+        if hint := remote_code_hint(str(e)):
+            raise RuntimeError(f"converting {job.repo_id}: {hint}") from e
+        raise
 
     # The vision tower is a separate export and is NOT part of the quant
     # sweep — mmproj files stay at F16 because quantizing them is not

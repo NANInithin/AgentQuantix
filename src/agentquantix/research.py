@@ -98,6 +98,51 @@ def research(limit=None, probe_disk=True, workers=8, hunt_forks=True,
     }
 
 
+def assess_one(repo_id, sysinfo=None, hunt_forks=True, probe_disk=False):
+    """Assess a single named repo, trending or not.
+
+    Same pipeline as research(), minus the trending fetch and the base-model
+    filter. The filter is deliberately skipped: it exists to stop a 100-model
+    sweep wasting time on other people's finetunes, but naming a repo IS the
+    judgement it was standing in for, so applying it here would only refuse
+    work that was explicitly asked for.
+
+    Raises ValueError with the Hub's reason when the repo cannot be read at
+    all — a typo or a gated repo should say so, not return an empty result.
+    """
+    try:
+        candidate = hub.one(repo_id)
+    except Exception as e:
+        raise ValueError(f"{repo_id}: cannot read this repo from the Hub "
+                         f"({type(e).__name__}: {e})") from e
+
+    hub.enrich(candidate)
+    if candidate.error:
+        raise ValueError(f"{repo_id}: {candidate.error}")
+
+    if sysinfo is None:
+        sysinfo = sysprobe.probe(measure_disk=probe_disk)
+
+    arch_ok, arch_detail = archsupport.check(candidate)
+    leads = []
+    if not arch_ok and hunt_forks:
+        leads = archsupport.find_fork(candidate)
+
+    assessment = feasibility.assess(candidate, sysinfo, arch_ok, arch_detail,
+                                    fork_leads=leads)
+
+    available = archsupport.supported_quants()
+    if available and arch_ok:
+        unsupported = [q for q in assessment["all_quants"] if q not in available]
+        if unsupported:
+            for key in ("quants", "all_quants"):
+                assessment[key] = [q for q in assessment[key] if q in available]
+            assessment["warnings"].append(
+                "this llama.cpp build does not offer "
+                f"{', '.join(unsupported)} — skipped")
+    return assessment
+
+
 def save(result, name=None):
     """Persist a research result so `aqx run` can be handed a model by name.
 

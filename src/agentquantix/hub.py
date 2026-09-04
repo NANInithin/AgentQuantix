@@ -148,6 +148,33 @@ def trending(limit=None):
     return out
 
 
+def one(repo_id):
+    """A Candidate for a named repo, whether or not it is trending.
+
+    The sweep exists to work through what is trending, but the moment you want
+    to re-cut an older release, test a fix, or take a request, "it has to have
+    been in the last research run" is an arbitrary wall. This builds the same
+    Candidate from a model_info lookup, so everything downstream — enrich,
+    assess, run — is identical to the trending path.
+
+    `rank=0` marks it as not-from-the-list; nothing ranks it against models it
+    was never compared with.
+    """
+    model = api().model_info(repo_id, files_metadata=False)
+    return Candidate(
+        repo_id=model.id,
+        rank=0,
+        pipeline_tag=getattr(model, "pipeline_tag", None),
+        tags=list(getattr(model, "tags", []) or []),
+        downloads=getattr(model, "downloads", 0) or 0,
+        likes=getattr(model, "likes", 0) or 0,
+        created_at=(str(model.created_at)[:10]
+                    if getattr(model, "created_at", None) else None),
+        gated=getattr(model, "gated", False),
+        private=bool(getattr(model, "private", False)),
+    )
+
+
 # =====================================================
 # STEP 1b — the filter
 # =====================================================
