@@ -49,11 +49,11 @@ def check():
     gpus = sysprobe._gpu()
 
     items = [
-        {"name": "git", "ok": bool(shutil.which("git")), "required": True,
+        {"name": "git", "ok": bool(build_mod.find_tool("git")), "required": True,
          "why": "clones llama.cpp, and any fork needed for a new architecture",
          "install": {"linux": "sudo apt-get install -y git",
                      "win32": "winget install --id Git.Git"}},
-        {"name": "cmake", "ok": bool(shutil.which("cmake")), "required": True,
+        {"name": "cmake", "ok": bool(build_mod.find_tool("cmake")), "required": True,
          "why": "configures the llama.cpp build",
          "install": {"linux": "sudo apt-get install -y cmake",
                      "win32": "winget install --id Kitware.CMake"}},
@@ -62,7 +62,7 @@ def check():
          "install": {"linux": "sudo apt-get install -y build-essential",
                      "win32": "winget install --id Microsoft.VisualStudio."
                               "2022.BuildTools  (with the C++ workload)"}},
-        {"name": "ninja", "ok": bool(shutil.which("ninja")), "required": False,
+        {"name": "ninja", "ok": bool(build_mod.find_tool("ninja")), "required": False,
          "why": "parallelises the build per FILE instead of per project - "
                 "several times faster on ggml's ~100 CUDA sources",
          "install": {"linux": "sudo apt-get install -y ninja-build",

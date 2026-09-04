@@ -44,10 +44,10 @@ Write-Host "  uv $((uv --version) -split ' ' | Select-Object -Last 1)"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 if ($Here -and (Test-Path (Join-Path $Here "pyproject.toml"))) {
     Say "Installing AgentQuantix from $Here"
-    uv tool install --force --python 3.12 "$Here[all]"
+    uv tool install --force "$Here[all]"
 } else {
     Say "Installing AgentQuantix from $RepoUrl@$Ref"
-    uv tool install --force --python 3.12 "git+$RepoUrl@$Ref#egg=agentquantix[all]"
+    uv tool install --force "git+$RepoUrl@$Ref#egg=agentquantix[all]"
 }
 
 uv tool update-shell 2>$null | Out-Null

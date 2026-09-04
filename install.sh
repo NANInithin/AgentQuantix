@@ -42,12 +42,21 @@ echo "  uv $(uv --version | awk '{print $2}')"
 # otherwise from git. [all] pulls hf_xet (large downloads) and ninja (fast
 # builds), both of which materially change what the tool can do.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Git Bash / MSYS hands out POSIX paths (/c/Users/...), but uv is a native
+# Windows binary and reads that as a relative path under C:\ - producing
+# "Distribution not found at file:///C:/c/Users/...". cygpath -m gives the
+# mixed form (C:/Users/...) that both understand. A no-op everywhere else.
+if command -v cygpath >/dev/null 2>&1; then
+    HERE="$(cygpath -m "$HERE")"
+fi
+
 if [ -f "$HERE/pyproject.toml" ]; then
     say "Installing AgentQuantix from $HERE"
-    uv tool install --force --python 3.12 "$HERE"[all]
+    uv tool install --force "${HERE}[all]"
 else
     say "Installing AgentQuantix from $REPO_URL@$REF"
-    uv tool install --force --python 3.12 "git+$REPO_URL@$REF#egg=agentquantix[all]"
+    uv tool install --force "git+$REPO_URL@$REF#egg=agentquantix[all]"
 fi
 
 uv tool update-shell >/dev/null 2>&1 || true

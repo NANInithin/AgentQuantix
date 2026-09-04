@@ -35,6 +35,9 @@ def run(cmd, **kwargs):
     if cmd[0].lower() in {"python", "python.exe"}:
         cmd[0] = sys.executable
     print("\n" + " ".join(cmd) + "\n", flush=True)
+    # Our own Scripts directory goes on PATH for every build subprocess — see
+    # build_env(). cmake looks up ninja itself, so finding it is not enough.
+    kwargs.setdefault("env", build_env())
     subprocess.run(cmd, check=True, **kwargs)
 
 
@@ -105,6 +108,41 @@ def msvc_env_bat():
     return bat if bat.exists() else None
 
 
+def _interpreter_scripts():
+    """The bin/Scripts directory of the interpreter running us."""
+    return Path(sys.executable).parent
+
+
+def find_tool(name):
+    """Locate a build tool on PATH, or beside our own interpreter.
+
+    The second place matters and is easy to miss. `pip install ninja` (which is
+    what the package's [build] extra does) puts ninja.exe in the environment's
+    Scripts directory — and when AgentQuantix is installed as an isolated tool
+    via uv or pipx, that directory is deliberately NOT on PATH; only the `aqx`
+    entry point is exposed. So the extra installed a build tool that nothing
+    could then find, and every build silently fell back to the slow generator.
+    """
+    if found := shutil.which(name):
+        return found
+    return shutil.which(name, path=str(_interpreter_scripts()))
+
+
+def build_env():
+    """Environment for build subprocesses, with our own Scripts dir on PATH.
+
+    Detecting a pip-installed ninja is only half the fix: cmake looks it up on
+    PATH itself, so `-G Ninja` would fail with "CMAKE_MAKE_PROGRAM not found"
+    even though we just proved the binary exists. Prepending the directory
+    fixes the tool we found being usable by the tool we hand it to.
+    """
+    env = os.environ.copy()
+    scripts = str(_interpreter_scripts())
+    if scripts not in env.get("PATH", "").split(os.pathsep):
+        env["PATH"] = scripts + os.pathsep + env.get("PATH", "")
+    return env
+
+
 def has_cuda_toolkit():
     """Can this machine actually COMPILE CUDA.
 
@@ -112,7 +150,7 @@ def has_cuda_toolkit():
     visible GPU while lacking the toolkit, and it is nvcc that the build needs.
     CUDA_PATH covers a Windows install that has not been put on PATH.
     """
-    if shutil.which("nvcc"):
+    if find_tool("nvcc"):
         return True
     for variable in ("CUDA_PATH", "CUDA_HOME"):
         root = os.environ.get(variable)
@@ -216,7 +254,7 @@ def compile_tools(llama_dir: Path, work_root: Path):
     # that, so both are required; everywhere else cc/g++ is already there and
     # Ninja alone is enough. The old condition demanded vcvars on every
     # platform, which quietly denied Linux the faster generator entirely.
-    have_ninja = bool(shutil.which("ninja"))
+    have_ninja = bool(find_tool("ninja"))
     can_use_ninja = have_ninja and (vcvars is not None
                                     or sys.platform != "win32")
 

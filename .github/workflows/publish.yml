@@ -10,9 +10,14 @@ name: Publish
 #   * running it by hand          -> goes wherever you pick, defaulting to
 #                                    TestPyPI, so the whole path can be
 #                                    rehearsed before the real name is claimed
+# MANUAL ONLY for now. The `release: types: [published]` trigger is commented
+# out deliberately: until a pending publisher exists on PyPI, an automatic run
+# would fail the OIDC exchange and put a red X on every GitHub release for a
+# step nobody asked for yet. Uncomment it once TestPyPI has been rehearsed and
+# the real publisher is configured.
 on:
-  release:
-    types: [published]
+  # release:
+  #   types: [published]
   workflow_dispatch:
     inputs:
       target:
