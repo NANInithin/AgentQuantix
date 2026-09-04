@@ -43,8 +43,17 @@ big = ["hf_xet>=1.0"]
 # Ninja parallelises a build at file level instead of project level, which is
 # several times faster for ggml's ~100 CUDA sources.
 build = ["ninja>=1.11"]
+# convert_hf_to_gguf.py imports torch and transformers. Needed ONLY to
+# convert safetensors; a model whose publisher ships a BF16 GGUF needs
+# neither, and nor does research. Roughly 1 GB, so opt-in rather than a
+# hard dependency -- but without it `aqx run` can only handle models that
+# already have an official GGUF.
+convert = ["torch>=2.0", "transformers>=4.40", "sentencepiece", "protobuf"]
 dev = ["pytest>=8.0"]
 all = ["hf_xet>=1.0", "ninja>=1.11"]
+# Everything, conversion included. Large.
+full = ["hf_xet>=1.0", "ninja>=1.11", "torch>=2.0",
+        "transformers>=4.40", "sentencepiece", "protobuf"]
 
 [project.urls]
 Documentation = "https://github.com/NANInithin/AgentQuantix/blob/main/USAGE.md"

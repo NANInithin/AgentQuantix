@@ -82,6 +82,11 @@ def check():
         {"name": "gguf", "ok": _python_package("gguf"), "required": True,
          "why": "reads GGUF headers to find imatrix coverage gaps",
          "install": {"*": "pip install gguf"}},
+        {"name": "torch", "ok": _python_package("torch"), "required": False,
+         "why": "convert_hf_to_gguf.py needs it; without torch only models "
+                "whose publisher already ships a GGUF can be built",
+         "install": {"*": "uv tool install --with torch --with transformers "
+                          "agentquantix   (~1 GB)"}},
         {"name": "hf_xet", "ok": transfer.installed(), "required": False,
          "why": f"downloads over {transfer.HTTP_DOWNLOAD_LIMIT_GIB:.0f} GiB "
                 "are impossible without it",

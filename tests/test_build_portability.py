@@ -225,3 +225,53 @@ def test_work_root_falls_back_to_a_home_directory(monkeypatch, tmp_path):
             reloaded.WORK_ROOT == tmp_path / ".agentquantix"
     finally:
         importlib.reload(config)
+
+
+# =====================================================
+# THE ARCHITECTURE GATE
+# =====================================================
+def test_registrations_parse_out_of_source(tmp_path):
+    """REGRESSION. The gate ran convert_hf_to_gguf.py, which imports torch --
+    not one of our dependencies. On a machine without it every candidate came
+    back "could not read the supported-architecture list", so the whole
+    trending report showed as unsupported."""
+    from agentquantix import archsupport
+
+    conversion = tmp_path / "conversion"
+    conversion.mkdir()
+    (conversion / "llama.py").write_text(
+        '@ModelBase.register("LlamaForCausalLM")\nclass X: pass\n')
+    (conversion / "multi.py").write_text(
+        '@ModelBase.register(\n    "AForCausalLM",\n    "BForCausalLM",\n)\n'
+        'class Y: pass\n')
+
+    names = archsupport._parse_registrations(tmp_path)
+    assert {"LlamaForCausalLM", "AForCausalLM", "BForCausalLM"} <= names
+
+
+def test_the_gate_falls_back_when_the_converter_cannot_run(tmp_path, monkeypatch):
+    from agentquantix import archsupport
+
+    conversion = tmp_path / "conversion"
+    conversion.mkdir()
+    (conversion / "m.py").write_text('@ModelBase.register("OnlyOne")\n')
+    monkeypatch.setattr(archsupport, "_ask_converter",
+                        lambda d: (set(), "ModuleNotFoundError: torch"))
+
+    assert archsupport.supported_architectures(tmp_path) == {"OnlyOne"}
+
+
+def test_converter_status_reports_why_it_failed(tmp_path, monkeypatch):
+    """The old message named no cause. 'No module named torch' is fixable;
+    'could not read the supported-architecture list' is a mystery."""
+    from agentquantix import archsupport
+
+    conversion = tmp_path / "conversion"
+    conversion.mkdir()
+    (conversion / "m.py").write_text('@ModelBase.register("OnlyOne")\n')
+    monkeypatch.setattr(archsupport, "_ask_converter",
+                        lambda d: (set(), "ModuleNotFoundError: torch"))
+
+    status = archsupport.converter_status(tmp_path)
+    assert status["ok"] and status["source"] == "source-parse"
+    assert "torch" in status["error"]

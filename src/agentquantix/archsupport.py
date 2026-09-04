@@ -38,34 +38,99 @@ UPSTREAM_REPO = "ggml-org/llama.cpp"
 # =====================================================
 # THE GATE
 # =====================================================
-def supported_architectures(llama_dir: Path | None = None):
-    """Architecture class names this checkout's converter accepts.
+REGISTRATION = re.compile(
+    r"register\(\s*((?:[\"'][^\"']+[\"']\s*,?\s*|\n)+)\)")
 
-    Asks the converter itself rather than grepping for class names: the script
-    builds its registry at import time from decorators, and a fork can
-    register an architecture from a file this module would never think to read.
+
+def _ask_converter(llama_dir: Path):
+    """Run the converter's own --print-supported-models. Returns (set, error).
+
+    The authoritative answer when it works, because the script builds its
+    registry at import time and a fork can register an architecture from a
+    file nothing would think to read.
+
+    It only works when the converter's dependencies are installed, and torch
+    is not one of ours — it is an 800 MB dependency needed only for actual
+    conversion, so requiring it to ASK A QUESTION would be absurd.
     """
-    llama_dir = Path(llama_dir or config.UPSTREAM_LLAMA)
     script = llama_dir / "convert_hf_to_gguf.py"
     if not script.exists():
-        return set()
+        return set(), f"no convert_hf_to_gguf.py in {llama_dir}"
     try:
         done = subprocess.run(
             [sys.executable, str(script), "--print-supported-models"],
-            capture_output=True, text=True, timeout=300, check=True,
-            cwd=str(llama_dir),
+            capture_output=True, text=True, timeout=300, cwd=str(llama_dir),
         )
-    except Exception:
-        return set()
+    except Exception as e:
+        return set(), f"{type(e).__name__}: {e}"
+
     # The converter prints this list through its logger, which writes to
     # stderr — reading only stdout silently yields an empty set, and an empty
     # set reads as "nothing is supported", which would send every candidate
     # down the fork-hunt path.
     out = done.stdout + done.stderr
-    # Output is a bulleted list, one architecture class per line.
-    return {line.strip().lstrip("-").strip()
-            for line in out.splitlines()
-            if line.strip().startswith("-")}
+    found = {line.strip().lstrip("-").strip()
+             for line in out.splitlines() if line.strip().startswith("-")}
+    if found:
+        return found, None
+
+    # Surface the actual cause. "ModuleNotFoundError: No module named 'torch'"
+    # is a fixable problem; "could not read the supported-architecture list"
+    # is a mystery that made every model on the report look unsupported.
+    last = [l for l in out.strip().splitlines() if l.strip()]
+    return set(), (last[-1].strip() if last else f"exit {done.returncode}")
+
+
+def _parse_registrations(llama_dir: Path):
+    """Read the @ModelBase.register(...) decorators straight from the source.
+
+    The fallback for when the converter cannot be imported. Verified against
+    the real thing on a checkout where both work: the parse returns a superset
+    of what --print-supported-models lists, because it also sees registrations
+    behind imports the script skips.
+
+    Good enough to answer "can this be converted here", which is all the
+    research step needs — and vastly better than reporting that nothing is
+    supported because an unrelated dependency is missing.
+    """
+    names = set()
+    for directory in (llama_dir / "conversion", llama_dir):
+        if not directory.is_dir():
+            continue
+        for source in directory.glob("*.py"):
+            try:
+                text = source.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for block in REGISTRATION.findall(text):
+                names.update(re.findall(r"[\"']([^\"']+)[\"']", block))
+    return names
+
+
+def converter_status(llama_dir: Path | None = None):
+    """How the architecture list was obtained, and why. For doctor/bootstrap."""
+    llama_dir = Path(llama_dir or config.UPSTREAM_LLAMA)
+    found, error = _ask_converter(llama_dir)
+    if found:
+        return {"ok": True, "source": "converter", "count": len(found),
+                "error": None}
+    parsed = _parse_registrations(llama_dir)
+    return {"ok": bool(parsed), "source": "source-parse" if parsed else None,
+            "count": len(parsed), "error": error}
+
+
+def supported_architectures(llama_dir: Path | None = None):
+    """Architecture class names this checkout can convert.
+
+    Asks the converter first and falls back to reading its registration
+    decorators. The fallback is what keeps `aqx research` working on a machine
+    that has llama.cpp but not torch — which is every machine that has only
+    ever downloaded publisher GGUFs, and was previously reported as "could not
+    read the supported-architecture list" against every single candidate.
+    """
+    llama_dir = Path(llama_dir or config.UPSTREAM_LLAMA)
+    found, _ = _ask_converter(llama_dir)
+    return found or _parse_registrations(llama_dir)
 
 
 def supported_quants(llama_dir: Path | None = None):
