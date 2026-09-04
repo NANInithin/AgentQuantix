@@ -207,13 +207,20 @@ def build_settings():
         match = re.search(rf"^{key}:BOOL=(\w+)$", text, re.M)
         defines.append(f"-D{key}={match.group(1) if match else default}")
 
-    match = re.search(r"^CMAKE_CUDA_ARCHITECTURES:\w+=(.+)$", text, re.M)
-    arch = match.group(1).strip() if match else cuda_arch_from_gpu()
-    if arch:
-        defines.append(f"-DCMAKE_CUDA_ARCHITECTURES={arch}")
-    else:
-        print("WARNING: could not determine CUDA arch - the build will target "
-              "every supported architecture and take far longer.")
+    # Only meaningful when CUDA is actually being compiled. Warning that "the
+    # build will target every supported architecture and take far longer" on a
+    # CPU-only machine is both alarming and false — there are no CUDA sources
+    # in that build at all.
+    cuda_on = any(d == "-DGGML_CUDA=ON" for d in defines)
+    if cuda_on:
+        match = re.search(r"^CMAKE_CUDA_ARCHITECTURES:\w+=(.+)$", text, re.M)
+        arch = match.group(1).strip() if match else cuda_arch_from_gpu()
+        if arch:
+            defines.append(f"-DCMAKE_CUDA_ARCHITECTURES={arch}")
+        else:
+            print("WARNING: could not determine this GPU's CUDA arch - the "
+                  "build will target every supported architecture and take "
+                  "far longer.")
     return defines
 
 
@@ -290,9 +297,15 @@ def compile_tools(llama_dir: Path, work_root: Path):
           "This takes a few minutes.\n", flush=True)
     started = time.time()
 
-    if generator == "Ninja":
-        # Ninja needs cl.exe on PATH, which only vcvars64.bat provides — so the
-        # whole build runs inside one cmd.exe that sources it first.
+    # The batch-file detour exists for ONE reason: on Windows, Ninja needs
+    # cl.exe on PATH and only vcvars64.bat puts it there, so configure and
+    # compile have to run inside a single cmd.exe that sources it first.
+    #
+    # It was gated on the generator alone, which meant Linux — where Ninja is
+    # the right choice and cc is already on PATH — took the Windows path and
+    # died on `FileNotFoundError: 'cmd'`. Gate on the thing that actually
+    # requires it: having a vcvars to source.
+    if generator == "Ninja" and vcvars is not None:
         script = work_root / "_build.bat"
         script.parent.mkdir(parents=True, exist_ok=True)
         script.write_text(
@@ -301,8 +314,10 @@ def compile_tools(llama_dir: Path, work_root: Path):
             + " ".join(f'"{c}"' for c in map(str, configure)) + " || exit /b 1\r\n"
             + " ".join(f'"{c}"' for c in map(str, compile_cmd)) + " || exit /b 1\r\n",
             encoding="utf-8")
-        run(["cmd", "/c", str(script)])
-        script.unlink(missing_ok=True)
+        try:
+            run(["cmd", "/c", str(script)])
+        finally:
+            script.unlink(missing_ok=True)
     else:
         run(configure)
         run(compile_cmd)

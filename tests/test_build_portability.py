@@ -95,6 +95,86 @@ def test_build_env_preserves_the_rest_of_the_environment(monkeypatch):
 
 
 # =====================================================
+# THE BUILD INVOCATION
+# =====================================================
+def _capture_build(monkeypatch, tmp_path, *, vcvars, ninja=True,
+                   platform="linux"):
+    """Run compile_tools far enough to see what it would execute.
+
+    The platform is simulated so both branches are covered from either host —
+    the Linux path is the one that broke, and it cannot be reached from a
+    Windows test run otherwise.
+    """
+    commands = []
+
+    monkeypatch.setattr(build_mod.sys, "platform", platform)
+    monkeypatch.setattr(build_mod, "msvc_env_bat", lambda: vcvars)
+    monkeypatch.setattr(build_mod, "find_tool",
+                        lambda name: "/usr/bin/ninja" if ninja and name == "ninja"
+                        else None)
+    monkeypatch.setattr(build_mod, "build_settings", lambda: ["-DGGML_CUDA=OFF"])
+    monkeypatch.setattr(build_mod, "build_jobs", lambda: "4")
+    monkeypatch.setattr(build_mod, "build_is_stale", lambda *a: False)
+    monkeypatch.setattr(build_mod, "run",
+                        lambda cmd, **kw: commands.append([str(c) for c in cmd]))
+    # Pretend the compile produced its binaries.
+    monkeypatch.setattr(build_mod, "binaries", lambda d: ("quantize", "imatrix"))
+    monkeypatch.setattr(build_mod.feasibility, "record", lambda *a, **k: None)
+
+    build_mod.compile_tools(tmp_path, tmp_path)
+    return commands
+
+
+def test_no_vcvars_means_cmake_is_invoked_directly(monkeypatch, tmp_path):
+    """REGRESSION. The batch-file detour was gated on the generator alone, so
+    Linux picked Ninja and then tried to run it through cmd.exe:
+
+        cmd /c /home/.../llama.cpp/_build.bat
+        Bootstrap failed: FileNotFoundError: No such file or directory: 'cmd'
+    """
+    commands = _capture_build(monkeypatch, tmp_path, vcvars=None)
+
+    assert all(cmd[0] != "cmd" for cmd in commands), commands
+    assert commands[0][0] == "cmake" and "-G" in commands[0]
+    assert "Ninja" in commands[0]
+    assert commands[1][:2] == ["cmake", "--build"]
+    assert not (tmp_path / "_build.bat").exists()
+
+
+def test_windows_with_vcvars_still_uses_the_batch_wrapper(monkeypatch, tmp_path):
+    """The detour is required there: Ninja cannot find cl.exe without it."""
+    commands = _capture_build(monkeypatch, tmp_path,
+                              vcvars=tmp_path / "vcvars64.bat",
+                              platform="win32")
+    assert commands[0][0] == "cmd"
+
+
+def test_cuda_arch_is_not_probed_for_a_cpu_build(monkeypatch, capsys):
+    """REGRESSION. A CPU-only machine got 'could not determine CUDA arch - the
+    build will target every supported architecture and take far longer', which
+    is alarming and untrue: that build compiles no CUDA at all."""
+    monkeypatch.setattr(build_mod, "_cmake_cache_text", lambda: "")
+    monkeypatch.setattr(build_mod, "has_cuda_toolkit", lambda: False)
+    monkeypatch.setattr(build_mod, "cuda_arch_from_gpu",
+                        lambda: (_ for _ in ()).throw(
+                            AssertionError("must not probe the GPU")))
+
+    defines = build_mod.build_settings()
+    assert "-DGGML_CUDA=OFF" in defines
+    assert not any("CUDA_ARCHITECTURES" in d for d in defines)
+    assert "far longer" not in capsys.readouterr().out
+
+
+def test_cuda_arch_is_pinned_when_cuda_is_on(monkeypatch):
+    """Pinning to this GPU alone is worth ~8x on the ggml-cuda compile."""
+    monkeypatch.setattr(build_mod, "_cmake_cache_text", lambda: "")
+    monkeypatch.setattr(build_mod, "has_cuda_toolkit", lambda: True)
+    monkeypatch.setattr(build_mod, "cuda_arch_from_gpu", lambda: "89")
+
+    assert "-DCMAKE_CUDA_ARCHITECTURES=89" in build_mod.build_settings()
+
+
+# =====================================================
 # PLATFORM
 # =====================================================
 def test_binary_lookup_covers_both_layouts(tmp_path):
