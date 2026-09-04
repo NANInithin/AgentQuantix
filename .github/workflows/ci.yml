@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first run's result irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide whether the other passed - that is
+      # the entire reason this matrix exists.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Test
+        # No token and no network access to the Hub. Every test is offline by
+        # design; anything that needs credentials is not part of this suite.
+        run: pytest -q
+
+      - name: CLI smoke test
+        # The tests exercise functions; this exercises the actual entry point,
+        # which is where packaging mistakes show up.
+        run: |
+          aqx --help
+          aqx probe --no-disk
+          aqx bootstrap --check-only || true
+        shell: bash
+
+      - name: MCP server speaks the protocol
+        # Drives the real stdio server end to end. This is the interface every
+        # harness sees, so a break here breaks Claude Code, Codex and OpenCode
+        # simultaneously.
+        run: |
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | aqx mcp > mcp-out.jsonl
+          python - <<'PY'
+          import json
+          lines = [json.loads(l) for l in open("mcp-out.jsonl") if l.strip()]
+          by_id = {m.get("id"): m for m in lines}
+          assert by_id[1]["result"]["serverInfo"]["name"] == "agentquantix"
+          tools = by_id[2]["result"]["tools"]
+          assert len(tools) >= 8, tools
+          print(f"MCP ok: {len(tools)} tools advertised")
+          PY
+        shell: bash
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Real errors only
+        # Undefined names, broken syntax, unused imports - the things that are
+        # unambiguously wrong. Style is deliberately not enforced: a red build
+        # over line length teaches people to ignore the build.
+        run: ruff check --select E9,F63,F7,F82,F401 --statistics .
+
+  build:
+    name: build + install
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build wheel and sdist
+        run: |
+          pip install build
+          python -m build
+
+      - name: Metadata is valid for PyPI
+        run: |
+          pip install twine
+          twine check dist/*
+
+      - name: The wheel installs clean and runs
+        # In a fresh venv, so a dependency the package forgot to declare - but
+        # which happens to be installed in the build environment - is caught.
+        run: |
+          python -m venv /tmp/fresh
+          /tmp/fresh/bin/pip install --quiet dist/*.whl
+          /tmp/fresh/bin/aqx --help
+          /tmp/fresh/bin/python -c "import agentquantix; print('version', agentquantix.__version__)"
+
+      - name: The tag matches the package version
+        # A v0.3.0 tag shipping a 0.2.0 wheel is the kind of mistake nobody
+        # notices until someone reports the wrong version being installed.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(/tmp/fresh/bin/python -c 'import agentquantix; print(agentquantix.__version__)')"
+          echo "tag=$TAG package=$PKG"
+          test "$TAG" = "$PKG"
+
+      - name: The sdist builds a wheel of its own
+        # An sdist missing a file still installs from a warm build dir and only
+        # fails for the person who downloads it from PyPI.
+        run: |
+          python -m venv /tmp/sdist
+          /tmp/sdist/bin/pip install --quiet dist/*.tar.gz
+          /tmp/sdist/bin/aqx --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/*

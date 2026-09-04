@@ -68,30 +68,44 @@ FORKS_DIR = TEMP_DIR / "aqx-forks"
 # fallback for anyone else running this.
 TOKEN = os.getenv("MLE2") or os.getenv("HF_TOKEN")
 
-def _default_namespace():
-    """The Hub namespace to publish under.
+_namespace_cache = None
+
+
+def namespace():
+    """The Hub namespace to publish under, resolved once and remembered.
 
     Asks the token who it belongs to rather than hardcoding a username: a
     hardcoded default would send someone else's first run at a repo they cannot
-    write to, with a 403 as the only explanation. Cached at import because it
-    is one network call and the answer cannot change mid-run.
+    write to, with a 403 as the only explanation.
 
-    Falls back to the literal string below only when there is no token yet, so
-    that `aqx research` still renders a plausible target repo before a token is
-    configured.
+    LAZY on purpose. Resolving this at import made every single command —
+    `aqx --help` included — perform a network round trip before printing
+    anything, and made the package impossible to import offline or under test.
+
+    Falls back to a placeholder when there is no token, so `aqx research` still
+    renders a plausible target repo before one is configured.
     """
+    global _namespace_cache
     if explicit := os.getenv("AQX_NAMESPACE"):
         return explicit
+    if _namespace_cache is not None:
+        return _namespace_cache
     if not TOKEN:
         return "your-username"
     try:
         from huggingface_hub import HfApi
-        return HfApi(token=TOKEN).whoami()["name"]
+        _namespace_cache = HfApi(token=TOKEN).whoami()["name"]
     except Exception:
-        return "your-username"
+        _namespace_cache = "your-username"
+    return _namespace_cache
 
 
-HF_NAMESPACE = _default_namespace()
+def __getattr__(name):
+    """Keep `config.HF_NAMESPACE` working as an attribute, but resolve it on
+    first use rather than at import (PEP 562)."""
+    if name == "HF_NAMESPACE":
+        return namespace()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Delete each local .gguf the moment it is safely on the Hub. This is the
 # single most important storage rule in the pipeline: with it, peak disk is the
