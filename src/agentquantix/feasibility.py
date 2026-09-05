@@ -447,11 +447,17 @@ def assess(candidate, sysinfo, arch_ok, arch_detail, fork_leads=None,
         warnings.append(
             "multimodal - the vision tower needs a separate --mmproj export, "
             "and the quants only cover the language tower")
-    if upload_uses_xet:
+    if not upload_uses_xet:
+        # Inverted, because the belief behind it was wrong. This used to warn
+        # that xet made uploads "roughly a tenth of plain-HTTP speed". Measured
+        # on a freshly-cut quant into a fresh repo, xet was 2.9x faster on the
+        # wire and 5.5x faster end to end — plain LFS sends one file's parts
+        # sequentially down a single connection and nothing can widen it. The
+        # slow configuration is the one worth warning about.
         warnings.append(
-            "AQX_XET is pinned on, so uploads run over xet at roughly a tenth "
-            "of plain-HTTP speed; AQX_XET=auto would use it only where it is "
-            "actually required")
+            "xet is off, so uploads use a single sequential connection; "
+            "AQX_XET=auto is several times faster and lifts the 46.6 GiB "
+            "per-file limit")
 
     if published:
         warnings.insert(0, (
