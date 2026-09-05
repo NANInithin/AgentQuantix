@@ -12,3 +12,5 @@ build/
 dist/
 *.whl
 uv.lock
+
+HANDOFF.md
