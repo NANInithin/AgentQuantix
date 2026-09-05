@@ -164,6 +164,52 @@ def _source_repo(verification, job=None, assessment=None):
             or hub.resolve_base_model(verification["base_name"]))
 
 
+# The binaries llama.cpp actually builds. Supplied to the card writer so it
+# copies a command instead of composing one, and used by validate() to reject
+# a command it composed anyway.
+#
+# A real card written from memory reached for `./llama-qwen2`, which has never
+# existed, alongside `vllm serve <gguf repo> --dtype bfloat16` and an SGLang
+# invocation — none of which run a GGUF. Someone would have pasted them.
+LLAMA_BINARIES = frozenset({
+    "llama-cli", "llama-server", "llama-run", "llama-simple",
+    "llama-quantize", "llama-imatrix", "llama-perplexity", "llama-bench",
+    "llama-embedding", "llama-tokenize", "llama-gguf", "llama-gguf-split",
+    "llama-export-lora", "llama-finetune", "llama-mtmd-cli", "llama-tts",
+    "llama-lookup", "llama-speculative", "llama-parallel", "llama-passkey",
+    "llama-batched", "llama-batched-bench", "llama-save-load-state",
+})
+
+# What a reader should reach for first, best-effort. Not a quality ranking —
+# just the file most people want, if this repo happens to contain it.
+_PREFERRED = ("Q4_K_M", "Q4_K_S", "IQ4_XS", "Q5_K_M", "Q8_0", "Q6_K")
+
+
+def _usage(verification):
+    """Working commands for THIS repo, so none have to be invented."""
+    present = {f["quant"]: f for f in verification["files"]}
+    pick = next((q for q in _PREFERRED if q in present), None)
+    if pick is None:
+        runnable = [f for f in verification["files"] if f["quant"] != "mmproj"]
+        if not runnable:
+            return {}
+        pick = runnable[0]["quant"]
+
+    repo_id = verification["repo_id"]
+    filename = present[pick]["name"]
+    return {
+        "recommended_quant": pick,
+        "run": f"llama-cli -hf {repo_id}:{pick} -p \"Hello\"",
+        "serve": f"llama-server -hf {repo_id}:{pick}",
+        "download": (f"huggingface-cli download {repo_id} {filename} "
+                     f"--local-dir ."),
+        "run_local": f"llama-cli -m {filename} -p \"Hello\"",
+        "note": ("These files are llama.cpp GGUF. They are not loaded by "
+                 "vLLM, SGLang or transformers the way the source repo is - "
+                 "do not put a serving command for those in the card."),
+    }
+
+
 def facts(verification, job=None, assessment=None, candidate=None):
     """Everything true about this repo, with no prose and no opinions.
 
@@ -207,6 +253,7 @@ def facts(verification, job=None, assessment=None, candidate=None):
                        if source_repo else None),
         "fork": fork,
         "quantized_on": time.strftime("%Y-%m-%d"),
+        "usage": _usage(verification),
     }
 
     if candidate is not None:
@@ -250,6 +297,12 @@ _BASE_MODEL_LINE = re.compile(r"^base_model:\s*(.+?)\s*$", re.M)
 _SIZE_IN_ROW = re.compile(r"(\d+(?:\.\d+)?)\s*(GB|GiB|MB)\b", re.I)
 
 _ARXIV_ID = re.compile(r"\b(\d{4}\.\d{4,5})\b")
+
+# An invoked llama.cpp binary, however it is written: `llama-cli`,
+# `./llama-cli`, `$ llama-server`. Trailing punctuation and the .exe suffix
+# are left out of the captured name.
+_LLAMA_BINARY = re.compile(r"(?:^|[\s`(./])(llama-[a-z0-9][a-z0-9-]*)",
+                           re.I | re.M)
 
 # A bare quant name in prose — "Q4_K_M", "IQ3_XXS", "MXFP4_MOE" — as opposed to
 # one inside a filename. Checked separately because the filename rule cannot
@@ -365,6 +418,15 @@ def validate(text, card_facts):
             f"does not mention that these files need the {fork['repo']} build "
             f"at {fork.get('ref', '?')}. This architecture is not in upstream "
             "llama.cpp, so without that note the files will not run.")
+
+    # ---- runtime commands ------------------------------------------------
+    named = {m for m in _LLAMA_BINARY.findall(text or "")}
+    unreal = sorted(named - LLAMA_BINARIES)
+    if unreal:
+        problems.append(
+            f"names {len(unreal)} llama.cpp binary/binaries that do not "
+            f"exist: {', '.join(unreal)}. Use the commands in the `usage` "
+            "section of get_card_facts rather than writing your own.")
 
     # ---- citations ------------------------------------------------------
     # An arXiv id the Hub does not report for this model is one the writer

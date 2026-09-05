@@ -214,7 +214,11 @@ TOOLS = [
             "Call this BEFORE write_model_card and compose the card from what "
             "it returns - not from what you recall about the model. Anything "
             "absent here is unestablished, and must be left out of the card "
-            "rather than filled in."),
+            "rather than filled in. The `usage` key carries working commands "
+            "for this exact repo; copy them instead of writing your own.\n\n"
+            "This tool only gathers material. The card is not published until "
+            "write_model_card returns published: true - showing it in the "
+            "conversation instead leaves the generic placeholder in place."),
         "input_schema": {
             "type": "object",
             "properties": {

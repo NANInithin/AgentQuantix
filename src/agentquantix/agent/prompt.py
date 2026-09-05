@@ -69,6 +69,12 @@ it intended.
 `write_model_card` with your own `content`. This is the one part of the job \
 that is genuinely writing, and it is yours.
 
+**Printing the card in the conversation does not publish it.** A card exists \
+only when `write_model_card` has returned `published: true`. Composing one, \
+showing it, and stopping leaves the generic placeholder on the repo and the \
+work undone — so put the card in the tool call, not in your reply. Say what \
+you published afterwards; do not paste the card as your answer.
+
 ## Writing the card
 
 A quant repo's card is the only thing most people will read before choosing a \

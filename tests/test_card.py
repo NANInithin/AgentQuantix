@@ -263,6 +263,44 @@ def test_a_filename_is_not_also_reported_as_a_bare_quant():
     assert not any("does not contain" in p for p in problems)
 
 
+def test_an_invented_llama_binary_is_caught():
+    """REGRESSION, from a real card. It offered `./llama-qwen2 -m ...` as the
+    way to run the files. That binary has never existed."""
+    text = _GOOD + "\n```bash\n./llama-qwen2 -m Model-Q4_K_M.gguf -c 131072\n```\n"
+    problems = card.validate(text, _facts())
+    assert any("llama-qwen2" in p and "do not exist" in p for p in problems)
+
+
+def test_real_llama_binaries_are_allowed():
+    text = _GOOD + """
+```bash
+llama-cli -hf someone/Model-GGUF:Q4_K_M -p "Hello"
+llama-server -hf someone/Model-GGUF:Q4_K_M
+./llama-bench -m Model-Q4_K_M.gguf
+```
+"""
+    assert card.validate(text, _facts()) == []
+
+
+def test_usage_commands_are_supplied_for_this_repo():
+    """The writer invents a runtime when it is not handed one. A real card
+    produced a vLLM serve line and an SGLang launcher for a GGUF repo."""
+    usage = _facts()["usage"]
+    assert usage["recommended_quant"] == "Q4_K_M"
+    assert usage["run"].startswith("llama-cli -hf someone/Model-GGUF:Q4_K_M")
+    assert "Model-Q4_K_M.gguf" in usage["download"]
+    assert "vLLM" in usage["note"]
+
+
+def test_usage_falls_back_when_no_preferred_quant_exists():
+    facts = card.facts(
+        _verification(files=[
+            {"name": "Model-IQ1_S.gguf", "quant": "IQ1_S", "bytes": 10 ** 8,
+             "gb": 0.09, "suspect": False}]),
+        assessment={"repo_id": "someone/Model", "fork_leads": []})
+    assert facts["usage"]["recommended_quant"] == "IQ1_S"
+
+
 def test_publish_refuses_a_card_that_fails_validation():
     """It must raise rather than upload - the check is worthless if the bad
     card goes up anyway. dry_run does not exempt it."""
