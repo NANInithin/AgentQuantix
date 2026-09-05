@@ -20,6 +20,7 @@ Two passes, deliberately:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 import json
 import re
 
@@ -83,6 +84,10 @@ class Candidate:
     # job and a 90-minute one, so it has to be known before anything is ranked.
     published_files: set = field(default_factory=set)
     published_quants: set = field(default_factory=set)
+    # WHICH of our repos they were found in. Usually just target_repo, but a
+    # repo published under an older name shows up here too, and the user needs
+    # to be told which one rather than left to guess why the sweep shrank.
+    published_repos: list = field(default_factory=list)
 
     error: str | None = None
 
@@ -372,6 +377,43 @@ def _community_ggufs(candidate: Candidate, client: HfApi, limit=5):
     return out
 
 
+_GGUF_SUFFIX = re.compile(r"[-_.]gguf$", re.I)
+
+
+def _normalised(repo_name):
+    """A repo's model name, with any GGUF suffix and case difference removed.
+
+    So `Granite-4.2-3b-GGUF`, `granite-4.2-3b-gguf` and `granite-4.2-3b` all
+    reduce to the same thing, and a repo published under any of those
+    spellings is recognised as ours.
+    """
+    return _GGUF_SUFFIX.sub("", repo_name.split("/")[-1]).lower()
+
+
+@lru_cache(maxsize=1)
+def our_repos():
+    """Every model repo in our namespace, fetched once per process.
+
+    One request, cached, rather than a lookup per candidate: a hundred-model
+    sweep asks this a hundred times and the answer never changes within it.
+    Call `forget_our_repos()` after publishing something new.
+
+    An empty tuple on failure. This feeds an optimisation — "you have already
+    done some of this" — so being unable to answer must degrade to proposing
+    the full sweep, never to an error.
+    """
+    try:
+        return tuple(model.id for model in
+                     api().list_models(author=config.HF_NAMESPACE, limit=1000))
+    except Exception:
+        return ()
+
+
+def forget_our_repos():
+    """Drop the cached namespace listing. Call after publishing a new repo."""
+    our_repos.cache_clear()
+
+
 def _already_ours(candidate: Candidate, client: HfApi):
     """What we have already published for this model, if anything.
 
@@ -384,12 +426,34 @@ def _already_ours(candidate: Candidate, client: HfApi):
     The Hub listing is the authority here rather than the local status.json,
     because the status file is per-machine and the question being asked is
     "what can people already download".
+
+    Both the predicted repo id AND the namespace listing are consulted. The
+    prediction alone was too narrow: it is exactly `{namespace}/{name}-GGUF`,
+    so a repo published by an older script, under a lowercase suffix, or
+    renamed at any point read as "nothing published" and bought the whole
+    sweep again.
+
+    Matching is on the EXACT normalised name, never a substring: mistaking
+    `granite-4.2-3b-instruct` for `granite-4.2-3b` would skip real work, which
+    is a worse failure than missing a repo and redoing it.
     """
-    try:
-        files = set(client.list_repo_files(repo_id=candidate.target_repo,
-                                           repo_type="model"))
-    except Exception:
-        return set(), set()          # repo does not exist: nothing published
+    wanted = _normalised(candidate.name)
+    repo_ids = [candidate.target_repo]
+    repo_ids += [repo for repo in our_repos()
+                 if _normalised(repo) == wanted and repo != candidate.target_repo]
+
+    files, found_in = set(), []
+    for repo_id in repo_ids:
+        try:
+            listing = set(client.list_repo_files(repo_id=repo_id,
+                                                 repo_type="model"))
+        except Exception:
+            continue                 # does not exist, or not readable
+        if listing:
+            files |= listing
+            found_in.append(repo_id)
+
+    candidate.published_repos = found_in
     quants = {quant for name in files if (quant := quant_of(name))}
     return files, quants
 

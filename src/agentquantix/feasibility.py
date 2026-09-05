@@ -460,10 +460,14 @@ def assess(candidate, sysinfo, arch_ok, arch_detail, fork_leads=None,
             "per-file limit")
 
     if published:
+        # Name the repos the files were actually found in, not the one we
+        # would have predicted: when a quant turns up under an older or
+        # differently-spelled repo of ours, "already published in <the repo
+        # that does not exist>" is the confusing version of the truth.
+        where = list(candidate.published_repos or []) or [candidate.target_repo]
         warnings.insert(0, (
             f"{len(published_in_sweep)} of {len(all_quants)} quants already "
-            f"published in "
-            f"{candidate.target_repo}"
+            f"published in {', '.join(where)}"
             + (" - nothing left to build" if not quants
                else f" - only the remaining {len(quants)} would be built")))
 
@@ -519,6 +523,11 @@ def assess(candidate, sysinfo, arch_ok, arch_detail, fork_leads=None,
         "published_count": len(published_in_sweep),
         "bf16_published": bf16_published,
         "our_repo_exists": bool(candidate.published_files),
+        # Which of OUR repos the published files were found in. Normally just
+        # target_repo; a second entry means an older or differently-spelled
+        # repo of ours also holds quants of this model, and the user should be
+        # told which rather than left wondering why the sweep shrank.
+        "published_repos": list(candidate.published_repos or []),
         "quant_sizes_gb": {q: round(s, 2) for q, s in sizes.items()},
         "bf16_gb": round(bf16_gb, 2),
         "download_gb": round(download_gb, 2),

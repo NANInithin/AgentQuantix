@@ -496,6 +496,11 @@ def call(name, arguments=None):
         outcome = run_mod.run_jobs(jobs, options=_options_from(arguments),
                                    on_event=events.append)
 
+        # The run just created or filled repos in our namespace, so the cached
+        # listing is now stale. Anything assessed after this in the same
+        # session would otherwise be told we had published nothing.
+        hub.forget_our_repos()
+
         # Step 5 follows automatically — a run that finishes without a
         # verified listing and a card is not actually done.
         #
