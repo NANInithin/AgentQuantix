@@ -32,11 +32,24 @@ GB = 1024 ** 3
 # Fallback constants, used only until state/timings.json has a real number.
 # ---------------------------------------------------------------------------
 
-# Plain-HTTP Hub transfer. Measured ~20 MB/s on this connection; xet's
-# content-defined chunking was ~2 MB/s on the upload side with the CPU at 0.1
-# cores and the disk 67% idle, so the backend, not the link, is the limit.
+# Plain-HTTP Hub transfer, one connection. huggingface_hub uploads a single
+# file's LFS parts sequentially, so this is a per-file ceiling that no amount
+# of concurrency inside one file can lift.
 DEFAULT_NET_MBPS = 20.0
-XET_UPLOAD_MBPS = 2.0
+
+# Xet. This was 2.0 for a long time, from a single measurement that was never
+# reproduced, and it made the estimator quote 1.2 h for uploads that finished
+# in under ten minutes. Xet uploads chunks over many connections and sends
+# fewer bytes (dedup + compression), so it is FASTER than plain HTTP, not
+# slower - 64 MB/s effective against 11.65 MB/s on the box where the old
+# number was believed.
+#
+# Deliberately NOT set to that 64: it is one machine on one link, and the
+# whole bug being fixed here was a local observation frozen into a constant.
+# This is a floor that says "no reason to assume worse than plain HTTP";
+# _learned_mbps replaces it with a real median as soon as samples exist, and
+# it medians xet and non-xet separately so the two never contaminate.
+XET_UPLOAD_MBPS = 20.0
 
 # llama-quantize is a streaming job: read the BF16, write the output. It never
 # reaches raw disk throughput, hence the efficiency factor.
@@ -342,9 +355,9 @@ def assess(candidate, sysinfo, arch_ok, arch_detail, fork_leads=None,
 
     backends = sysinfo.get("hub_backends") or {}
     # What the RUN will actually do, not what the environment happens to say
-    # right now: the pipeline pins the upload policy itself, so pricing uploads
-    # at the xet rate because xet is currently enabled would overstate every
-    # estimate on the list by roughly ten times.
+    # right now: the pipeline pins the upload policy itself, so the estimate
+    # has to ask the policy the same question the pipeline will, or it prices
+    # a transfer mode the run is not going to use.
     upload_uses_xet, _ = transfer.for_upload()
     up_default = XET_UPLOAD_MBPS if upload_uses_xet else DEFAULT_NET_MBPS
     up_mbps, up_learned = _learned_mbps(

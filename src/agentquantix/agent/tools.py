@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 
-from .. import card, config, feasibility, report, research, sysprobe
+from .. import card, config, feasibility, hub, report, research, sysprobe
 from ..pipeline import run as run_mod
 from ..pipeline.job import Job
 
@@ -199,15 +199,50 @@ TOOLS = [
         },
     },
     {
+        "name": "get_card_facts",
+        "description": (
+            "Everything true about a published quant repo, with no prose: the "
+            "verified file listing with real names and real sizes, the "
+            "resolved source repo, and the source model's authors, licence, "
+            "arXiv ids, languages, shape and its README verbatim. "
+            "Call this BEFORE write_model_card and compose the card from what "
+            "it returns - not from what you recall about the model. Anything "
+            "absent here is unestablished, and must be left out of the card "
+            "rather than filled in."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string",
+                         "description": "Repo id, or just the model name."},
+            },
+            "required": ["repo"],
+        },
+    },
+    {
         "name": "write_model_card",
         "description": (
-            "Step 5. Generate the README.md for a published quant repo from "
-            "its VERIFIED file listing, and publish it. Use dry_run first if "
-            "you want to show the user the card before it goes up."),
+            "Step 5. Publish the README.md for a quant repo.\n\n"
+            "Pass `content` with a card you composed from get_card_facts - "
+            "that is the intended path, and you own the whole document: "
+            "structure, table layout, prose, extra sections, extra tags. "
+            "Before publishing, the claims in it are checked against the "
+            "verified listing; if any fail, nothing is published and the "
+            "problems come back for you to fix and retry.\n\n"
+            "Omit `content` to fall back to the fixed template, which is "
+            "identical for every model. Prefer writing your own.\n\n"
+            "Use dry_run to see the result without publishing."),
         "input_schema": {
             "type": "object",
             "properties": {
                 "repo": {"type": "string"},
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "The complete README.md, front matter included. Every "
+                        "published file must appear with its real size; "
+                        "`base_model` must be the resolved source repo or be "
+                        "omitted; cite only arXiv ids the source provides."),
+                },
                 "dry_run": {"type": "boolean", "default": False},
             },
             "required": ["repo"],
@@ -224,6 +259,24 @@ def _need_report():
     if not result:
         raise ValueError("No research on file - call research_trending first.")
     return result
+
+
+def _source_candidate(verification, job=None):
+    """The enriched SOURCE model behind a quant repo, or None.
+
+    This is where a card's provenance comes from — authors, licence, arXiv
+    ids, languages, and the source README verbatim. None is a valid answer:
+    the source may not be resolvable, or the Hub may be unreachable. The card
+    then simply says less, which is the correct outcome. Nothing here is worth
+    failing a card over, hence the broad except.
+    """
+    repo_id = card._source_repo(verification, job)
+    if not repo_id:
+        return None
+    try:
+        return hub.enrich(hub.one(repo_id), check_ggufs=False)
+    except Exception:
+        return None
 
 
 def _options_from(arguments):
@@ -420,8 +473,20 @@ def call(name, arguments=None):
                     "suspect": verification.get("suspect"),
                 })
                 if not verification.get("error"):
+                    # The TEMPLATE card, deliberately. It is a floor, not the
+                    # finished article: it guarantees the repo is never left
+                    # without a readable card if this session ends here, and
+                    # it is the same document for every model. Saying so in
+                    # the result matters — a bare card_published=true reads as
+                    # "done", and the agent would skip the step that is
+                    # actually its own.
                     card.publish(verification, job=job)
                     entry["card_published"] = True
+                    entry["card_is_placeholder"] = True
+                    entry["next"] = (
+                        "A generic template card was published so the repo is "
+                        "not left bare. Replace it: get_card_facts, then "
+                        "write_model_card with your own content.")
                 else:
                     entry["verify_error"] = verification["error"]
             except Exception as e:
@@ -439,7 +504,7 @@ def call(name, arguments=None):
             repo = f"{config.HF_NAMESPACE}/{repo.removesuffix('-GGUF')}-GGUF"
         return card.verify(repo)
 
-    if name == "write_model_card":
+    if name in ("get_card_facts", "write_model_card"):
         repo = arguments["repo"]
         if "/" not in repo:
             repo = f"{config.HF_NAMESPACE}/{repo.removesuffix('-GGUF')}-GGUF"
@@ -449,10 +514,28 @@ def call(name, arguments=None):
         verification = card.verify(job or repo)
         if verification.get("error"):
             raise ValueError(verification["error"])
-        text = card.publish(verification, job=job,
-                            dry_run=bool(arguments.get("dry_run")))
+
+        if name == "get_card_facts":
+            return card.facts(verification, job=job,
+                              candidate=_source_candidate(verification, job))
+
+        content = arguments.get("content")
+        try:
+            text = card.publish(
+                verification, job=job, content=content,
+                candidate=(_source_candidate(verification, job)
+                           if content else None),
+                dry_run=bool(arguments.get("dry_run")))
+        except card.CardRejected as rejected:
+            # Not an error for the caller to give up on: the card is wrong in
+            # ways it can see and fix, so hand back the list and let it retry.
+            return {"repo": repo, "published": False,
+                    "problems": rejected.problems,
+                    "hint": ("Nothing was published. Fix these against "
+                             "get_card_facts and call write_model_card again.")}
         return {"repo": repo, "url": verification["url"],
-                "published": not arguments.get("dry_run"), "card": text}
+                "published": not arguments.get("dry_run"),
+                "problems": [], "card": text}
 
     raise ValueError(f"unknown tool: {name}")
 

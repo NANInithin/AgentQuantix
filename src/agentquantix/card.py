@@ -2,13 +2,36 @@
 
 The verification is not a formality. A run can finish "successfully" with a
 quant missing because llama-quantize gave up on it after three tries, or with a
-file that uploaded at the wrong size because a retry raced. The card is
-generated FROM the verified listing, so it can only ever describe files that
-really exist, at the sizes they really are.
+file that uploaded at the wrong size because a retry raced. The card can only
+ever describe files that really exist, at the sizes they really are.
+
+There are two ways a card gets written, and they trade off differently:
+
+  * `render()` is a template. Deterministic, no network, no model — which is
+    what `aqx run` needs, because there is no LLM in that loop. Every card it
+    produces is the same document with different numbers.
+
+  * `facts()` + `validate()` is the agent path. The code computes the facts;
+    the agent composes the whole document from them, table included; then the
+    claims it made are checked back against the verified listing before
+    anything is published.
+
+The second is the stricter of the two, which is not the obvious way round. A
+template's numbers are trusted because a template "cannot be wrong" — but
+`verify()` already flags files whose size looks impossible, and nothing acts
+on it. A composed card has to pass a check that a template never faces.
+
+What the check enforces is CLAIMS, not FORM. The agent may lay the table out
+however it likes, group the files however it likes, and write whatever prose
+it likes. It may not name a file that does not exist, state a size that is not
+the real one, or put a value in `base_model` that was not resolved — the Hub
+builds its model tree from that field, and a wrong value points the tree at a
+repo that does not exist.
 """
 
 from __future__ import annotations
 
+import re
 import time
 
 from huggingface_hub import HfApi
@@ -36,7 +59,7 @@ QUANT_NOTES = {
     "Q3_K_M": "Smaller again; noticeable degradation.",
     "Q3_K_S": "Aggressive. Prefer IQ3_M at a similar size.",
     "Q2_K": "Very small, heavily degraded. For experimentation.",
-    "Q2_K_S": "Smaller than Q2_K, requires the imatrix.",
+    "Q2_K_S": "Smaller than Q2_K, at a further quality cost.",
     "Q1_0": "Extreme. Included for completeness.",
     "Q2_0": "Extreme, group-64. Included for completeness.",
     "IQ4_XS": "Best sub-4.5bpw option; usually beats Q4_K_S at a smaller size.",
@@ -44,7 +67,7 @@ QUANT_NOTES = {
     "IQ3_M": "Strong at ~3.7bpw, clearly better than Q3_K_M.",
     "IQ3_S": "Slightly smaller than IQ3_M.",
     "IQ3_XS": "Aggressive but coherent.",
-    "IQ3_XXS": "Very aggressive; imatrix carries it.",
+    "IQ3_XXS": "Very aggressive; the last coherent step down.",
     "IQ2_M": "The smallest size most people find usable.",
     "IQ2_S": "Below the usual usability line.",
     "IQ2_XS": "Experimental.",
@@ -129,8 +152,221 @@ def verify(job_or_repo, expected_quants=None, base_name=None):
     }
 
 
+def _source_repo(verification, job=None, assessment=None):
+    """The model these quants were cut from, or None if it is not certain.
+
+    Descending order of certainty: the job that produced the files, the
+    assessment it came from, then a Hub lookup by name that only answers on an
+    unambiguous match. None means "say nothing" — never a guess.
+    """
+    assessment = assessment or (job.assessment if job else {}) or {}
+    return ((job.repo_id if job else assessment.get("repo_id"))
+            or hub.resolve_base_model(verification["base_name"]))
+
+
+def facts(verification, job=None, assessment=None, candidate=None):
+    """Everything true about this repo, with no prose and no opinions.
+
+    This is what the agent composes a card FROM. It exists so the agent writes
+    about a model it has actually been shown rather than one it half
+    remembers: the source README is in here verbatim, and so are the licence,
+    the authors and the arXiv ids the Hub reports. A citation belongs to the
+    publisher, and the only safe way to produce one is to copy theirs.
+
+    `candidate` is an enriched hub.Candidate when the caller has one. Without
+    it the shape and provenance fields are simply absent, which is the honest
+    result — the card writer must not fill them in from memory.
+    """
+    assessment = assessment or (job.assessment if job else {}) or {}
+    source_repo = _source_repo(verification, job, assessment)
+    fork = (job.fork if job else None) or (assessment.get("fork_leads") or [None])[0]
+
+    out = {
+        "repo_id": verification["repo_id"],
+        "url": verification["url"],
+        "base_name": verification["base_name"],
+
+        # The authoritative file list. Sizes are bytes as the Hub reports
+        # them; `gb` is the rounded figure a card would print.
+        "files": [
+            {"name": f["name"], "quant": f["quant"], "bytes": f["bytes"],
+             "gb": f["gb"], "note": QUANT_NOTES.get(f["quant"], ""),
+             "url": (f"https://huggingface.co/{verification['repo_id']}"
+                     f"/blob/main/{f['name']}")}
+            for f in verification["files"]
+        ],
+        "count": verification["count"],
+        "total_gb": verification["total_gb"],
+        "missing": verification["missing"],
+        "suspect": verification["suspect"],
+
+        # None means "not established". The card must then omit base_model
+        # rather than invent one.
+        "source_repo": source_repo,
+        "source_url": (f"https://huggingface.co/{source_repo}"
+                       if source_repo else None),
+        "fork": fork,
+        "quantized_on": time.strftime("%Y-%m-%d"),
+    }
+
+    if candidate is not None:
+        out["source"] = {
+            "author": candidate.author,
+            "license": candidate.license,
+            "arxiv_ids": list(candidate.arxiv_ids or []),
+            "languages": list(candidate.languages or []),
+            "tags": [t for t in (candidate.tags or []) if ":" not in t],
+            "params": candidate.params,
+            "architectures": list(candidate.architectures or []),
+            "model_type": candidate.model_type,
+            "n_layers": candidate.n_layers,
+            "hidden_size": candidate.hidden_size,
+            "vocab_size": candidate.vocab_size,
+            "n_experts": candidate.n_experts,
+            "is_multimodal": candidate.is_multimodal,
+            "downloads": candidate.downloads,
+            "likes": candidate.likes,
+            "created_at": candidate.created_at,
+            # Verbatim, untruncated. Truncating it is how a citation block
+            # gets cut in half and then reconstructed from memory.
+            "readme": candidate.readme,
+        }
+    return out
+
+
+# =====================================================
+# VALIDATION
+# =====================================================
+# A .gguf filename anywhere in the card — link, table cell, code block.
+_GGUF_IN_TEXT = re.compile(r"[\w.\-]+\.gguf", re.I)
+
+# `base_model:` in the YAML front matter. Only the front matter counts: the
+# string can legitimately appear in prose or inside a fenced example.
+_FRONT_MATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(?:\n|\Z)", re.S)
+_BASE_MODEL_LINE = re.compile(r"^base_model:\s*(.+?)\s*$", re.M)
+
+# A size written next to a filename, e.g. "4.49 GB". Matched per table row so
+# a figure can be tied to the file it claims to describe.
+_SIZE_IN_ROW = re.compile(r"(\d+(?:\.\d+)?)\s*(GB|GiB|MB)\b", re.I)
+
+_ARXIV_ID = re.compile(r"\b(\d{4}\.\d{4,5})\b")
+
+
+def _front_matter(text):
+    match = _FRONT_MATTER.match(text or "")
+    return match.group(1) if match else ""
+
+
+def validate(text, card_facts):
+    """Check a composed card's CLAIMS against the verified listing.
+
+    Returns a list of human-readable problems; empty means publishable. The
+    messages are written to be handed straight back to the agent, so each one
+    says what is wrong and what the real value is.
+
+    Deliberately NOT checked: headings, ordering, table shape, tone, length,
+    extra sections, extra tags. The agent owns the document. This owns the
+    facts.
+    """
+    problems = []
+    files = card_facts["files"]
+    real_names = {f["name"] for f in files}
+
+    # ---- filenames ----------------------------------------------------
+    mentioned = {m for m in _GGUF_IN_TEXT.findall(text or "")}
+    # Case-insensitively resolve back to the real spelling so a case slip is
+    # reported as a case slip rather than as an invented file.
+    lowered = {n.lower(): n for n in real_names}
+    invented = sorted({m for m in mentioned if m.lower() not in lowered})
+    if invented:
+        problems.append(
+            f"names {len(invented)} file(s) that are not in the repo: "
+            f"{', '.join(invented)}. Only these exist: "
+            f"{', '.join(sorted(real_names))}")
+
+    mentioned_lower = {m.lower() for m in mentioned}
+    omitted = sorted(n for n in real_names if n.lower() not in mentioned_lower)
+    if omitted:
+        problems.append(
+            f"omits {len(omitted)} file(s) that are in the repo: "
+            f"{', '.join(omitted)}. Every published file must appear.")
+
+    # ---- sizes --------------------------------------------------------
+    # Line-scoped: a size counts as a claim about a file only when it shares a
+    # line with that file's name, which is what a table row looks like.
+    by_name = {f["name"].lower(): f for f in files}
+    for line in (text or "").splitlines():
+        names_here = {m.lower() for m in _GGUF_IN_TEXT.findall(line)}
+        names_here &= set(by_name)
+        if len(names_here) != 1:
+            continue                      # ambiguous or none; nothing to bind
+        entry = by_name[next(iter(names_here))]
+        for raw, unit in _SIZE_IN_ROW.findall(line):
+            claimed = float(raw)
+            unit = unit.upper()
+            actual = (entry["bytes"] / 1024 ** 2 if unit == "MB"
+                      else entry["bytes"] / GB)   # GB and GiB both mean GiB
+
+            # Tolerance follows the precision the CARD chose, rather than a
+            # fixed epsilon. "0.9 GB" and "0.93 GB" describe the same file at
+            # different precisions and both are honest; "3.1 GB" is not. Half
+            # of the last written decimal place is exactly the range that
+            # rounds to what was written.
+            decimals = len(raw.split(".")[1]) if "." in raw else 0
+            tolerance = 0.5 * 10 ** -decimals * 1.01     # 1.01: float slack
+
+            if abs(claimed - actual) > tolerance:
+                problems.append(
+                    f"{entry['name']}: card says {claimed:g} {unit}, "
+                    f"actual size is {actual:.2f} {unit}")
+
+    # ---- base_model ---------------------------------------------------
+    declared = _BASE_MODEL_LINE.search(_front_matter(text))
+    expected = card_facts.get("source_repo")
+    if declared:
+        value = declared.group(1).strip().strip('"\'')
+        if not expected:
+            problems.append(
+                f"declares base_model: {value}, but the source repo was never "
+                "established. Omit base_model entirely - the Hub builds its "
+                "model tree from it and a wrong value points at nothing.")
+        elif value != expected:
+            problems.append(
+                f"declares base_model: {value}, but the source is {expected}.")
+    elif expected:
+        problems.append(
+            f"is missing `base_model: {expected}` from the front matter.")
+
+    # ---- runtime requirement -------------------------------------------
+    fork = card_facts.get("fork")
+    if fork and fork.get("repo") and fork["repo"] not in (text or ""):
+        problems.append(
+            f"does not mention that these files need the {fork['repo']} build "
+            f"at {fork.get('ref', '?')}. This architecture is not in upstream "
+            "llama.cpp, so without that note the files will not run.")
+
+    # ---- citations ------------------------------------------------------
+    # An arXiv id the Hub does not report for this model is one the writer
+    # produced from memory, which is the failure mode worth catching: a
+    # fabricated citation on a public repo is worse than no citation.
+    known = set((card_facts.get("source") or {}).get("arxiv_ids") or [])
+    readme = ((card_facts.get("source") or {}).get("readme")) or ""
+    for found in set(_ARXIV_ID.findall(text or "")):
+        if found not in known and found not in readme:
+            problems.append(
+                f"cites arXiv {found}, which is not in this model's Hub tags "
+                "or its source README. Cite only what the source provides.")
+
+    return problems
+
+
 def render(verification, job=None, assessment=None):
-    """The README.md for a quant repo, built from the verified file listing."""
+    """The README.md for a quant repo, built from the verified file listing.
+
+    The deterministic fallback. `aqx run` has no LLM in the loop, and a run
+    must never finish without a card, so this stays as the floor beneath the
+    agent path.
+    """
     assessment = assessment or (job.assessment if job else {}) or {}
     base_name = verification["base_name"]
 
@@ -142,15 +378,7 @@ def render(verification, job=None, assessment=None):
     source_repo = (job.repo_id if job else assessment.get("repo_id")) \
         or hub.resolve_base_model(base_name)
 
-    imatrix_source = (job.imatrix_source if job
-                      else (assessment.get("imatrix") or {}).get("source", "BF16"))
-    has_imatrix = any(f["quant"] in config.IMATRIX_REQUIRED
-                      or f["quant"] in config.IMATRIX_GUIDED
-                      for f in verification["files"])
-
     tags = ["gguf", "llama.cpp", "quantized"]
-    if any(f["quant"] in config.IQ_QUANTS for f in verification["files"]):
-        tags.append("imatrix")
 
     front = [
         "---",
@@ -197,34 +425,10 @@ def render(verification, job=None, assessment=None):
         "- Plenty of memory: **Q6_K** or **Q8_0**.",
         "- The usual choice: **Q4_K_M**.",
         "- Tight on memory: **IQ4_XS**, then **IQ3_M**, then **IQ2_M**.",
-        "- The `IQ*` files are imatrix-guided and generally beat a `Q*` file "
-        "of similar size, at the cost of slightly slower inference on some "
-        "hardware.",
+        "- The `IQ*` files generally beat a `Q*` file of similar size, at the "
+        "cost of slightly slower inference on some hardware.",
         "",
     ]
-
-    if has_imatrix:
-        body += [
-            "## Quantization details",
-            "",
-            f"- Importance matrix computed with `llama-imatrix` over "
-            f"{config.CALIBRATION_MAX_LINES} rows of "
-            f"[{config.WIKITEXT_REPO}]"
-            f"(https://huggingface.co/datasets/{config.WIKITEXT_REPO}) "
-            f"(`{config.WIKITEXT_CONFIG}`).",
-            f"- The matrix was computed on the **{imatrix_source}** weights."
-            + ("" if imatrix_source == "BF16" else
-               "  The BF16 exceeded this machine's memory, so a smaller quant "
-               "was used as the forward-pass source; the statistics therefore "
-               "come from an approximation of the weights rather than the "
-               "weights themselves."),
-            "- K-quants below 6 bit and the whole `IQ` set are imatrix-guided. "
-            "`Q4_0`/`Q4_1`/`Q5_0`/`Q5_1` are legacy round-to-nearest and "
-            "ignore it; `Q6_K`/`Q8_0` are near-lossless and do not need it.",
-            "- All files are cut from the same BF16 GGUF, so differences "
-            "between them are quantization only.",
-            "",
-        ]
 
     # `or [None]` rather than a .get() default: the default only applies when
     # the key is ABSENT, and the key is always present — it is an empty list
@@ -268,9 +472,36 @@ def render(verification, job=None, assessment=None):
     return "\n".join(front + body)
 
 
-def publish(verification, job=None, assessment=None, dry_run=False):
-    """Render the card and push it to the repo as README.md."""
-    text = render(verification, job=job, assessment=assessment)
+class CardRejected(ValueError):
+    """A composed card made a claim the verified listing does not support.
+
+    Carries the problem list so the caller can hand it back to the writer and
+    let it correct the card, rather than only reporting that something failed.
+    """
+
+    def __init__(self, problems):
+        self.problems = problems
+        super().__init__("; ".join(problems))
+
+
+def publish(verification, job=None, assessment=None, dry_run=False,
+            content=None, candidate=None):
+    """Push a card to the repo as README.md. Returns the text.
+
+    With `content`, the card is the agent's own document and is validated
+    against the verified listing first — an unpublishable one raises
+    CardRejected rather than going up. Without it, the template renders.
+    """
+    if content is None:
+        text = render(verification, job=job, assessment=assessment)
+    else:
+        text = content
+        problems = validate(text, facts(verification, job=job,
+                                        assessment=assessment,
+                                        candidate=candidate))
+        if problems:
+            raise CardRejected(problems)
+
     if dry_run:
         return text
 

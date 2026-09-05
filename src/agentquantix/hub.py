@@ -53,6 +53,17 @@ class Candidate:
     # Filled by enrich()
     params: int | None = None           # total parameters, all dtypes
     source_bytes: int = 0               # what a full snapshot_download costs
+
+    # Provenance, for the model card. None of this affects feasibility — it
+    # exists so a card can credit the authors, state the real licence and
+    # cite the real paper instead of hedging. The card used to close with
+    # "Licensing follows the base model", which was a hedge around the fact
+    # that the licence was never fetched at all.
+    author: str | None = None           # the publishing user or org
+    license: str | None = None          # from the Hub's "license:*" tag
+    arxiv_ids: list = field(default_factory=list)   # from "arxiv:*" tags
+    languages: list = field(default_factory=list)   # from "language:*" tags
+    readme: str | None = None           # the source card, verbatim
     dtypes: dict = field(default_factory=dict)
     architectures: list = field(default_factory=list)
     model_type: str | None = None
@@ -260,6 +271,41 @@ def _dig(cfg: dict, keys):
     return None
 
 
+def _typed_tags(tags, prefix):
+    """The values of the Hub's `prefix:value` tags, in order, deduplicated.
+
+    The Hub emits `license:apache-2.0`, `arxiv:2502.16161`, `language:pt` and
+    friends alongside the free-form tags. They are already in the single
+    `list_models` response the sweep makes, so reading them costs nothing —
+    they were simply never parsed.
+    """
+    seen, out = set(), []
+    for tag in tags or []:
+        if not isinstance(tag, str) or not tag.lower().startswith(f"{prefix}:"):
+            continue
+        value = tag.split(":", 1)[1].strip()
+        if value and value.lower() not in seen:
+            seen.add(value.lower())
+            out.append(value)
+    return out
+
+
+def _fetch_readme(repo_id):
+    """The source model's own card, verbatim, or None.
+
+    The agent writes the quant repo's card from this rather than from what it
+    remembers about the model. It is the difference between describing the
+    model and inventing it — and it carries the publisher's own citation
+    block, which is the only trustworthy source for one.
+    """
+    try:
+        path = hf_hub_download(repo_id=repo_id, filename="README.md",
+                               repo_type="model", token=config.TOKEN)
+        return open(path, encoding="utf-8", errors="replace").read()
+    except (EntryNotFoundError, HfHubHTTPError, OSError, ValueError):
+        return None
+
+
 def _fetch_config(repo_id):
     try:
         path = hf_hub_download(repo_id=repo_id, filename="config.json",
@@ -348,14 +394,32 @@ def _already_ours(candidate: Candidate, client: HfApi):
     return files, quants
 
 
-def enrich(candidate: Candidate, check_ggufs=True):
-    """Fill in everything the feasibility model needs. One candidate, in place."""
+def enrich(candidate: Candidate, check_ggufs=True, want_readme=True):
+    """Fill in everything the feasibility model needs. One candidate, in place.
+
+    `want_readme` is separable because the card path wants the source README
+    and the sweep does not: enrich() runs over every surviving candidate, and
+    a README download each is a round trip per model for data only one of them
+    will ever use.
+    """
     client = api()
     try:
         info = client.model_info(candidate.repo_id, files_metadata=True)
     except Exception as e:
         candidate.error = f"{type(e).__name__}: {e}"
         return candidate
+
+    # model_info carries the full tag list even when the candidate came from
+    # `one()`, so provenance is read from the response rather than from
+    # whatever the trending listing happened to include.
+    tags = list(getattr(info, "tags", []) or []) or candidate.tags
+    candidate.author = getattr(info, "author", None) or candidate.org
+    licenses = _typed_tags(tags, "license")
+    candidate.license = licenses[0] if licenses else None
+    candidate.arxiv_ids = _typed_tags(tags, "arxiv")
+    candidate.languages = _typed_tags(tags, "language")
+    if want_readme:
+        candidate.readme = _fetch_readme(candidate.repo_id)
 
     # The safetensors header carries an exact parameter count per dtype — far
     # better than parsing "7B" out of the name, which lies constantly (the

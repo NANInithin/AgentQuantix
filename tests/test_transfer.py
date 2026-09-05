@@ -36,10 +36,27 @@ def test_the_byte_form_agrees_with_the_gib_form():
 # =====================================================
 # POLICY
 # =====================================================
-def test_uploads_never_use_xet_by_default():
-    """It is ~10x slower on the step that dominates almost every run."""
-    enabled, _ = transfer.for_upload()
-    assert enabled is False
+def test_uploads_use_xet_by_default(monkeypatch):
+    """REGRESSION. This asserted the exact opposite, on a "~10x slower"
+    figure measured once on a home connection and never reproduced.
+
+    It was wrong. huggingface_hub 1.x removed hf_transfer, and plain LFS
+    uploads one file's parts sequentially over a single connection, so "xet
+    off" meant a single TCP stream with no way to widen it. Measured on a
+    1.12 GB freshly-cut quant into a fresh repo: 11.65 MB/s plain against
+    33.6 MB/s on the wire and 64.4 MB/s effective with xet.
+    """
+    monkeypatch.setattr(transfer, "installed", lambda: True)
+    enabled, why = transfer.for_upload()
+    assert enabled is True
+    assert "single connection" in why
+
+
+def test_uploads_do_not_claim_xet_when_it_is_absent(monkeypatch):
+    """pin() cannot enable a backend that is not installed, so the policy must
+    not ask for one -- it would print a misleading "enabled" line."""
+    monkeypatch.setattr(transfer, "installed", lambda: False)
+    assert transfer.for_upload()[0] is False
 
 
 def test_small_downloads_leave_the_setting_alone():
@@ -92,6 +109,46 @@ def test_pin_changes_the_constant_and_the_environment(monkeypatch):
     assert os.environ["HF_HUB_DISABLE_XET"] == "1"
 
 
+def test_pin_on_requests_xets_high_performance_mode(monkeypatch):
+    """HF_XET_HIGH_PERFORMANCE is the documented successor to
+    HF_HUB_ENABLE_HF_TRANSFER, which huggingface_hub 1.x removed."""
+    import os
+
+    from huggingface_hub import constants
+    monkeypatch.setattr(transfer, "installed", lambda: True)
+    monkeypatch.setattr(constants, "HF_HUB_DISABLE_XET", True)
+    monkeypatch.delenv("HF_XET_HIGH_PERFORMANCE", raising=False)
+
+    assert transfer.pin(True, "test") is True
+    assert os.environ["HF_XET_HIGH_PERFORMANCE"] == "1"
+
+
+def test_pin_leaves_an_explicit_high_performance_choice_alone(monkeypatch):
+    """It is a performance hint, not correctness. A user who turned it off
+    meant it, and pin() must not quietly turn it back on."""
+    import os
+
+    from huggingface_hub import constants
+    monkeypatch.setattr(transfer, "installed", lambda: True)
+    monkeypatch.setattr(constants, "HF_HUB_DISABLE_XET", True)
+    monkeypatch.setenv("HF_XET_HIGH_PERFORMANCE", "0")
+
+    transfer.pin(True, "test")
+    assert os.environ["HF_XET_HIGH_PERFORMANCE"] == "0"
+
+
+def test_pin_off_does_not_set_high_performance(monkeypatch):
+    import os
+
+    from huggingface_hub import constants
+    monkeypatch.setattr(transfer, "installed", lambda: True)
+    monkeypatch.setattr(constants, "HF_HUB_DISABLE_XET", False)
+    monkeypatch.delenv("HF_XET_HIGH_PERFORMANCE", raising=False)
+
+    transfer.pin(False, "test")
+    assert "HF_XET_HIGH_PERFORMANCE" not in os.environ
+
+
 def test_pin_is_a_no_op_when_already_correct(monkeypatch):
     """Uploads pin the policy once; repeat calls must not churn global state
     while other threads are mid-transfer."""
@@ -141,15 +198,22 @@ def test_oversized_uploads_require_xet(monkeypatch):
     assert "limit" in why
 
 
-def test_ordinary_uploads_still_avoid_xet(monkeypatch):
-    """The fix must not cost the 10x on the 29 quants that fit."""
+def test_the_cap_is_what_overrides_an_explicit_off(monkeypatch):
+    """AQX_XET=off is a speed preference, and below the cap it is honoured.
+
+    Above the cap it stops being a preference: plain LFS cannot send the file
+    at all, so obeying it would turn a slow upload into a guaranteed failure.
+    Same shape as for_download().
+    """
+    monkeypatch.setenv("AQX_XET", "off")
     monkeypatch.setattr(transfer, "installed", lambda: True)
     assert transfer.for_upload(size_gib=45.0)[0] is False
-    assert transfer.for_upload()[0] is False
+    assert transfer.for_upload(size_gib=75.0)[0] is True
 
 
 def test_the_upload_cap_matches_the_download_cap(monkeypatch):
     """One limit, one threshold. A quant that can be fetched can be sent."""
+    monkeypatch.setenv("AQX_XET", "off")
     monkeypatch.setattr(transfer, "installed", lambda: True)
     just_under = transfer.HTTP_DOWNLOAD_LIMIT_GIB - 0.01
     just_over = transfer.HTTP_DOWNLOAD_LIMIT_GIB + 0.01

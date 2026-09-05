@@ -7,9 +7,32 @@ K2-Horizon script already found it by hand:
     cap. Without it `hf_hub_download` raises outright — a hard failure, not a
     slowdown.
 
-  * hf_xet is roughly 10x SLOWER to UPLOAD on this connection. Measured ~2 MB/s
-    against ~20 MB/s plain HTTP, with the CPU at 0.1 cores and the disk 67%
-    idle, so it is the backend and not the link.
+  * hf_xet is the ONLY multi-connection upload path left. This module used to
+    assert the opposite -- "roughly 10x SLOWER to UPLOAD, ~2 MB/s against ~20
+    MB/s plain HTTP" -- from one measurement on a home connection, and forced
+    xet off for every upload under the cap on that basis. It was wrong, and
+    expensively so. Two things it missed:
+
+      - huggingface_hub 1.x REMOVED hf_transfer ("hf_transfer is not used
+        anymore", constants.py). Xet is the only accelerated backend that
+        still exists.
+
+      - The plain-LFS path uploads a single file's parts SEQUENTIALLY, one
+        connection at a time -- `_upload_parts_iteratively` in lfs.py is a
+        plain for-loop over `http_backoff("PUT", ...)`. And `upload_file`
+        commits one file at a time, so the `num_threads=5` pool in
+        `_upload_lfs_files` (which parallelises across files in a commit,
+        not within one) always gets a work queue of exactly 1.
+
+    So "xet off" meant one TCP stream for the whole run, with no way to use
+    more. Measured on a 1.12 GB freshly-cut quant, fresh repo, nothing
+    available to deduplicate against:
+
+        plain HTTP   11.65 MB/s   (median of 11 recorded samples)
+        xet          33.60 MB/s   on the wire, new bytes only
+                     64.40 MB/s   effective, after chunk dedup/compression
+
+    2.9x on the wire and 5.5x end to end, at one upload worker.
 
   * The 50 GB cap applies to UPLOADS too, which this module originally got
     wrong. `upload_file` documents "up to 50 GB" and the large-folder path
@@ -17,9 +40,10 @@ K2-Horizon script already found it by hand:
     directions, and every quant cut from it -- all smaller by construction --
     still wants it off.
 
-A run of a 75 GB model therefore wants xet ON for one download and OFF for the
-thirty uploads that follow. A single environment variable set once cannot
-express that, which is why it lives here instead.
+What remains genuinely per-phase is the CAP: xet is REQUIRED above it and
+merely preferable below, and only the required case may override an explicit
+user preference. A single environment variable set once cannot express that,
+which is why this still lives here rather than in the environment.
 
 Two facts from huggingface_hub 0.36 make this implementable, both verified
 against the installed package rather than assumed:
@@ -109,14 +133,12 @@ def for_download(size_bytes=None, size_gib=None):
 def for_upload(size_bytes=None, size_gib=None):
     """Should xet be used to upload this file. Returns (enabled, reason).
 
-    Off in auto mode for everything under the cap: xet is an order of
-    magnitude slower here, on the step that dominates almost every run.
-
-    But the cap is NOT download-only, which this function previously assumed.
-    huggingface_hub's own upload_file documents "up to 50 GB", and the
-    large-folder path calls 50GB a hard limit. A BF16 over that fails on the
-    LFS path no matter how many times it is retried — so above the cap, xet
-    stops being a slow option and becomes the only one.
+    ON in auto mode whenever the backend is installed. Above the cap it is
+    required — huggingface_hub's own upload_file documents "up to 50 GB", and
+    a BF16 over that fails on the LFS path however many times it is retried.
+    Below the cap it is merely much faster, for the reasons in the module
+    docstring: plain LFS gives one sequential connection per file and nothing
+    can widen it.
 
     Call it with no size for the ordinary case (every quant is smaller than
     the BF16 it was cut from, so only the BF16 can ever exceed this).
@@ -124,16 +146,25 @@ def for_upload(size_bytes=None, size_gib=None):
     configured = mode()
     if configured == "on":
         return True, "AQX_XET=on"
-    if configured == "off":
+
+    over_cap = exceeds_http_limit(size_bytes, size_gib)
+
+    # AQX_XET=off is honoured right up to the point where it would guarantee a
+    # failed upload rather than a slow one, which mirrors for_download().
+    if configured == "off" and not over_cap:
         return False, "AQX_XET=off"
 
-    if exceeds_http_limit(size_bytes, size_gib):
-        if not installed():
+    if not installed():
+        if over_cap:
             return False, ("over the plain-HTTP cap and hf_xet is not "
                            "installed - this upload cannot succeed")
+        return False, "hf_xet is not installed"
+
+    if over_cap:
         return True, (f"file is over the Hub's {HTTP_DOWNLOAD_LIMIT_GIB:.0f} "
                       "GiB per-file limit, so xet is required")
-    return False, "xet uploads ~10x slower than plain HTTP; not needed for uploads"
+    return True, ("plain LFS uploads one file's parts sequentially over a "
+                  "single connection; xet is the only parallel path")
 
 
 # =====================================================
@@ -181,6 +212,12 @@ def pin(want, reason=""):
     constants.HF_HUB_DISABLE_XET = not want
     # Mirrored into the environment so any subprocess inherits the decision.
     os.environ["HF_HUB_DISABLE_XET"] = "0" if want else "1"
+    if want:
+        # Xet's high-throughput mode. Unset by default, and it is the
+        # documented successor to HF_HUB_ENABLE_HF_TRANSFER, which 1.x
+        # removed. Only ever turned ON here - an explicit 0 from the user is
+        # left standing, since this is a performance hint and not correctness.
+        os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
     if reason:
         print(f"  [xet] {'enabled' if want else 'disabled'}: {reason}")
     return True
@@ -222,7 +259,7 @@ def summary():
         return "xet forced ON for every transfer (AQX_XET=on)"
     if configured == "off":
         return ("xet forced OFF for every transfer (AQX_XET=off) - files over "
-                f"{HTTP_DOWNLOAD_LIMIT_GIB:.0f} GiB cannot be downloaded")
-    return (f"auto: xet on for any transfer over "
-            f"{HTTP_DOWNLOAD_LIMIT_GIB:.0f} GiB (the Hub's per-file limit), "
-            "off otherwise")
+                f"{HTTP_DOWNLOAD_LIMIT_GIB:.0f} GiB cannot be downloaded, and "
+                "uploads fall back to a single sequential connection")
+    return ("auto: xet on for uploads (plain LFS is single-connection) and "
+            f"for any transfer over {HTTP_DOWNLOAD_LIMIT_GIB:.0f} GiB")

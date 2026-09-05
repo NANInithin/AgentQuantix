@@ -39,7 +39,10 @@ def research(limit=None, probe_disk=True, workers=8, hunt_forks=True,
 
     progress(f"reading metadata for {len(kept)} candidates...")
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        list(pool.map(hub.enrich, kept))
+        # No README here. It is a round trip per candidate for something only
+        # the card writer reads, and at most a handful of a hundred-model
+        # sweep ever reach that step.
+        list(pool.map(lambda c: hub.enrich(c, want_readme=False), kept))
 
     # Read the architecture list ONCE. It costs a subprocess that imports the
     # whole converter, and it is identical for every candidate.
