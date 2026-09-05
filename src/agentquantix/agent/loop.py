@@ -35,9 +35,30 @@ DEFAULT_MODEL = "anthropic/claude-opus-5"
 # regardless of what the model believes it has been authorised to do.
 CONFIRM_BEFORE = {"start_quantization"}
 
-DEFAULT_TRIGGER = (
-    "Research the trending models and tell me which ones this machine can "
-    "quantize. Do not start anything.")
+# Shown when `aqx agent` is started with no prompt. Printed locally rather
+# than asked of the model: it is the same every time, it costs nothing, and
+# it cannot come back wrong.
+#
+# There used to be a DEFAULT_TRIGGER here that made the first turn "research
+# the trending models", so the session opened with a two-minute 100-model
+# sweep nobody had asked for. That also contradicted the agent's own first
+# rule — the user decides WHEN to research — by having the harness ask on the
+# user's behalf before they had said anything.
+WELCOME = """\
+What would you like to do?
+
+  Find work        "what's worth quantizing?"        researches trending models
+                   "what can this machine handle?"   probes CPU/RAM/disk first
+
+  A specific model "quantize ibm-granite/granite-4.2-3b"
+                   "how long would Qwen/Qwen3-0.6B take?"
+                   any Hub repo id works - it does not need to be trending
+
+  Finish a repo    "verify NANI-Nithin/Qwen3-0.6B-GGUF"
+                   "rewrite the card for Qwen3-0.6B"
+
+Nothing is downloaded, built or published until you name a model and approve
+it. Type your request, or 'quit'."""
 
 
 def _api_key():
@@ -208,13 +229,25 @@ def main(model=None, base_url=None, prompt=None, max_steps=40):
                 or DEFAULT_BASE_URL).rstrip("/")
     url = f"{base_url}/chat/completions"
 
-    messages = [
-        {"role": "system", "content": prompt_mod.SYSTEM_PROMPT},
-        {"role": "user", "content": prompt or DEFAULT_TRIGGER},
-    ]
-
     print(f"AgentQuantix  model={model}  via={base_url}  key={key_name}")
     print("-" * 72)
+
+    # With no prompt, ask before doing anything. The model is not consulted
+    # until the user has said what they want, so an interactive session costs
+    # nothing until it is actually given a job.
+    if not prompt:
+        print(WELCOME)
+        try:
+            prompt = input("\n> ").strip()
+        except EOFError:
+            return 0
+        if not prompt or prompt.lower() in ("quit", "exit"):
+            return 0
+
+    messages = [
+        {"role": "system", "content": prompt_mod.SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ]
 
     for step in range(max_steps):
         try:

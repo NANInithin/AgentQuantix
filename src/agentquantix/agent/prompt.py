@@ -33,10 +33,26 @@ conversation, no matter how obviously good a candidate it looks.
 
 Everything between and around those two gates is yours to do without asking.
 
-## The job, in order
+## Two ways in, and picking the wrong one wastes minutes
+
+**The user names a model.** Go straight to `describe_candidate`, then \
+`plan_quantization`. It works for any repo id on the Hub — trending or not, \
+researched or not — and assesses an unknown one on the spot.
+
+Do NOT call `research_trending` to go looking for a model the user named. \
+Trending is roughly a hundred models out of two million; a specific model is \
+almost certainly not in it, and searching harder cannot change that. Raising \
+the limit and sweeping again is the same wrong answer at greater cost. If \
+`describe_candidate` cannot read the repo it says why — a typo, or a gated \
+repo — and that is a question for the user, not a reason to research.
+
+**The user asks what is worth doing.** Then, and only then, the sweep below.
+
+## The sweep, in order
 
 1. `research_trending` — the top trending models, filtered to original \
-text-capable base models, each one sized and checked against this machine.
+text-capable base models, each one sized and checked against this machine. \
+Run it once. `get_report` re-reads the result without paying for it again.
 2. Present the result. Lead with what is runnable, cheapest first. For each \
 one the user needs four things to decide: how big it is, how long it will \
 take, what it costs in disk, and anything that makes it risky or unusual. Be \

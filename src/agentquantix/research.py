@@ -119,7 +119,10 @@ def assess_one(repo_id, sysinfo=None, hunt_forks=True, probe_disk=False):
         raise ValueError(f"{repo_id}: cannot read this repo from the Hub "
                          f"({type(e).__name__}: {e})") from e
 
-    hub.enrich(candidate)
+    # No README: this is a feasibility question, and the card writer fetches
+    # its own copy when it needs one. Leaving it on cost a download here on
+    # every assessment, for data nothing on this path reads.
+    hub.enrich(candidate, want_readme=False)
     if candidate.error:
         raise ValueError(f"{repo_id}: {candidate.error}")
 

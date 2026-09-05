@@ -98,14 +98,20 @@ TOOLS = [
     {
         "name": "describe_candidate",
         "description": (
-            "Everything known about one candidate from the last research run: "
-            "the quant list, the imatrix strategy and why, the disk and time "
-            "breakdown, fork leads, blockers and warnings."),
+            "Everything known about ONE model: the quant list, the imatrix "
+            "strategy and why, the disk and time breakdown, fork leads, "
+            "blockers and warnings. Works for any repo id on the Hub, whether "
+            "or not it is trending and whether or not research has been run - "
+            "an off-list model is assessed on the spot. This is the right "
+            "tool when the user names a specific model; do NOT run "
+            "research_trending to go looking for it, because the trending "
+            "list is not where it will be found."),
         "input_schema": {
             "type": "object",
             "properties": {
                 "model": {"type": "string",
-                          "description": "Repo id, or any unambiguous part of it."},
+                          "description": "Any Hub repo id, or an unambiguous "
+                                         "part of one from the last report."},
             },
             "required": ["model"],
         },
@@ -319,20 +325,44 @@ def _options_from(arguments):
 
 
 def _assessments_for(models):
-    result = _need_report()
-    found, missing = [], []
+    """Assessments for named models, whether or not they were ever researched.
+
+    This used to require every model to be in the last research run, and
+    raised "not in the last research run: X" otherwise. That error sent the
+    agent into a loop: the only remedy it suggests is to research again, and
+    researching again cannot help, because the trending list is not where the
+    model was going to come from. A user asking for `ibm-granite/granite-4.2-3b`
+    — a real model, simply not trending today — produced research at limit=1,
+    then 100, then 300, and never an answer.
+
+    `research.assess_one()` has always been able to assess an arbitrary repo;
+    it is what `aqx run <any-repo-id>` uses. It was just never reachable from
+    the agent. Naming a model IS the judgement the trending filter stands in
+    for, so an off-list model is a normal request, not an error.
+    """
+    result = research.load_latest()
+    order = {name: index for index, name in enumerate(models)}
+    found, off_list = {}, []
+
     for name in models:
-        try:
-            assessment = research.find(result, name)
-        except ValueError as e:
-            raise ValueError(str(e))
+        # find() raises when a short name is ambiguous, which is a genuine
+        # question for the user and must not be swallowed into a Hub lookup.
+        assessment = research.find(result, name) if result else None
         if assessment:
-            found.append(assessment)
+            found[name] = assessment
         else:
-            missing.append(name)
-    if missing:
-        raise ValueError(f"not in the last research run: {', '.join(missing)}")
-    return found
+            off_list.append(name)
+
+    if off_list:
+        # One probe for the batch. assess_one() would otherwise measure the
+        # machine once per model, which is the same answer at N times the cost.
+        sysinfo = sysprobe.probe(measure_disk=False)
+        for name in off_list:
+            # Lets the Hub's own reason surface for a typo or a gated repo,
+            # which is actionable, unlike "not in the last research run".
+            found[name] = research.assess_one(name, sysinfo=sysinfo)
+
+    return [found[name] for name in sorted(found, key=order.get)]
 
 
 def call(name, arguments=None):
@@ -395,10 +425,9 @@ def call(name, arguments=None):
                 "table": report.table(result, limit=top)}
 
     if name == "describe_candidate":
-        result = _need_report()
-        assessment = research.find(result, arguments["model"])
-        if not assessment:
-            raise ValueError(f"{arguments['model']}: not in the last research run.")
+        # Same rule as _assessments_for: a model the user names is assessed on
+        # demand rather than refused for not being in a trending sweep.
+        assessment = _assessments_for([arguments["model"]])[0]
         return {"text": report.detail(assessment), "assessment": assessment}
 
     if name == "plan_quantization":
