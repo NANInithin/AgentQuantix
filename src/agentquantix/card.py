@@ -251,6 +251,14 @@ _SIZE_IN_ROW = re.compile(r"(\d+(?:\.\d+)?)\s*(GB|GiB|MB)\b", re.I)
 
 _ARXIV_ID = re.compile(r"\b(\d{4}\.\d{4,5})\b")
 
+# A bare quant name in prose — "Q4_K_M", "IQ3_XXS", "MXFP4_MOE" — as opposed to
+# one inside a filename. Checked separately because the filename rule cannot
+# see them: a card can recommend "Q8_0_00" or "Q6_K_S" without ever writing a
+# .gguf, and those two do not exist. Anchored on the real llama.cpp prefixes so
+# ordinary words cannot match.
+_BARE_QUANT = re.compile(
+    r"(?<![\w.-])((?:IQ|Q|TQ)\d[A-Z0-9_]*|MXFP4_MOE|BF16|F16|F32)(?![\w.-])")
+
 
 def _front_matter(text):
     match = _FRONT_MATTER.match(text or "")
@@ -290,6 +298,19 @@ def validate(text, card_facts):
         problems.append(
             f"omits {len(omitted)} file(s) that are in the repo: "
             f"{', '.join(omitted)}. Every published file must appear.")
+
+    # ---- quant names in prose ------------------------------------------
+    # Filenames are stripped first so "Model-Q4_K_M.gguf" is judged by the
+    # filename rule alone and cannot be reported twice.
+    prose = _GGUF_IN_TEXT.sub(" ", text or "")
+    real_quants = {f["quant"].upper() for f in files}
+    unreal = sorted({q.upper() for q in _BARE_QUANT.findall(prose)}
+                    - real_quants)
+    if unreal:
+        problems.append(
+            f"recommends {len(unreal)} quant(s) this repo does not contain: "
+            f"{', '.join(unreal)}. Available: "
+            f"{', '.join(sorted(real_quants))}")
 
     # ---- sizes --------------------------------------------------------
     # Line-scoped: a size counts as a claim about a file only when it shares a

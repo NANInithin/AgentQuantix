@@ -69,6 +69,15 @@ languages. That is your material. If something is not in there, it is not \
 established — leave it out. A confident sentence about a model you have not \
 been shown is the one failure that damages the repo.
 
+Concretely, do not write: benchmark or evaluation scores, context lengths, \
+layer counts, tool-calling recipes or serving commands unless they are in the \
+material you were handed. A number you remember is a number you are inventing. \
+Do not describe files that do not exist yet, and never write about quant types \
+that are not in the listing — the repo has exactly the quants it has.
+
+The card is for the GGUF repo, not the source model. Write about the source, \
+publish to ours; `repo` can be either and resolves to ours either way.
+
 **Citations are copied, not composed.** Use the source's own citation block \
 and the arXiv ids the Hub reports. Never reconstruct a reference from \
 memory; a fabricated citation on a public repo is worse than no citation.

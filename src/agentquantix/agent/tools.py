@@ -261,6 +261,28 @@ def _need_report():
     return result
 
 
+def _our_gguf_repo(repo):
+    """The quant repo WE publish for a model, whatever the caller named it.
+
+    This exists because of a real and dangerous near-miss. The check used to
+    be `if "/" not in repo`, which only rewrote a bare model name. Hand it the
+    SOURCE repo id — `ibm-granite/granite-4.2-3b`, the obvious thing to pass
+    when that is the model being worked on — and the slash made it look
+    already-qualified, so it was used verbatim. The card step then verified
+    IBM's repo, found no GGUFs in it, and would have tried to upload a
+    README.md over the publisher's own model card.
+
+    Write access is what stopped it, not the code. So: anything that is not
+    already one of our `-GGUF` repos is reduced to its model name and mapped
+    into our namespace.
+    """
+    namespace = config.HF_NAMESPACE
+    name = repo.strip().rstrip("/").split("/")[-1]
+    if not name:
+        raise ValueError(f"{repo!r} is not a usable repo id.")
+    return f"{namespace}/{name.removesuffix('-GGUF')}-GGUF"
+
+
 def _source_candidate(verification, job=None):
     """The enriched SOURCE model behind a quant repo, or None.
 
@@ -505,15 +527,23 @@ def call(name, arguments=None):
         return card.verify(repo)
 
     if name in ("get_card_facts", "write_model_card"):
-        repo = arguments["repo"]
-        if "/" not in repo:
-            repo = f"{config.HF_NAMESPACE}/{repo.removesuffix('-GGUF')}-GGUF"
+        repo = _our_gguf_repo(arguments["repo"])
         base = repo.split("/")[-1].removesuffix("-GGUF")
         record = config.RUNS_DIR / f"{base}.json"
         job = Job.load(record) if record.exists() else None
         verification = card.verify(job or repo)
         if verification.get("error"):
             raise ValueError(verification["error"])
+
+        # A card describes files. With none there, the run has not published
+        # anything yet, and any card written now would be describing files
+        # that do not exist — which is exactly what a validator cannot fix by
+        # rewording. Say so plainly instead of rejecting draft after draft.
+        if not verification["files"]:
+            raise ValueError(
+                f"{repo} contains no GGUF files, so there is nothing to write "
+                "a card about. Quantization has not published anything yet - "
+                "run start_quantization and let it finish first.")
 
         if name == "get_card_facts":
             return card.facts(verification, job=job,

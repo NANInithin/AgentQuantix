@@ -236,6 +236,33 @@ Extra sections, different tone, no table at all.
     assert card.validate(text, _facts()) == []
 
 
+def test_an_invented_quant_name_in_prose_is_caught():
+    """REGRESSION, from a real card. It recommended "Q8_0_00", "Q6_K_S",
+    "Q4_0_1" and "Q2_K_M" — none of which exist in llama.cpp at all — in a
+    bulleted list rather than as filenames, so the filename rule never saw
+    them."""
+    text = _GOOD + """
+- **High Performance:** Q8_0_00, Q6_K_S
+- **Memory Efficient:** Q4_0_1, Q2_K_M
+"""
+    problems = card.validate(text, _facts())
+    joined = " ".join(problems)
+    assert "does not contain" in joined
+    for invented in ("Q8_0_00", "Q6_K_S", "Q4_0_1", "Q2_K_M"):
+        assert invented in joined
+
+
+def test_recommending_a_quant_the_repo_has_is_fine():
+    text = _GOOD + "\nMost people should take Q4_K_M. BF16 is the source.\n"
+    assert card.validate(text, _facts()) == []
+
+
+def test_a_filename_is_not_also_reported_as_a_bare_quant():
+    """Model-Q4_K_M.gguf must be judged once, by the filename rule."""
+    problems = card.validate(_GOOD, _facts())
+    assert not any("does not contain" in p for p in problems)
+
+
 def test_publish_refuses_a_card_that_fails_validation():
     """It must raise rather than upload - the check is worthless if the bad
     card goes up anyway. dry_run does not exempt it."""
