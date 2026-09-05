@@ -256,12 +256,35 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
         for thread in uploaders:
             thread.join()
 
+    def send_source(path):
+        """Upload a BF16 or mmproj, which are the only files that can exceed
+        the Hub's per-file limit.
+
+        Above that limit plain LFS does not fail slowly, it fails always —
+        retrying a 52 GiB BF16 four times just spends an hour discovering the
+        same cap. So an oversized source file is uploaded HERE, inline, with
+        xet forced on for the duration, and everything after it goes back to
+        plain HTTP.
+
+        Inline is what makes the scoped form safe: this runs before the first
+        quant exists, so the queue is empty and the uploader threads are
+        parked on get(). No other transfer can be in flight to have the
+        global setting changed underneath it.
+        """
+        want, why = transfer.for_upload(size_bytes=path.stat().st_size)
+        if want and not transfer.enabled():
+            with transfer.applied(want, why):
+                if not upload(path, keep=True):
+                    note_failure(path, "upload failed")
+            return
+        send(path, keep=True)
+
     # The local BF16 is KEPT — every quant below is cut from it. Handed over
     # before the imatrix pass so that step starts now rather than after a
     # multi-GB upload (a no-op when it is already published).
-    send(job.bf16_path, keep=True)
+    send_source(job.bf16_path)
     if job.mmproj_path.exists():
-        send(job.mmproj_path, keep=True)
+        send_source(job.mmproj_path)
 
     # ---------- imatrix ----------
     imatrix_ok, gap_args, imatrix_error = imatrix_mod.build(

@@ -216,6 +216,15 @@ def cmd_run(args):
                        "cannot be downloaded under the current xet policy, "
                        "dropping it.")
                 continue
+            # The cap is not download-only. A BF16 over it cannot be PUT on
+            # the Hub either, and that failure would land hours later, after
+            # the download and the conversion, on a file the run cannot skip.
+            can_upload, upload_why = transfer.for_upload(size_gib=gib)
+            if not can_upload:
+                _print(f"  {job.repo_id}: BF16 is {gib:.0f} GiB and "
+                       f"{upload_why} - it could be built but never "
+                       "published, dropping it.")
+                continue
         runnable.append(job)
     if not runnable:
         _print("Nothing left to run under the current xet policy "

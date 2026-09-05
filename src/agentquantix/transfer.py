@@ -11,6 +11,12 @@ K2-Horizon script already found it by hand:
     against ~20 MB/s plain HTTP, with the CPU at 0.1 cores and the disk 67%
     idle, so it is the backend and not the link.
 
+  * The 50 GB cap applies to UPLOADS too, which this module originally got
+    wrong. `upload_file` documents "up to 50 GB" and the large-folder path
+    calls it a hard limit. So a BF16 over the cap needs xet in BOTH
+    directions, and every quant cut from it -- all smaller by construction --
+    still wants it off.
+
 A run of a 75 GB model therefore wants xet ON for one download and OFF for the
 thirty uploads that follow. A single environment variable set once cannot
 express that, which is why it lives here instead.
@@ -100,19 +106,33 @@ def for_download(size_bytes=None, size_gib=None):
     return None, "under the cap; leaving the setting alone"
 
 
-def for_upload():
-    """Should xet be used to upload. Returns (enabled, reason).
+def for_upload(size_bytes=None, size_gib=None):
+    """Should xet be used to upload this file. Returns (enabled, reason).
 
-    Always off in auto mode. There is no size at which xet becomes necessary
-    to upload — the commit path merely OFFERS it as a transfer and falls back
-    to LFS when it is unavailable — and it is an order of magnitude slower
-    here, on a step that dominates almost every run.
+    Off in auto mode for everything under the cap: xet is an order of
+    magnitude slower here, on the step that dominates almost every run.
+
+    But the cap is NOT download-only, which this function previously assumed.
+    huggingface_hub's own upload_file documents "up to 50 GB", and the
+    large-folder path calls 50GB a hard limit. A BF16 over that fails on the
+    LFS path no matter how many times it is retried — so above the cap, xet
+    stops being a slow option and becomes the only one.
+
+    Call it with no size for the ordinary case (every quant is smaller than
+    the BF16 it was cut from, so only the BF16 can ever exceed this).
     """
     configured = mode()
     if configured == "on":
         return True, "AQX_XET=on"
     if configured == "off":
         return False, "AQX_XET=off"
+
+    if exceeds_http_limit(size_bytes, size_gib):
+        if not installed():
+            return False, ("over the plain-HTTP cap and hf_xet is not "
+                           "installed - this upload cannot succeed")
+        return True, (f"file is over the Hub's {HTTP_DOWNLOAD_LIMIT_GIB:.0f} "
+                      "GiB per-file limit, so xet is required")
     return False, "xet uploads ~10x slower than plain HTTP; not needed for uploads"
 
 
@@ -203,5 +223,6 @@ def summary():
     if configured == "off":
         return ("xet forced OFF for every transfer (AQX_XET=off) - files over "
                 f"{HTTP_DOWNLOAD_LIMIT_GIB:.0f} GiB cannot be downloaded")
-    return (f"auto: xet on for downloads over {HTTP_DOWNLOAD_LIMIT_GIB:.0f} GiB, "
-            "off for all uploads")
+    return (f"auto: xet on for any transfer over "
+            f"{HTTP_DOWNLOAD_LIMIT_GIB:.0f} GiB (the Hub's per-file limit), "
+            "off otherwise")

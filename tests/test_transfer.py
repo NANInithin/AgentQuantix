@@ -120,3 +120,47 @@ def test_applied_with_none_touches_nothing(monkeypatch):
 
 def test_summary_mentions_the_limit():
     assert "47 GiB" in transfer.summary() or "46" in transfer.summary()
+
+
+# =====================================================
+# THE CAP IS NOT DOWNLOAD-ONLY
+# =====================================================
+def test_oversized_uploads_require_xet(monkeypatch):
+    """REGRESSION. for_upload() took no size and always answered False in
+    auto mode, on the stated belief that "there is no size at which xet
+    becomes necessary to upload". That is wrong: huggingface_hub's own
+    upload_file documents "up to 50 GB" and the large-folder path calls 50GB
+    a hard limit.
+
+    A 51.90 GiB BF16 was therefore pushed over plain LFS, failed, and retried
+    on a 60s backoff into a limit that does not move.
+    """
+    monkeypatch.setattr(transfer, "installed", lambda: True)
+    enabled, why = transfer.for_upload(size_gib=51.90)
+    assert enabled is True
+    assert "limit" in why
+
+
+def test_ordinary_uploads_still_avoid_xet(monkeypatch):
+    """The fix must not cost the 10x on the 29 quants that fit."""
+    monkeypatch.setattr(transfer, "installed", lambda: True)
+    assert transfer.for_upload(size_gib=45.0)[0] is False
+    assert transfer.for_upload()[0] is False
+
+
+def test_the_upload_cap_matches_the_download_cap(monkeypatch):
+    """One limit, one threshold. A quant that can be fetched can be sent."""
+    monkeypatch.setattr(transfer, "installed", lambda: True)
+    just_under = transfer.HTTP_DOWNLOAD_LIMIT_GIB - 0.01
+    just_over = transfer.HTTP_DOWNLOAD_LIMIT_GIB + 0.01
+    assert transfer.for_upload(size_gib=just_under)[0] is False
+    assert transfer.for_upload(size_gib=just_over)[0] is True
+
+
+def test_an_oversized_upload_without_the_backend_is_refused(monkeypatch):
+    """Saying False here is what lets the caller drop the model at plan time
+    rather than after the download and the conversion."""
+    monkeypatch.setattr(transfer, "installed", lambda: False)
+    enabled, why = transfer.for_upload(size_gib=75.0)
+    assert enabled is False
+    assert "cannot succeed" in why
