@@ -164,6 +164,27 @@ def test_a_size_on_a_line_with_no_file_is_ignored():
     assert card.validate(text, _facts()) == []
 
 
+def test_a_size_bound_to_a_quant_name_is_checked():
+    """REGRESSION, from a real card. Its table put the unit in the header --
+    "| Quantization | Size (GB) |" over "| **Q4_K_M** | 15.03 |" -- so the row
+    carried no filename and no unit. 15.03 was Q4_K_S's size; the row was off
+    by a whole quant, and nothing caught it."""
+    text = _GOOD + "\n| Quant | Size (GB) |\n| **Q4_K_M** | 0.93 |\n"
+    problems = card.validate(text, _facts())
+    assert any("Model-Q4_K_M.gguf" in p and "0.93" in p for p in problems)
+
+
+def test_a_correct_quant_row_passes():
+    assert card.validate(_GOOD + "\n| **Q4_K_M** | 0.47 |\n", _facts()) == []
+
+
+def test_a_row_with_a_second_number_is_not_guessed_at():
+    """bpw, layer counts and benchmark scores share table rows with sizes.
+    Binding the wrong one would report an error that is not there."""
+    text = _GOOD + "\n| **Q4_K_M** | 0.47 | 4.25 bpw |\n"
+    assert card.validate(text, _facts()) == []
+
+
 def test_a_wrong_base_model_is_caught():
     problems = card.validate(_GOOD.replace("someone/Model", "someone/Other", 1),
                              _facts())

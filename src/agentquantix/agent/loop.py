@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -59,6 +60,77 @@ What would you like to do?
 
 Nothing is downloaded, built or published until you name a model and approve
 it. Type your request, or 'quit'."""
+
+
+def _looks_like_a_card(text):
+    """Is this reply the card itself rather than an answer about one.
+
+    Observed three times, across different models and two prompt revisions:
+    the model composes the card, replies with the markdown, and stops. The
+    loop hands the turn back, nothing is published, and the repo keeps the
+    placeholder — so the run looks finished when the work is not done.
+
+    The test can be liberal because of WHERE it is applied: only when a card
+    is outstanding, and that only happens after `get_card_facts`, a tool whose
+    single purpose is writing one. A model that has just asked for card
+    material and then answers at length with headings has written the card.
+
+    Two shapes seen in the wild, hence two signals: one reply opened with
+    ```yaml and the front matter, another opened with a sentence of preamble
+    before the document, so anchoring on the first character does not work.
+    """
+    if not text or len(text) < 300:
+        return False
+
+    # Front matter declaring base_model. Nothing but a card carries that.
+    if re.search(r"^\s*base_model:\s*\S", text, re.M) and "---" in text:
+        return True
+
+    # Otherwise: a substantial reply laid out as a document. A false
+    # positive here is cheap and self-correcting — the nudge asks for a
+    # write_model_card call, and anything that is not really a card fails
+    # validation and comes back with the reasons.
+    return len(text) >= 500 and re.search(r"^\s*#{1,4}\s+\S", text, re.M)
+
+
+def _unpublished_card(pending, text):
+    """The repo whose card was written into the chat instead of published."""
+    if not pending or not _looks_like_a_card(text):
+        return None
+    # Prefer a repo the reply actually names, matching the MODEL name rather
+    # than the full id: a card is far more likely to contain
+    # "Muse-Glimmer-30B-Q4_K_M.gguf" than the repo id it will be published to.
+    # Never guess between two — that would publish to the wrong repo.
+    lowered = text.lower()
+    for repo in sorted(pending):
+        name = repo.split("/")[-1]
+        base = name[:-5] if name.lower().endswith("-gguf") else name
+        if repo.lower() in lowered or base.lower() in lowered:
+            return repo
+    return next(iter(pending)) if len(pending) == 1 else None
+
+
+def _track_card(pending, name, result):
+    """Note that a card is owed, or that one has been published.
+
+    Reads the tool RESULT rather than its arguments, so the repo tracked is
+    the one the tool actually resolved to, and a card rejected by validation
+    stays outstanding — `published` is false in exactly that case.
+    """
+    if name not in ("get_card_facts", "write_model_card"):
+        return
+    try:
+        payload = json.loads(result)
+    except (TypeError, json.JSONDecodeError):
+        return
+    if not isinstance(payload, dict) or payload.get("error"):
+        return
+    if not (repo := payload.get("repo") or payload.get("repo_id")):
+        return
+    if name == "get_card_facts":
+        pending.add(repo)
+    elif payload.get("published"):
+        pending.discard(repo)
 
 
 def _api_key():
@@ -244,6 +316,10 @@ def main(model=None, base_url=None, prompt=None, max_steps=40):
         if not prompt or prompt.lower() in ("quit", "exit"):
             return 0
 
+    # Repos whose card material has been fetched but whose card is not yet
+    # published. See _unpublished_card().
+    pending_cards = set()
+
     messages = [
         {"role": "system", "content": prompt_mod.SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
@@ -275,6 +351,21 @@ def main(model=None, base_url=None, prompt=None, max_steps=40):
 
         calls = message.get("tool_calls") or []
         if not calls:
+            # A card written into the chat is not a published card. Enforced
+            # here rather than asked for again: three runs across different
+            # models composed one, printed it, and stopped.
+            if nudge := _unpublished_card(pending_cards, text):
+                print(f"  [!] card for {nudge} was written but not published"
+                      " - asking for the tool call.")
+                pending_cards.discard(nudge)      # one nudge per repo
+                messages.append({"role": "user", "content": (
+                    f"You wrote that card but did not publish it, so {nudge} "
+                    "still has the generic placeholder. Call write_model_card "
+                    "now, passing that exact markdown as `content`. It must "
+                    "start with YAML front matter and list every published "
+                    "file. Do not reply with the card again.")})
+                continue
+
             # No tool call and nothing left to say: the model is waiting on the
             # human. Hand the turn back rather than looping.
             try:
@@ -303,6 +394,7 @@ def main(model=None, base_url=None, prompt=None, max_steps=40):
             else:
                 result = tools_mod.call_json(name, arguments)
 
+            _track_card(pending_cards, name, result)
             messages.append({"role": "tool", "tool_call_id": call.get("id"),
                              "name": name, "content": result})
 

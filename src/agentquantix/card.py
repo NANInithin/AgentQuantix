@@ -369,13 +369,38 @@ def validate(text, card_facts):
     # Line-scoped: a size counts as a claim about a file only when it shares a
     # line with that file's name, which is what a table row looks like.
     by_name = {f["name"].lower(): f for f in files}
+    by_quant = {f["quant"].upper(): f for f in files}
     for line in (text or "").splitlines():
         names_here = {m.lower() for m in _GGUF_IN_TEXT.findall(line)}
         names_here &= set(by_name)
-        if len(names_here) != 1:
-            continue                      # ambiguous or none; nothing to bind
-        entry = by_name[next(iter(names_here))]
-        for raw, unit in _SIZE_IN_ROW.findall(line):
+        if len(names_here) == 1:
+            entry = by_name[next(iter(names_here))]
+        elif names_here:
+            continue                      # ambiguous; nothing to bind
+        else:
+            # No filename, but a table row like "| **Q4_K_M** | 15.03 |" is
+            # still a claim about a file. A real card said exactly that, and
+            # 15.03 is Q4_K_S's size — the row was off by a whole quant.
+            quants_here = {q.upper() for q in _BARE_QUANT.findall(line)}
+            quants_here &= set(by_quant)
+            if len(quants_here) != 1:
+                continue
+            entry = by_quant[next(iter(quants_here))]
+        sized = _SIZE_IN_ROW.findall(line)
+        if not sized:
+            # A table whose unit lives in the column header — "| Quantization
+            # | Size (GB) |" over rows of "| **Q4_K_M** | 15.03 |". A real
+            # card wrote exactly that, and 15.03 is Q4_K_S's size, so the row
+            # was off by a whole quant.
+            #
+            # Only when the line carries EXACTLY ONE number, so a row that
+            # also quotes bpw, a layer count or a benchmark score is left
+            # alone rather than guessed at.
+            bare = re.findall(r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w.])", line)
+            if len(bare) == 1:
+                sized = [(bare[0], "GB")]
+
+        for raw, unit in sized:
             claimed = float(raw)
             unit = unit.upper()
             actual = (entry["bytes"] / 1024 ** 2 if unit == "MB"
