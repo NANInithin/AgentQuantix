@@ -164,6 +164,25 @@ def test_a_size_on_a_line_with_no_file_is_ignored():
     assert card.validate(text, _facts()) == []
 
 
+def test_a_sentence_quoting_several_sizes_is_not_bound_to_one_file():
+    """REGRESSION, and an expensive false positive.
+
+    A summary line names one file and then quotes other quants' sizes:
+
+        All cut from the BF16 source (`Model-BF16.gguf`, 0.93 GB).
+        Recommended: Q4_K_M (0.47 GB).
+
+    Every size on the line was bound to the one filename, so a correct card
+    came back with a list of failures against BF16. The writer believed the
+    table was unparseable, abandoned its card and published the fallback
+    template instead - then reported the abandoned card's contents as
+    published. More than one size on a line means prose, not a table row.
+    """
+    text = _GOOD + ("\nAll cut from the BF16 source (`Model-BF16.gguf`, "
+                    "0.93 GB). Recommended: Q4_K_M (0.47 GB).\n")
+    assert card.validate(text, _facts()) == []
+
+
 def test_a_size_bound_to_a_quant_name_is_checked():
     """REGRESSION, from a real card. Its table put the unit in the header --
     "| Quantization | Size (GB) |" over "| **Q4_K_M** | 15.03 |" -- so the row

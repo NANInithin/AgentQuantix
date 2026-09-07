@@ -375,6 +375,17 @@ def validate(text, card_facts):
         names_here &= set(by_name)
         if len(names_here) == 1:
             entry = by_name[next(iter(names_here))]
+            # A table row names one file and states its one size. A SENTENCE
+            # names one file and then quotes several other quants' sizes:
+            #
+            #   All cut from the BF16 source (`M-BF16.gguf`, 3.21 GB).
+            #   Recommended: Q4_K_M (0.99 GB) ... or Q8_0 (1.71 GB).
+            #
+            # Binding every size on that line to the one filename reported
+            # five failures against a card that was entirely correct, and the
+            # writer abandoned it. More than one size means prose, not a row.
+            if len(_SIZE_IN_ROW.findall(line)) > 1:
+                continue
         elif names_here:
             continue                      # ambiguous; nothing to bind
         else:
