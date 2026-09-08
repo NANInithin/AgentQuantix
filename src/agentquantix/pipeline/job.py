@@ -122,6 +122,11 @@ class Job:
             official_gguf_file=assessment.get("official_bf16_file"),
             imatrix_source=imatrix.get("source", "BF16"),
             imatrix_ngl=int(imatrix.get("ngl", 0)),
+            # None means "read the whole calibration pool", which is what
+            # every run did before the plan started choosing. Kept as the
+            # fallback for an assessment written by an older version.
+            imatrix_chunks=(int(imatrix["chunks"])
+                            if imatrix.get("chunks") else None),
             is_multimodal=bool(assessment.get("is_multimodal")),
             fork=fork,
             assessment=assessment,

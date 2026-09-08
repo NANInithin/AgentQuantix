@@ -139,9 +139,15 @@ def build(job, llama_quantize, llama_imatrix, hub_files):
             if job.imatrix_chunks:
                 cmd += ["--chunks", job.imatrix_chunks]
             run(cmd)
+            # `chunks` is what makes these samples comparable across models:
+            # the pass is linear in it, so minutes alone describes one model
+            # on one calibration size and nothing else. Samples without it —
+            # every run before the plan chose a count — are ignored by the
+            # learned rate rather than guessed at.
             feasibility.record(
                 "imatrix", model=job.base_name, source=job.imatrix_source,
                 gb=round(source.stat().st_size / 1024 ** 3, 2),
+                chunks=job.imatrix_chunks,
                 minutes=round((time.time() - started) / 60, 1))
         except Exception as e:
             # Remove a partial .dat: llama-quantize would read it and produce

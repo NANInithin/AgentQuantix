@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import json
 
+import os
+
 from . import config, transfer
 
 GB = 1024 ** 3
@@ -67,12 +69,53 @@ CONVERT_SLOWDOWN = 2.5
 # Anchored on two observed runs: a 13.62 GB Q2_K that fit in fast memory took
 # ~15 min (1.1 min/GB), and a 74.92 GB BF16 on the same 22 GB box took 1.5-3 h
 # (~1.8-2.4 min/GB) because every chunk paged most of the file back off disk.
+#
+# Both were measured with the calibration pool read in full. IMATRIX_BASELINE_
+# CHUNKS is what that came to, and it is an ESTIMATE, not a count: 500 wikitext
+# rows of which perhaps two thirds carry prose, at roughly 60 tokens a row,
+# divided by the 512-token chunk. It exists only to convert the per-GB figures
+# above into a per-chunk one, and _learned_min_per_chunk_gb() replaces the
+# whole thing with a measured median as soon as one run has recorded chunks.
 IMATRIX_MIN_PER_GB = 1.1
 IMATRIX_THRASH_FACTOR = 1.5
+IMATRIX_BASELINE_CHUNKS = 60
+
+# How long the imatrix pass should aim to take. The pass is linear in chunks,
+# so this is the knob that decides how much calibration a model gets: a 0.6B
+# that costs seconds a chunk gets the ceiling, a 66 GB MoE that pages off disk
+# gets the floor, and everything else lands in between.
+IMATRIX_TARGET_MINUTES = float(os.getenv("AQX_IMATRIX_MINUTES", "25"))
+
+# The bounds are quality judgements rather than measurements, and are stated
+# as such. Below the floor the matrix is estimated from too little text and
+# the low-bit types it guides get noticeably worse; above the ceiling the
+# additional text stops changing the result while still costing linear time.
+# Both are overridable for anyone who wants to test the claim.
+IMATRIX_MIN_CHUNKS = int(os.getenv("AQX_IMATRIX_MIN_CHUNKS", "40"))
+IMATRIX_MAX_CHUNKS = int(os.getenv("AQX_IMATRIX_MAX_CHUNKS", "200"))
 
 # A fork that has to be compiled from scratch with CUDA. Observed ~11 min on
 # this 24-core box; it is a fixed cost per fork, not per model.
 FORK_BUILD_MIN = 11.0
+
+# What llama-imatrix runs its forward pass over when the BF16 will not fit in
+# fast memory. Best quality first; the plan takes the LARGEST rung that fits,
+# so the loss is always the smallest the machine can afford. This used to be
+# three rungs — Q8_0, Q4_K_M, Q2_K — which meant a box with room for 5 bits
+# dropped straight to 4, and one with room for 3.5 dropped straight to 2.
+#
+# Two rules govern what may appear here:
+#
+#   * Nothing that NEEDS an imatrix. The IQ set and Q2_K_S are excluded by
+#     construction: computing the matrix on a file that could not be produced
+#     without one is circular.
+#   * Static types only. The legacy round-to-nearest types (Q4_0, Q5_0, ...)
+#     are allowed but ranked below their K equivalents, which is where their
+#     accuracy puts them.
+IMATRIX_SOURCE_LADDER = (
+    "Q8_0", "Q6_K", "Q5_K_M", "Q5_K_S", "Q4_K_M", "Q4_K_S", "Q4_0",
+    "Q3_K_L", "Q3_K_M", "Q3_K_S", "Q2_K",
+)
 
 
 # =====================================================
@@ -105,6 +148,74 @@ def _learned_mbps(history, key, default, match=None):
         return default, False
     rates.sort()
     return rates[len(rates) // 2], True
+
+
+def _learned_min_per_chunk_gb(history):
+    """Median observed minutes per chunk per GB of imatrix source.
+
+    Normalising by both chunks and size is what makes samples comparable: a
+    60-chunk pass over a 13 GB quant and a 200-chunk pass over a 3 GB one are
+    the same measurement of this machine once divided through.
+
+    Only samples that recorded a chunk count qualify. Runs from before chunks
+    were chosen read the whole pool, and how many chunks that came to is not
+    recoverable — inferring it would put a guessed denominator underneath
+    every future estimate.
+    """
+    rates = []
+    for sample in history.get("imatrix", []):
+        chunks, gigabytes = sample.get("chunks"), sample.get("gb")
+        minutes = sample.get("minutes")
+        if chunks and gigabytes and minutes and chunks > 0 and gigabytes > 0:
+            rates.append(minutes / (chunks * gigabytes))
+    if not rates:
+        return IMATRIX_MIN_PER_GB / IMATRIX_BASELINE_CHUNKS, False
+    rates.sort()
+    return rates[len(rates) // 2], True
+
+
+def calibration_plan(source_gb, thrash=1.0, history=None,
+                     target_minutes=None):
+    """How many calibration chunks this model should get, and what that costs.
+
+    The pass is linear in chunks, so chunk count is the only real lever on
+    what the imatrix costs — and it was previously not a lever at all: every
+    model read the whole calibration pool, which meant a 0.6B and a 66 GB MoE
+    on a paging box were given identical calibration at wildly different
+    prices. The small model was left with time it could have spent on better
+    statistics; the large one blew its budget on a step that is not the point
+    of the run.
+
+    So: spend a fixed amount of TIME, and let the model's cost per chunk
+    decide how much text that buys. Clamped at both ends, because time is not
+    the only consideration — too few chunks and the matrix is noise, too many
+    and the extra text changes nothing.
+
+    Returns the plan and, importantly, whether the rate behind it was measured
+    on this machine or assumed, so the caller can say which.
+    """
+    history = load_history() if history is None else history
+    target = (IMATRIX_TARGET_MINUTES if target_minutes is None
+              else float(target_minutes))
+    per_chunk_gb, learned = _learned_min_per_chunk_gb(history)
+
+    cost_per_chunk = max(per_chunk_gb * max(source_gb, 0.01) * max(thrash, 1.0),
+                         1e-9)
+    wanted = int(target / cost_per_chunk)
+
+    chunks = max(IMATRIX_MIN_CHUNKS, min(IMATRIX_MAX_CHUNKS, wanted))
+    return {
+        "chunks": chunks,
+        "minutes": round(chunks * cost_per_chunk, 1),
+        # What the budget alone asked for, before the bounds. Worth showing:
+        # "wanted 8, floored at 40" is the honest way to say that this model
+        # will overrun its budget because the floor matters more.
+        "unclamped_chunks": max(wanted, 0),
+        "at_floor": wanted < IMATRIX_MIN_CHUNKS,
+        "at_ceiling": wanted > IMATRIX_MAX_CHUNKS,
+        "rate_learned": learned,
+        "target_minutes": target,
+    }
 
 
 def record(kind, /, **fields):
@@ -222,7 +333,7 @@ def bf16_size_gb(candidate):
 # =====================================================
 # IMATRIX STRATEGY
 # =====================================================
-def imatrix_plan(candidate, sysinfo, bf16_gb):
+def imatrix_plan(candidate, sysinfo, bf16_gb, history=None):
     """What llama-imatrix should run its forward pass over, and with what -ngl.
 
     The BF16 is always the best answer for quality: activation statistics
@@ -242,7 +353,7 @@ def imatrix_plan(candidate, sysinfo, bf16_gb):
 
     source, source_gb, extra_download_gb = "BF16", bf16_gb, 0.0
     if bf16_gb > budget:
-        for fallback in ("Q8_0", "Q4_K_M", "Q2_K"):
+        for fallback in IMATRIX_SOURCE_LADDER:
             size = quant_size_gb(candidate.params or 0, fallback)
             if size <= budget:
                 source, source_gb = fallback, size
@@ -254,8 +365,8 @@ def imatrix_plan(candidate, sysinfo, bf16_gb):
         else:
             # Nothing fits. Run on the smallest anyway and accept the paging;
             # an imatrix from a thrashing Q2_K still beats no IQ quants at all.
-            source = "Q2_K"
-            source_gb = quant_size_gb(candidate.params or 0, "Q2_K")
+            source = IMATRIX_SOURCE_LADDER[-1]
+            source_gb = quant_size_gb(candidate.params or 0, source)
 
     # How many layers fit on the GPU. Embeddings and the output head are large
     # and are not offloaded per-layer, so they come off the top before the
@@ -274,9 +385,21 @@ def imatrix_plan(candidate, sysinfo, bf16_gb):
         ngl = int(max(0, (vram - 1.5) // per_layer_gb))
         ngl = min(ngl, layers if source_gb > vram else 99)
 
+    # Thrashing is priced here rather than at the call site so the chunk count
+    # sees it: a source that pages off disk costs several times more per
+    # chunk, and should therefore be given fewer of them.
+    thrash = 1.0
+    if source_gb > budget:
+        thrash = 1 + IMATRIX_THRASH_FACTOR * max(0.0, source_gb / fast - 1)
+
+    calibration = calibration_plan(source_gb, thrash=thrash, history=history)
+
     return {"source": source, "source_gb": round(source_gb, 2),
             "ngl": int(ngl), "extra_download_gb": extra_download_gb,
-            "fits_fast_memory": source_gb <= budget}
+            "fits_fast_memory": source_gb <= budget,
+            "thrash": round(thrash, 2),
+            "chunks": calibration["chunks"],
+            "calibration": calibration}
 
 
 # =====================================================
@@ -331,7 +454,7 @@ def assess(candidate, sysinfo, arch_ok, arch_detail, fork_leads=None,
         download_gb = candidate.source_bytes / GB or bf16_gb
         convert_gb = bf16_gb
 
-    imatrix = imatrix_plan(candidate, sysinfo, bf16_gb)
+    imatrix = imatrix_plan(candidate, sysinfo, bf16_gb, history=history)
 
     # ---- disk -----------------------------------------------------------
     # Two moments compete for the peak. During conversion, the safetensors and
@@ -373,11 +496,10 @@ def assess(candidate, sysinfo, arch_ok, arch_detail, fork_leads=None,
     convert_h = (convert_gb + download_gb) / effective_gbs / 3600 * CONVERT_SLOWDOWN \
         if source_kind == "convert" else 0.0
 
-    thrash = 1.0
-    if not imatrix["fits_fast_memory"]:
-        fast = max(sysinfo.get("fast_memory_gb") or 1, 1)
-        thrash = 1 + IMATRIX_THRASH_FACTOR * max(0.0, imatrix["source_gb"] / fast - 1)
-    imatrix_h = imatrix["source_gb"] * IMATRIX_MIN_PER_GB * thrash / 60
+    # Taken from the calibration plan rather than recomputed. The plan already
+    # priced this pass — it is how it chose the chunk count — and deriving the
+    # same number twice from the same inputs invites the two to drift.
+    imatrix_h = imatrix["calibration"]["minutes"] / 60
     if imatrix["source"] != "BF16":
         # The fallback source has to be cut from the BF16 first.
         imatrix_h += (bf16_gb + imatrix["source_gb"]) / effective_gbs / 3600
@@ -432,11 +554,24 @@ def assess(candidate, sysinfo, arch_ok, arch_detail, fork_leads=None,
         warnings.append(
             f"{arch_detail}; would build {best['repo']}@{best['ref']} "
             f"({best['confidence']} confidence, +{FORK_BUILD_MIN:.0f} min)")
-    if not imatrix["fits_fast_memory"]:
+    if imatrix["source"] != "BF16":
         warnings.append(
             f"BF16 ({bf16_gb:.0f} GB) exceeds fast memory "
             f"({sysinfo.get('fast_memory_gb')} GB) - imatrix runs on "
-            f"{imatrix['source']} instead, costing some guidance quality")
+            f"{imatrix['source']} ({imatrix['source_gb']:.1f} GB), the "
+            "largest source that fits, costing some guidance quality")
+    if not imatrix["fits_fast_memory"]:
+        warnings.append(
+            f"even {imatrix['source']} does not fit fast memory - the imatrix "
+            f"pass will page off disk (~{imatrix['thrash']:.1f}x slower)")
+
+    calibration = imatrix["calibration"]
+    if calibration["at_floor"]:
+        warnings.append(
+            f"imatrix calibration held at the {calibration['chunks']}-chunk "
+            f"floor: the budget of {calibration['target_minutes']:.0f} min "
+            f"buys only {calibration['unclamped_chunks']}, so this step will "
+            f"take ~{calibration['minutes']:.0f} min instead")
     if candidate.gated:
         warnings.append("gated repo - the token must already have access")
     if candidate.community_ggufs:

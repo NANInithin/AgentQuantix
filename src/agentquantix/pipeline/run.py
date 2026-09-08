@@ -35,7 +35,8 @@ import time
 from huggingface_hub import HfApi
 
 from .. import config, feasibility, transfer
-from . import build as build_mod, imatrix as imatrix_mod, source as source_mod
+from . import (build as build_mod, imatrix as imatrix_mod, sanity,
+               source as source_mod)
 from .job import Job, Status
 
 GB = 1024 ** 3
@@ -135,6 +136,21 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
     # still the only thread doing any transferring.
     source_mod.ensure_bf16(job, llama_dir, hub_files)
     emit("bf16-ready", gb=round(job.bf16_path.stat().st_size / GB, 2))
+
+    # Does this file load at all? Header-only, milliseconds, and it happens
+    # HERE — before the repo is created and before a single byte is uploaded.
+    #
+    # llama-quantize never answers this question: it streams tensors without
+    # building an inference graph, so it will cut thirty quants from a BF16
+    # that no runtime can open. The first step that would notice is the
+    # imatrix, by which point the BF16 is already published and the sweep is
+    # under way. One model shipped a full repo of unloadable files that way.
+    if reason := sanity.unloadable_reason(job.bf16_path):
+        raise RuntimeError(
+            f"{job.bf16_path.name} cannot be loaded by llama.cpp: {reason}. "
+            "Nothing was published. This is a defect in the GGUF, not in the "
+            "sweep - the model needs converter or llama.cpp support before it "
+            "can be quantized.")
 
     # Everything from here on is uploads, and xet is an order of magnitude
     # slower at those. Pinned ONCE, before any uploader thread exists: the

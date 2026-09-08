@@ -226,7 +226,17 @@ WIKITEXT_CONFIG = "wikitext-2-raw-v1"
 
 # Counts dataset ROWS, not written lines — wikitext has many blank/header
 # rows, so 500 rows yields noticeably fewer lines of actual text.
-CALIBRATION_MAX_LINES = int(os.getenv("AQX_CALIBRATION_ROWS", "500"))
+#
+# This is now a POOL, not a per-model setting. It used to be both: 500 rows
+# for every model, so a 0.6B and a 66 GB MoE got the same calibration and the
+# same cost per chunk was paid on wildly different hardware. What each model
+# actually reads is now chosen per run and passed to llama-imatrix as
+# --chunks (see feasibility.calibration_plan), so this only has to be large
+# enough that the pool never becomes the binding constraint.
+#
+# Sized for the chunk ceiling: 512 tokens per chunk x IMATRIX_MAX_CHUNKS, with
+# generous headroom for wikitext's blank rows and short headers.
+CALIBRATION_MAX_LINES = int(os.getenv("AQX_CALIBRATION_ROWS", "4000"))
 
 # Keyed by row count so changing the number above builds a NEW file instead of
 # silently reusing the old one. Shared by every model — the calibration text is
