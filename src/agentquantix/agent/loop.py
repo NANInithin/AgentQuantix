@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -112,7 +113,39 @@ class ApiError(RuntimeError):
         return (error.get("metadata") or {}) if isinstance(error, dict) else {}
 
 
-def _post(url, payload, key, timeout=600):
+def _post(url, payload, key, timeout=600, attempts=3):
+    """One call to the model API, retried through transient network failures.
+
+    Two things learned the hard way from a live session.
+
+    `ConnectionResetError` is a bare OSError, not a urllib.error.URLError, so
+    it went straight past both handlers below and out through main() as an
+    unhandled traceback. A peer reset mid-conversation ended the whole agent
+    session and everything in it.
+
+    And a reset is exactly the kind of failure worth retrying: the request
+    never reached a model, so re-sending it repeats nothing and costs nothing.
+    Only genuinely transient conditions are retried — a rejected key or a
+    model that cannot be routed to will fail identically however many times it
+    is asked, and retrying those just delays a message the user needs to read.
+    """
+    last = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            return _post_once(url, payload, key, timeout)
+        except ApiError as e:
+            last = e
+            transient = e.code == 0 or e.code == 429 or e.code >= 500
+            if not transient or attempt == attempts:
+                raise
+            wait = 2 ** attempt
+            print(f"  [!] {e.message or f'HTTP {e.code}'} - retrying in "
+                  f"{wait}s ({attempt}/{attempts - 1})", file=sys.stderr)
+            time.sleep(wait)
+    raise last
+
+
+def _post_once(url, payload, key, timeout=600):
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -136,6 +169,11 @@ def _post(url, payload, key, timeout=600):
         raise ApiError(e.code, body) from None
     except urllib.error.URLError as e:
         raise ApiError(0, f"could not reach {url}: {e.reason}") from None
+    except OSError as e:
+        # ConnectionResetError, socket timeouts, TLS read errors. These are
+        # NOT URLError subclasses when raised from inside the socket layer, so
+        # without this they leave _post entirely and kill the session.
+        raise ApiError(0, f"connection to {url} failed: {e}") from None
 
 
 def _diagnose(error: ApiError, model, base_url):

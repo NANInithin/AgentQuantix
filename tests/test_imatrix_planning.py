@@ -9,7 +9,16 @@ to actually load the model:
     check_tensor_dims: tensor 'blk.40.attn_norm.weight' not found
 
 and the pipeline logged "continuing with the quants that do not need one".
-The repo ended up full of files no runtime can open.
+The repo ended up full of files that build could not open.
+
+The first attempt at a fix read the header and refused any model with a block
+missing. That was the wrong question, and it blocked this model outright —
+block 40 is a declared NextN head, and another publisher quantized the same
+checkpoint the same day with IQ types, so a build that loads it exists.
+
+Whether a model loads is answered by loading it. The header check only reports
+a block missing for no declared reason, and the imatrix now runs before
+anything is published so a load failure costs nothing.
 """
 
 import sys
@@ -25,7 +34,8 @@ from agentquantix.pipeline import sanity                         # noqa: E402
 # =====================================================
 # WILL IT LOAD
 # =====================================================
-def _fake_gguf(monkeypatch, architecture, block_count, blocks_present):
+def _fake_gguf(monkeypatch, architecture, block_count, blocks_present,
+               nextn=None):
     """A gguf module whose reader describes one synthetic header."""
 
     class Field:
@@ -44,6 +54,9 @@ def _fake_gguf(monkeypatch, architecture, block_count, blocks_present):
             self.fields = {"general.architecture": Field(architecture)}
             if block_count is not None:
                 self.fields[f"{architecture}.block_count"] = Field(block_count)
+            if nextn is not None:
+                self.fields[f"{architecture}.nextn_predict_layers"] = \
+                    Field(nextn)
             self.tensors = [Tensor(f"blk.{i}.attn_norm.weight")
                             for i in blocks_present]
             self.tensors.append(Tensor("token_embd.weight"))
@@ -53,15 +66,34 @@ def _fake_gguf(monkeypatch, architecture, block_count, blocks_present):
     monkeypatch.setitem(sys.modules, "gguf", module)
 
 
-def test_the_nex_failure_is_caught(monkeypatch):
-    """The real one: 41 declared, tensors for 0-39, block 40 never exported."""
+def test_a_declared_nextn_head_is_not_a_defect(monkeypatch):
+    """REGRESSION, and an expensive false positive.
+
+    Nex-N2.5-mini declares 41 blocks, exports 40, and sets
+    nextn_predict_layers = 1: block 40 is a multi-token-prediction head the
+    converter is right not to emit. The first version of this check reported
+    it as fatal and blocked the model outright — while another publisher was
+    quantizing the same checkpoint the same day, imatrix and IQ types
+    included, so a build that loads it plainly exists.
+
+    A missing block is not evidence that a model will not load. Only loading
+    it is, which is why the pipeline runs the imatrix before it publishes.
+    """
+    _fake_gguf(monkeypatch, "qwen35moe", 41, range(40), nextn=1)
+    assert sanity.missing_blocks("x.gguf") == []
+    assert sanity.unloadable_reason("x.gguf") is None
+
+
+def test_more_missing_than_nextn_explains_is_still_reported(monkeypatch):
+    _fake_gguf(monkeypatch, "qwen35moe", 41, range(38), nextn=1)
+    # 38 and 39 are unexplained; only 40 is covered by the NextN count.
+    assert sanity.missing_blocks("x.gguf") == [38, 39]
+
+
+def test_a_missing_block_with_no_nextn_declared_is_reported(monkeypatch):
     _fake_gguf(monkeypatch, "qwen35moe", 41, range(40))
     assert sanity.missing_blocks("x.gguf") == [40]
-
-    reason = sanity.unloadable_reason("x.gguf")
-    assert "41 blocks" in reason
-    assert "blk.40.attn_norm.weight" in reason
-    assert "every quant cut from it" in reason
+    assert "nextn_predict_layers" in sanity.unloadable_reason("x.gguf")
 
 
 def test_a_complete_model_is_not_flagged(monkeypatch):
@@ -97,6 +129,47 @@ def test_a_reader_that_raises_blocks_nothing(monkeypatch):
     module.GGUFReader = boom
     monkeypatch.setitem(sys.modules, "gguf", module)
     assert sanity.unloadable_reason("x.gguf") is None
+
+
+# =====================================================
+# LOAD FAILURE vs IMATRIX FAILURE
+# =====================================================
+# The distinction the original bug turned on. llama-imatrix exiting 1 because
+# the model will not load and llama-imatrix exiting 1 because it ran out of
+# memory need opposite responses: abandon the model, or carry on without the
+# IQ types.
+def test_a_load_failure_is_recognised():
+    from agentquantix.pipeline import imatrix
+
+    real = ("0.00.417.566 E llama_model_load: error loading model: "
+            "check_tensor_dims: tensor 'blk.40.attn_norm.weight' not found\n"
+            "0.00.812.127 E cmn  common_init_: failed to load model")
+    assert imatrix._is_load_failure(real)
+
+
+def test_an_ordinary_imatrix_failure_is_not_a_load_failure():
+    """These must NOT abandon the model. The sweep loses the IQ types and
+    keeps everything else, which is the behaviour that was always right for
+    this class of failure."""
+    from agentquantix.pipeline import imatrix
+
+    for output in ("ggml_backend_cpu_buffer_type_alloc_buffer: failed to "
+                   "allocate buffer of size 12884901888",
+                   "std::bad_alloc",
+                   "compute_imatrix: failed to eval",
+                   "terminate called after throwing an instance of",
+                   ""):
+        assert not imatrix._is_load_failure(output)
+
+
+def test_the_command_failure_carries_its_output():
+    """run_verbose raises with one summary line. Classifying needs the lines
+    around it, so the exception carries the tail."""
+    from agentquantix.pipeline.build import CommandFailed
+
+    error = CommandFailed("llama-imatrix failed: boom", output="line\nboom")
+    assert error.output == "line\nboom"
+    assert "boom" in str(error)
 
 
 # =====================================================

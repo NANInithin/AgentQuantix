@@ -29,7 +29,41 @@ import time
 from huggingface_hub import hf_hub_download
 
 from .. import config, feasibility
-from .build import run
+from .build import run, run_verbose
+
+
+class ModelUnloadable(RuntimeError):
+    """llama.cpp cannot load this model, so no quant cut from it will load.
+
+    Distinct from an ordinary imatrix failure, and the distinction is the
+    whole point. Running out of memory during the forward pass costs the IQ
+    types and nothing else — the sweep should carry on. A model that does not
+    LOAD is a different animal: llama-quantize will still happily cut thirty
+    files from it, because it streams tensors and never builds an inference
+    graph, and every one of them will be unopenable.
+
+    One run published a complete repo that way. The imatrix step is the first
+    thing in the pipeline that actually loads the model, so it is the first
+    thing that can tell the difference, and it now runs before anything is
+    uploaded rather than after.
+    """
+
+
+# Lines that mean the model could not be LOADED, as opposed to the pass
+# failing once it was running. Matched against llama.cpp's own output.
+LOAD_FAILURE_MARKERS = (
+    "check_tensor_dims",
+    "failed to load model",
+    "error loading model",
+    "unknown model architecture",
+    "missing tensor",
+    "wrong number of tensors",
+)
+
+
+def _is_load_failure(text):
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in LOAD_FAILURE_MARKERS)
 
 
 def ensure_calibration():
@@ -138,7 +172,11 @@ def build(job, llama_quantize, llama_imatrix, hub_files):
                    "-o", job.imatrix_path, "-ngl", job.imatrix_ngl]
             if job.imatrix_chunks:
                 cmd += ["--chunks", job.imatrix_chunks]
-            run(cmd)
+            # run_verbose, not run: this is the first step that loads the
+            # model, so its output is the only place the pipeline can learn
+            # that the model does not load at all. run() sends the output
+            # straight to the terminal and raises with argv and an exit code.
+            run_verbose(cmd, label="llama-imatrix")
             # `chunks` is what makes these samples comparable across models:
             # the pass is linear in it, so minutes alone describes one model
             # on one calibration size and nothing else. Samples without it —
@@ -153,6 +191,17 @@ def build(job, llama_quantize, llama_imatrix, hub_files):
             # Remove a partial .dat: llama-quantize would read it and produce
             # a quant guided by half a matrix, which is worse than none.
             job.imatrix_path.unlink(missing_ok=True)
+
+            detail = getattr(e, "output", "") or str(e)
+            if _is_load_failure(detail):
+                raise ModelUnloadable(
+                    f"llama.cpp cannot load {source.name}: "
+                    f"{str(e).split(': ', 1)[-1]}. Every quant cut from this "
+                    "BF16 would fail to load the same way, so nothing is "
+                    "worth publishing. The architecture needs converter or "
+                    "llama.cpp support this build does not have - a newer "
+                    "llama.cpp or fork build may fix it.") from e
+
             print(f"[{job.base_name}] IMATRIX FAILED ({e}) - continuing with "
                   "the quants that do not need one.")
             return False, [], str(e)

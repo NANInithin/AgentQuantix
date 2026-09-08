@@ -93,12 +93,48 @@ def block_coverage(path):
             present)
 
 
+def nextn_layers(path):
+    """How many trailing blocks are multi-token-prediction heads.
+
+    These are counted in `block_count` and deliberately NOT exported by the
+    converter, so their absence is normal and expected rather than a defect.
+    """
+    try:
+        import gguf
+        reader = gguf.GGUFReader(str(path))
+        architecture = _value(reader.fields.get("general.architecture"))
+        if not isinstance(architecture, str):
+            return 0
+        value = _value(reader.fields.get(f"{architecture}.nextn_predict_layers"))
+        return int(value) if isinstance(value, (int, float)) else 0
+    except Exception:
+        return 0
+
+
 def missing_blocks(path):
-    """Blocks the header promises that carry no tensors. Empty when fine."""
+    """Blocks the header promises that carry no tensors, EXCLUDING NextN heads.
+
+    The NextN exclusion is the whole reason this function is subtle, and
+    leaving it out cost a false positive that blocked a perfectly good model.
+    `Nex-N2.5-mini` declares 41 blocks, exports 40, and sets
+    `nextn_predict_layers = 1`: block 40 is a multi-token-prediction head that
+    the converter is right not to emit. Another publisher quantized the same
+    checkpoint the same day, imatrix and IQ types included, so a llama.cpp
+    build that loads it plainly exists.
+
+    What remains reportable is a block missing for no declared reason — a hole
+    in the middle, or more absent blocks than the NextN count explains. That
+    is still worth catching, but it is NOT the same question as "will this
+    load", and nothing here should be mistaken for an answer to that. Only
+    loading the model answers that, which is why the pipeline now runs the
+    imatrix before it publishes anything.
+    """
     declared, present = block_coverage(path)
     if not declared or not present:
         return []
-    return [index for index in range(declared) if index not in present]
+    expected_absent = set(range(declared - nextn_layers(path), declared))
+    return [index for index in range(declared)
+            if index not in present and index not in expected_absent]
 
 
 def unloadable_reason(path):
@@ -117,9 +153,6 @@ def unloadable_reason(path):
     if len(missing) > 5:
         shown += f", ... ({len(missing)} in total)"
     return (f"the header declares {declared} blocks but carries no tensors "
-            f"for block(s) {shown}. llama.cpp requires every block in "
-            f"0..{declared - 1} and aborts on the first one missing "
-            f"(\"check_tensor_dims: tensor 'blk.{missing[0]}.attn_norm.weight' "
-            "not found\"), so this file and every quant cut from it will fail "
-            "to load. Common cause: a NextN / multi-token-prediction layer "
-            "counted in block_count but not exported by the converter")
+            f"for block(s) {shown}, and no nextn_predict_layers value "
+            "accounts for them. llama.cpp walks every block in "
+            f"0..{declared - 1} and aborts on the first one absent")

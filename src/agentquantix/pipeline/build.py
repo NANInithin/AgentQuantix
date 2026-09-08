@@ -90,7 +90,22 @@ def run_verbose(cmd, label="command"):
     if not reason:
         reason = next((l.strip() for l in reversed(tail) if l.strip()),
                       f"exit status {code}")
-    raise RuntimeError(f"{label} failed: {reason}")
+    raise CommandFailed(f"{label} failed: {reason}", output="\n".join(tail))
+
+
+class CommandFailed(RuntimeError):
+    """A failed command, with enough of its output to classify the failure.
+
+    The message alone is one line, which is right for a summary and useless
+    for deciding what KIND of failure this was. llama-imatrix exiting 1
+    because the model will not load and llama-imatrix exiting 1 because it ran
+    out of memory need opposite responses — abandon the model, or carry on
+    without the IQ types — and telling them apart needs the surrounding lines.
+    """
+
+    def __init__(self, message, output=""):
+        self.output = output
+        super().__init__(message)
 
 
 def find_binary(llama_dir: Path, name):

@@ -137,20 +137,18 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
     source_mod.ensure_bf16(job, llama_dir, hub_files)
     emit("bf16-ready", gb=round(job.bf16_path.stat().st_size / GB, 2))
 
-    # Does this file load at all? Header-only, milliseconds, and it happens
-    # HERE — before the repo is created and before a single byte is uploaded.
+    # A malformed header is worth saying out loud, but it is NOT the question
+    # "will this load" and must not be treated as one. The first version of
+    # this check answered the wrong question and blocked Nex-N2.5-mini, whose
+    # missing block 40 is a declared NextN head that another publisher
+    # quantized the same day, imatrix and IQ types included.
     #
-    # llama-quantize never answers this question: it streams tensors without
-    # building an inference graph, so it will cut thirty quants from a BF16
-    # that no runtime can open. The first step that would notice is the
-    # imatrix, by which point the BF16 is already published and the sweep is
-    # under way. One model shipped a full repo of unloadable files that way.
+    # The load decision belongs to the imatrix step below, which is the first
+    # thing that actually loads the model. This just warns.
     if reason := sanity.unloadable_reason(job.bf16_path):
-        raise RuntimeError(
-            f"{job.bf16_path.name} cannot be loaded by llama.cpp: {reason}. "
-            "Nothing was published. This is a defect in the GGUF, not in the "
-            "sweep - the model needs converter or llama.cpp support before it "
-            "can be quantized.")
+        print(f"[{job.base_name}] WARNING: {job.bf16_path.name} looks "
+              f"malformed - {reason}. Continuing; the imatrix pass will "
+              "settle whether it loads.")
 
     # Everything from here on is uploads, and xet is an order of magnitude
     # slower at those. Pinned ONCE, before any uploader thread exists: the
@@ -159,11 +157,26 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
     transfer.pin(*transfer.for_upload())
 
     # ---------- repo + upload helper ----------
-    # Created and the BF16 queued BEFORE the imatrix step: the BF16 is already
-    # downloaded and valid, and it must not be held hostage to a later failure.
-    api.create_repo(repo_id=job.target_repo, repo_type="model", exist_ok=True)
-    with state_lock:
-        hub_files |= _hub_files(api, job.target_repo)
+    # The repo is NOT created here. That used to happen before the imatrix, on
+    # the reasoning that the BF16 was "already downloaded and valid" — which
+    # assumed the thing the imatrix step is the first to actually test. A model
+    # that turns out not to load should leave nothing behind at all, not even
+    # an empty repo, so creation moved down to the first real upload.
+    #
+    # hub_files was already read at the top of the run and is enough for the
+    # imatrix step, which only needs to know whether its source quant is
+    # published so it can fetch it back rather than re-cut it.
+    repo_created = False
+
+    def ensure_repo():
+        nonlocal repo_created
+        if repo_created:
+            return
+        api.create_repo(repo_id=job.target_repo, repo_type="model",
+                        exist_ok=True)
+        with state_lock:
+            hub_files.update(_hub_files(api, job.target_repo))
+        repo_created = True
 
     def already_up(name):
         with state_lock:
@@ -179,6 +192,7 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
         The local file is only deleted once the upload has actually succeeded.
         """
         if not already_up(path.name):
+            ensure_repo()
             gigabytes = path.stat().st_size / GB
             for attempt in range(1, 5):
                 try:
@@ -295,19 +309,29 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
             return
         send(path, keep=True)
 
-    # The local BF16 is KEPT — every quant below is cut from it. Handed over
-    # before the imatrix pass so that step starts now rather than after a
-    # multi-GB upload (a no-op when it is already published).
-    send_source(job.bf16_path)
-    if job.mmproj_path.exists():
-        send_source(job.mmproj_path)
-
     # ---------- imatrix ----------
+    # BEFORE the BF16 is published, and that ordering is the point.
+    #
+    # This is the first step in the pipeline that actually LOADS the model.
+    # llama-quantize never does — it streams tensors and rewrites them without
+    # building an inference graph — so it will cut a full sweep from a BF16 no
+    # runtime can open. When the imatrix ran after the upload, one such model
+    # reached the Hub as a complete repo of unopenable files.
+    #
+    # The cost is real: the BF16 upload no longer hides behind the imatrix
+    # compute, so a large model pays that transfer in series. Worth it. The
+    # alternative is discovering the model is unusable when it is already
+    # published.
     imatrix_ok, gap_args, imatrix_error = imatrix_mod.build(
         job, llama_quantize, llama_imatrix, hub_files)
     if not imatrix_ok:
         failures.append(("<imatrix>", imatrix_error or "failed"))
     emit("imatrix", ok=imatrix_ok, source=job.imatrix_source)
+
+    # The local BF16 is KEPT — every quant below is cut from it.
+    send_source(job.bf16_path)
+    if job.mmproj_path.exists():
+        send_source(job.mmproj_path)
 
     # ---------- quants ----------
     def build_one(quant):
