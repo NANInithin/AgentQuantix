@@ -27,6 +27,16 @@ def test_only_qwen3_tts_is_enabled_for_v030():
         assert "not runnable" in reason or "not an approved" in reason
 
 
+def test_advisor_shows_voice_without_claiming_agent_run_support():
+    catalog = voice.advisory_catalog()
+    by_family = {entry["family"]: entry for entry in catalog["candidates"]}
+
+    assert by_family["qwen3-tts"]["status"] == "preview"
+    assert by_family["qwen3-tts"]["supported_quants"] == ["f16", "q8_0", "q4_k"]
+    assert by_family["qwen3-tts"]["agent_run_available"] is False
+    assert by_family["pocket-tts"]["status"] == "planned"
+
+
 def test_unknown_voice_models_are_not_an_execution_fallback():
     allowed, reason, family = voice.execution_gate("org/Interesting-TTS")
     assert not allowed and family is None

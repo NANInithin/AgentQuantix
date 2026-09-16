@@ -63,6 +63,50 @@ VOICE_FAMILIES = (
 )
 
 
+def advisory_catalog() -> dict:
+    """Voice candidates the advisor must show alongside the text sweep.
+
+    Discovery and execution are deliberately different facts. Qwen3-TTS has
+    an audited converter/runtime adapter, but the agent-facing download,
+    publication and card path is not complete yet. Exposing that distinction
+    prevents the text-only trending filter from making voice work invisible
+    without advertising ``start_quantization`` support that does not exist.
+    """
+    candidates = []
+    for family in VOICE_FAMILIES:
+        entry = {
+            "repo_id": family.repo_prefixes[0],
+            "family": family.name,
+            "tier": family.tier,
+            "modality": family.modality,
+            "release": family.release,
+            "runtime": family.runtime,
+            "adapter_enabled": family.enabled,
+            "agent_run_available": False,
+        }
+        if family.name == "qwen3-tts":
+            entry.update({
+                "status": "preview",
+                "supported_quants": ["f16", "q8_0", "q4_k"],
+                "note": (
+                    "Pinned converter/runtime and bundle validation exist. "
+                    "Automated source download, bundle publication, voice card, "
+                    "and Linux end-to-end generation are still release gates."
+                ),
+            })
+        else:
+            entry.update({
+                "status": "planned",
+                "supported_quants": [],
+                "note": f"Planned for {family.release}; not runnable in this release.",
+            })
+        candidates.append(entry)
+    return {
+        "track": "voice models use a separate bundle/runtime pipeline",
+        "candidates": candidates,
+    }
+
+
 def family_for(repo_id: str) -> VoiceFamily | None:
     """The known voice family for a Hub repo, or ``None`` when unknown."""
     return next((family for family in VOICE_FAMILIES if family.matches(repo_id)), None)

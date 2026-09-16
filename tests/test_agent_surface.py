@@ -66,6 +66,42 @@ def test_the_prompt_states_both_gates():
     assert "You never research on your own initiative." in text
 
 
+def test_the_prompt_requires_voice_results_to_be_presented():
+    text = prompt_mod.SYSTEM_PROMPT
+    assert "returned `voice` section" in text
+    assert "agent_run_available: false" in text
+
+
+def test_describe_known_voice_model_uses_voice_advisor(monkeypatch):
+    monkeypatch.setattr(
+        tools_mod, "_assessments_for",
+        lambda models: (_ for _ in ()).throw(
+            AssertionError("voice model entered text assessment")))
+
+    result = tools_mod.call(
+        "describe_candidate", {"model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base"})
+
+    assert result["voice"]["family"] == "qwen3-tts"
+    assert result["voice"]["status"] == "preview"
+    assert result["voice"]["agent_run_available"] is False
+
+
+def test_trending_research_returns_voice_track(monkeypatch):
+    result = {
+        "system": {}, "trending_count": 0, "kept_count": 0,
+        "assessments": [],
+    }
+    monkeypatch.setattr(tools_mod.research, "research", lambda **kwargs: result)
+    monkeypatch.setattr(tools_mod.research, "save", lambda value: None)
+    monkeypatch.setattr(tools_mod.report, "table", lambda value: "")
+    monkeypatch.setattr(tools_mod.sysprobe, "summary", lambda value: "machine")
+
+    response = tools_mod.call("research_trending", {"limit": 1})
+
+    assert response["voice"]["candidates"][0]["family"] == "qwen3-tts"
+    assert response["voice"]["candidates"][0]["status"] == "preview"
+
+
 def test_the_prompt_and_the_skill_cannot_drift():
     """REGRESSION. The skill and the prompt were maintained separately, drifted,
     and the agent confidently told the user a corrected number's old value."""

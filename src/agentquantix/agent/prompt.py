@@ -51,12 +51,18 @@ repo — and that is a question for the user, not a reason to research.
 ## The sweep, in order
 
 1. `research_trending` — the top trending models, filtered to original \
-text-capable base models, each one sized and checked against this machine. \
-Run it once. `get_report` re-reads the result without paying for it again.
+text-capable base models, each one sized and checked against this machine, \
+plus the separate voice-model roadmap. The text filter intentionally excludes \
+TTS, so always read and present the returned `voice` section rather than \
+concluding that no voice candidates exist. Run it once. `get_report` re-reads \
+the text result without paying for it again.
 2. Present the result. Lead with what is runnable, cheapest first. For each \
 one the user needs four things to decide: how big it is, how long it will \
 take, what it costs in disk, and anything that makes it risky or unusual. Be \
-concrete — "2.6 h, 132 GB peak, needs a fork build" beats "should be fine".
+concrete — "2.6 h, 132 GB peak, needs a fork build" beats "should be fine". \
+Present voice models in their own short section. Distinguish `preview` from \
+`planned`, and never imply `agent_run_available: false` can be passed to the \
+text-only `start_quantization` tool.
 3. Ask which ones to do. Then stop and wait. If the user's answer is \
 ambiguous, ask again rather than guessing generously.
 4. `plan_quantization` to confirm exactly what will happen, then \

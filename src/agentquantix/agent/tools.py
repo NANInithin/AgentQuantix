@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 
-from .. import card, config, feasibility, hub, report, research, sysprobe
+from .. import card, config, feasibility, hub, report, research, sysprobe, voice
 from ..pipeline import run as run_mod
 from ..pipeline.job import Job
 
@@ -58,7 +58,9 @@ TOOLS = [
             "architecture, check it against llama.cpp's supported list "
             "(hunting for a fork when it is not supported), and estimate "
             "disk, transfer and wall-clock time for a full quant sweep on "
-            "THIS machine. Read-only: downloads nothing, creates nothing. "
+            "THIS machine. Also return the separate voice-model roadmap so "
+            "supported TTS work is not hidden by the text-only filter. "
+            "Read-only: downloads nothing, creates nothing. "
             "Takes a minute or two for 100 models."),
         "input_schema": {
             "type": "object",
@@ -414,6 +416,7 @@ def call(name, arguments=None):
                 {"repo_id": a["repo_id"], "target_repo": a["target_repo"],
                  "published": a.get("published_count", 0)}
                 for a in result["assessments"] if a["verdict"] == "done"],
+            "voice": voice.advisory_catalog(),
         }
 
     if name == "get_report":
@@ -429,6 +432,17 @@ def call(name, arguments=None):
                 "table": report.table(result, limit=top)}
 
     if name == "describe_candidate":
+        if family := voice.family_for(arguments["model"]):
+            entry = next(item for item in voice.advisory_catalog()["candidates"]
+                         if item["family"] == family.name)
+            readiness = ("adapter preview is available"
+                         if entry["adapter_enabled"] else "support is planned")
+            return {
+                "text": (f"{entry['repo_id']} is a {entry['tier']} "
+                         f"{entry['modality']} model targeted for "
+                         f"{entry['release']}; {readiness}. {entry['note']}"),
+                "voice": entry,
+            }
         # Same rule as _assessments_for: a model the user names is assessed on
         # demand rather than refused for not being in a trending sweep.
         assessment = _assessments_for([arguments["model"]])[0]
