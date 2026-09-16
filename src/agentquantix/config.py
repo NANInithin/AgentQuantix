@@ -57,7 +57,11 @@ WORK_ROOT = Path(os.getenv("AQX_WORK_ROOT") or os.getenv("INF_ROOT")
 INF_ROOT = WORK_ROOT
 
 UPSTREAM_LLAMA = INF_ROOT / "llama.cpp"
+UPSTREAM_WHISPER = INF_ROOT / "whisper.cpp"
 TEMP_DIR = INF_ROOT / "temp"
+VOICE_BACKENDS_DIR = TEMP_DIR / "aqx-voice-backends"
+VOICE_FIXTURES_DIR = Path(os.getenv("AQX_VOICE_FIXTURES")
+                          or Path(__file__).resolve().parent / "fixtures" / "voice")
 
 # Agent state. Kept out of INF so a manual temp wipe in the work tree never
 # destroys the run history the estimator learns from.

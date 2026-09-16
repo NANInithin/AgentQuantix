@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "license": "Public domain United States government work",
+  "fixtures": [
+    {
+      "id": "jfk-1961",
+      "audio": "jfk.wav",
+      "language": "en",
+      "transcript": "And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country."
+    }
+  ]
+}

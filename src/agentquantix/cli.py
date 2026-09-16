@@ -17,11 +17,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import sys
 
 from . import (card, config, feasibility, report, research, sysprobe,
                transfer)
-from .pipeline import run as run_mod, source as source_mod
+from .pipeline import build as build_mod, run as run_mod, source as source_mod
 from .pipeline.job import Job
 
 
@@ -397,6 +398,101 @@ def cmd_card(args):
 
 
 # =====================================================
+# voice
+# =====================================================
+def _voice_plan(repo_id, target_repo=None, quants=None):
+    from . import voice
+
+    allowed, reason, backend = voice.execution_gate(repo_id)
+    if not allowed:
+        raise ValueError(reason)
+    requested = list(quants or backend.supported_quants)
+    unsupported = [quant for quant in requested
+                   if quant not in backend.supported_quants]
+    if unsupported:
+        raise ValueError(
+            f"{backend.id} does not support {unsupported}; choose from "
+            f"{list(backend.supported_quants)}")
+    suffix = "GGUF" if backend.model_format == "gguf" else "GGML"
+    return {
+        "source": repo_id,
+        "target": target_repo or f"{config.namespace()}/{repo_id.split('/')[-1]}-{suffix}",
+        "track": backend.track,
+        "backend": backend.backend,
+        "runtime": backend.runtime,
+        "converter": backend.converter,
+        "model_format": backend.model_format,
+        "quants": requested,
+        "required_companions": list(backend.required_companions),
+        "speaker_reference": backend.speaker_reference,
+        "sample_rate": backend.sample_rate,
+        "quality_gate": ("WAV integrity + silence/clipping + ASR round-trip WER + "
+                         "human listening review" if backend.track == voice.TTS
+                         else "fixed-corpus WER regression versus the base model"),
+    }
+
+
+def cmd_voice(args):
+    from . import voice
+    from .pipeline import voice_release
+
+    if args.voice_command == "list":
+        _print(json.dumps(voice.advisory_catalog(), indent=2))
+        return 0
+
+    if args.voice_command == "plan":
+        _print(json.dumps(_voice_plan(args.repo, args.target, args.quant), indent=2))
+        return 0
+
+    if args.voice_command == "review":
+        path = Path(args.output) if args.output else (
+            voice_release.work_dir(args.repo) / "reviews" / f"{args.quant}.json")
+        voice.write_human_review(
+            path, quant=args.quant, accepted=args.accept,
+            reviewer=args.reviewer, notes=args.notes or "")
+        _print(f"review saved: {path}")
+        return 0
+
+    if args.voice_command == "verify":
+        manifest_path = Path(args.manifest)
+        manifest = voice.load_manifest(manifest_path)
+        problems = voice.verify_manifest_files(manifest, args.root or manifest_path.parent)
+        _print(json.dumps({"valid": not problems, "problems": problems}, indent=2))
+        return 1 if problems else 0
+
+    plan = _voice_plan(args.repo, args.target, args.quant)
+    _print(json.dumps(plan, indent=2))
+    if args.dry_run:
+        return 0
+    if not args.yes:
+        answer = input("Run this voice release? This downloads, builds and may publish. [y/N] ")
+        if answer.strip().casefold() not in ("y", "yes"):
+            _print("Nothing started.")
+            return 0
+    options = voice_release.VoiceReleaseOptions(
+        quants=plan["quants"], language=args.language,
+        speaker=Path(args.speaker) if args.speaker else None,
+        publish=not args.no_publish,
+        max_roundtrip_wer=args.max_roundtrip_wer,
+        max_wer_regression=args.max_wer_regression,
+        pocket_language=args.pocket_language,
+        human_review=Path(args.review) if args.review else None,
+    )
+    if plan["track"] == voice.TTS:
+        result = voice_release.run_tts_release(args.repo, plan["target"], options)
+    else:
+        result = voice_release.run_asr_release(args.repo, plan["target"], options)
+    _print(json.dumps(result, indent=2, default=str))
+    non_error_reasons = {
+        "human listening review required",
+        "accepted and waiting for atomic bundle publication",
+    }
+    return 0 if all(item.get("published") or
+                    item.get("reason") in non_error_reasons
+                    for item in result["results"].values()) else 1
+
+
+# =====================================================
 # doctor
 # =====================================================
 def cmd_bootstrap(args):
@@ -417,6 +513,15 @@ def cmd_doctor(args):
     elif not info["llama"]["binaries"]:
         notes.append("llama.cpp is present but not built - the first run will "
                      "compile llama-quantize and llama-imatrix.")
+    elif not build_mod.find_binary(config.UPSTREAM_LLAMA, "llama-tts"):
+        notes.append("llama.cpp is built without llama-tts - the first TTS "
+                     "release will build that target.")
+    if not config.UPSTREAM_WHISPER.exists():
+        notes.append(f"whisper.cpp is not cached at {config.UPSTREAM_WHISPER} - "
+                     "the first ASR or TTS round-trip run will clone and build it.")
+    elif not build_mod.find_binary(config.UPSTREAM_WHISPER, "whisper-cli"):
+        notes.append("whisper.cpp is present but whisper-cli is not built - "
+                     "the first voice run will build it independently.")
     if not info["gpus"]:
         notes.append("No CUDA GPU detected - the imatrix pass will run on CPU "
                      "and take considerably longer.")
@@ -576,6 +681,59 @@ def build_parser():
     card_cmd.add_argument("--dry-run", action="store_true",
                           help="print the card instead of publishing it")
     card_cmd.set_defaults(func=cmd_card)
+
+    voice_cmd = sub.add_parser(
+        "voice", help="TTS and ASR bundle conversion, validation and release")
+    voice_sub = voice_cmd.add_subparsers(dest="voice_command", required=True)
+
+    voice_list = voice_sub.add_parser("list", help="show registered voice backends")
+    voice_list.set_defaults(func=cmd_voice)
+
+    voice_plan = voice_sub.add_parser("plan", help="show a voice release plan")
+    voice_plan.add_argument("repo")
+    voice_plan.add_argument("--target")
+    voice_plan.add_argument("--quant", action="append",
+                            help="quant to release; repeat for more than one")
+    voice_plan.set_defaults(func=cmd_voice)
+
+    voice_run = voice_sub.add_parser(
+        "run", help="convert, quantize, validate and optionally publish a bundle")
+    voice_run.add_argument("repo")
+    voice_run.add_argument("--target")
+    voice_run.add_argument("--quant", action="append",
+                           help="quant to release; defaults to the backend-safe set")
+    voice_run.add_argument("--language")
+    voice_run.add_argument("--pocket-language", default="english")
+    voice_run.add_argument("--speaker",
+                           help="speaker-reference WAV/MP3 required by Pocket TTS")
+    voice_run.add_argument("--review",
+                           help="human listening-review JSON produced by voice review")
+    voice_run.add_argument("--max-roundtrip-wer", type=float, default=0.35)
+    voice_run.add_argument("--max-wer-regression", type=float, default=0.05)
+    voice_run.add_argument("--no-publish", action="store_true",
+                           help="build and score locally without writing to the Hub")
+    voice_run.add_argument("--dry-run", action="store_true")
+    voice_run.add_argument("--yes", "-y", action="store_true")
+    voice_run.set_defaults(func=cmd_voice)
+
+    voice_review = voice_sub.add_parser(
+        "review", help="record the required human listening decision")
+    voice_review.add_argument("repo")
+    voice_review.add_argument("quant",
+                              choices=["Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M"])
+    voice_review.add_argument("--reviewer", required=True)
+    decision = voice_review.add_mutually_exclusive_group(required=True)
+    decision.add_argument("--accept", action="store_true")
+    decision.add_argument("--reject", action="store_true")
+    voice_review.add_argument("--notes")
+    voice_review.add_argument("--output")
+    voice_review.set_defaults(func=cmd_voice)
+
+    voice_verify = voice_sub.add_parser(
+        "verify", help="verify local bundle files against bundle.json")
+    voice_verify.add_argument("manifest")
+    voice_verify.add_argument("--root")
+    voice_verify.set_defaults(func=cmd_voice)
 
     boot = sub.add_parser(
         "bootstrap",

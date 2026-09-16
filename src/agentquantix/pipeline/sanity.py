@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import re
 
+from .. import voice
+
 BLOCK = re.compile(r"blk\.(\d+)\.")
 
 
@@ -156,3 +158,19 @@ def unloadable_reason(path):
             f"for block(s) {shown}, and no nextn_predict_layers value "
             "accounts for them. llama.cpp walks every block in "
             f"0..{declared - 1} and aborts on the first one absent")
+
+
+def validate_tts_runtime(runtime, bundle, prompt, output, *, language=None,
+                         speaker=None, timeout=600):
+    """Validate a TTS bundle through llama-tts, not through GGUF metadata."""
+    return voice.run_tts_smoke(
+        runtime, bundle, prompt, output, language=language, speaker=speaker,
+        timeout=timeout)
+
+
+def validate_asr_runtime(runtime, model, audio, expected, output_prefix, *,
+                         language=None, vad=False, timeout=600):
+    """Validate a Whisper model through whisper-cli and compute fixture WER."""
+    return voice.run_asr_smoke(
+        runtime, model, audio, expected, output_prefix, language=language,
+        vad=vad, timeout=timeout)

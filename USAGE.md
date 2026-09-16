@@ -259,6 +259,46 @@ phase.
 
 ---
 
+## Voice releases
+
+Voice models use their own command group and never enter the text-model sweep.
+List the registered backends and inspect a plan without downloading anything:
+
+```powershell
+aqx voice list
+aqx voice plan Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M
+aqx voice plan openai/whisper-small --quant q5_0
+```
+
+TTS uses llama.cpp's `llama-tts`. A run converts the primary model and mmproj,
+builds the conservative Q8_0/Q6_K/Q5_K_M/Q4_K_M candidates, generates the
+licensed fixture prompts, rejects invalid/silent/clipped audio, and measures
+ASR round-trip WER. It stops before publication until you listen to the
+generated samples and record a decision:
+
+```powershell
+aqx voice run Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M --no-publish -y
+aqx voice review Qwen/Qwen3-TTS-12Hz-1.7B-Base Q4_K_M \
+  --reviewer "Your name" --accept --notes "Clear and correctly paced"
+aqx voice run Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M \
+  --review ~/.agentquantix/temp/voice/Qwen--Qwen3-TTS-12Hz-1.7B-Base/reviews/Q4_K_M.json -y
+```
+
+Pocket TTS additionally requires `--speaker <reference.wav>`. Whisper ASR is a
+separate whisper.cpp build and model format; it runs the committed 16 kHz PCM
+fixture corpus and rejects a quant whose WER regresses beyond the configured
+limit:
+
+```powershell
+aqx voice run openai/whisper-small --quant q5_0 -y
+```
+
+Every successful release publishes all accepted quant files, required
+companions, `bundle.json`, `quality.json`, and `README.md` in one Hub commit,
+then verifies the remote sizes and SHA-256 values.
+
+---
+
 ## If it stops
 
 Ctrl-C, a reboot, a dead network — just re-run the identical command.
@@ -341,6 +381,11 @@ new toolchain, and a 1B model costs minutes rather than hours to find that out.
 | `aqx run [model...]` | Steps 4-5. `--dry-run`, `--yes`, `--keep-fork`. Omit the name to choose interactively. |
 | `aqx verify <repo>...` | What is actually on the Hub, with real sizes and anything missing. |
 | `aqx card <repo>` | Write and publish the model card. `--dry-run` to print it instead. |
+| `aqx voice list` | List the separate TTS and ASR capability registry. |
+| `aqx voice plan <repo>` | Show runtime, bundle members, quants, and quality gates. |
+| `aqx voice run <repo>` | Convert, runtime-test, score, review-gate, and publish a voice bundle. |
+| `aqx voice review <repo> <quant>` | Record the required human TTS listening decision. |
+| `aqx voice verify <bundle.json>` | Verify local bundle sizes and SHA-256 values. |
 | `aqx agent [prompt]` | Drive it with an API key. `--model`, `--base-url`, `--max-steps`. |
 | `aqx mcp` | Run as an MCP server on stdio. Harnesses launch this; you never do by hand. |
 

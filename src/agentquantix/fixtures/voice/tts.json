@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "license": "CC0-1.0",
+  "fixtures": [
+    {
+      "id": "short-en-speaker",
+      "language": "en",
+      "speaker_conditioned": true,
+      "text": "Hello from AgentQuantix."
+    },
+    {
+      "id": "numbers-punctuation-en",
+      "language": "en",
+      "text": "Version 3.1 costs 42 dollars; is that correct?"
+    },
+    {
+      "id": "long-en",
+      "language": "en",
+      "text": "A reliable voice release must produce clear audio, preserve punctuation and numbers, and include every companion file required by the runtime."
+    },
+    {
+      "id": "short-fr",
+      "language": "fr",
+      "text": "Bonjour, ceci est un test vocal multilingue."
+    }
+  ]
+}

@@ -7,6 +7,8 @@ worth anything if something checks it.
 
 import json
 
+import pytest
+
 from agentquantix import mcp_server
 from agentquantix.agent import prompt as prompt_mod, tools as tools_mod
 
@@ -24,11 +26,11 @@ def test_every_tool_has_a_usable_schema():
             assert field in schema["properties"], f"{tool['name']}.{field}"
 
 
-def test_only_one_tool_can_spend_hours():
-    """Everything else must be safe to call speculatively."""
+def test_only_explicit_start_tools_can_spend_hours():
+    """Everything except the text and voice start tools is speculative-safe."""
     destructive = [t["name"] for t in tools_mod.TOOLS
                    if "user_approved" in t["input_schema"].get("required", [])]
-    assert destructive == ["start_quantization"]
+    assert destructive == ["start_quantization", "start_voice_release"]
 
 
 def test_unknown_tools_are_rejected():
@@ -66,40 +68,31 @@ def test_the_prompt_states_both_gates():
     assert "You never research on your own initiative." in text
 
 
-def test_the_prompt_requires_voice_results_to_be_presented():
+def test_the_prompt_keeps_voice_out_of_the_text_pipeline():
     text = prompt_mod.SYSTEM_PROMPT
-    assert "returned `voice` section" in text
-    assert "agent_run_available: false" in text
+    assert "plan_voice_release" in text
+    assert "start_voice_release" in text
+    assert "never route voice through the text quantization tools" in text
 
 
-def test_describe_known_voice_model_uses_voice_advisor(monkeypatch):
+def test_describe_voice_model_uses_the_backend_registry(monkeypatch):
     monkeypatch.setattr(
         tools_mod, "_assessments_for",
         lambda models: (_ for _ in ()).throw(
             AssertionError("voice model entered text assessment")))
-
     result = tools_mod.call(
-        "describe_candidate", {"model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base"})
-
-    assert result["voice"]["family"] == "qwen3-tts"
-    assert result["voice"]["status"] == "preview"
-    assert result["voice"]["agent_run_available"] is False
+        "describe_candidate", {"model": "Qwen/Qwen3-TTS-12Hz-1.7B-Base"})
+    assert result["voice"]["backend"] == "llama-qwen3-tts"
+    assert result["voice"]["runtime"] == "llama-tts"
 
 
-def test_trending_research_returns_voice_track(monkeypatch):
-    result = {
-        "system": {}, "trending_count": 0, "kept_count": 0,
-        "assessments": [],
-    }
-    monkeypatch.setattr(tools_mod.research, "research", lambda **kwargs: result)
-    monkeypatch.setattr(tools_mod.research, "save", lambda value: None)
-    monkeypatch.setattr(tools_mod.report, "table", lambda value: "")
-    monkeypatch.setattr(tools_mod.sysprobe, "summary", lambda value: "machine")
-
-    response = tools_mod.call("research_trending", {"limit": 1})
-
-    assert response["voice"]["candidates"][0]["family"] == "qwen3-tts"
-    assert response["voice"]["candidates"][0]["status"] == "preview"
+def test_text_tools_reject_registered_voice_models():
+    with pytest.raises(ValueError, match="plan_voice_release"):
+        tools_mod.call("plan_quantization", {
+            "models": ["Qwen/Qwen3-TTS-12Hz-1.7B-Base"]})
+    with pytest.raises(ValueError, match="start_voice_release"):
+        tools_mod.call("start_quantization", {
+            "models": ["openai/whisper-small"], "user_approved": True})
 
 
 def test_the_prompt_and_the_skill_cannot_drift():

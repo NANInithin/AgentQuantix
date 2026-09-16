@@ -1,146 +1,98 @@
-# Voice-model release plan
+# Voice release plan
 
-## Product boundary
+## Direction
 
-AgentQuantix currently quantizes text-generation GGUFs through `llama-quantize`
-and validates them by loading them through `llama-imatrix`. Voice models are a
-different product surface: a usable release can contain a language-model GGUF,
-one or more audio codec/projector GGUFs, and runtime-specific configuration.
-The pipeline must publish and validate that **bundle**, never a language tower
-in isolation.
+Support text-to-speech first through llama.cpp, then add automatic speech
+recognition as a separate whisper.cpp backend. llama.cpp already exposes TTS
+flows for Qwen3-TTS and Pocket TTS, while Whisper uses different artifacts and
+runtime semantics.
 
-The support tiers describe evidence, not marketing:
+References: [llama.cpp TTS](https://github.com/ggml-org/llama.cpp/blob/master/tools/tts/README.md)
+and [whisper.cpp](https://github.com/ggml-org/whisper.cpp).
 
-| Tier | Meaning | Release position |
-| --- | --- | --- |
-| 1 | Upstream runtime and repeatable end-to-end path exist; AgentQuantix may automate it. | Qwen3-TTS in v0.3.0; Pocket TTS in v0.3.1 |
-| 2 | Upstream audio-input path exists; it is a separate ASR/audio-understanding product. | v0.4.0, beginning with Voxtral and Qwen3-ASR |
-| 3 | No supported end-to-end path yet; retain a researched adapter record only. | No release commitment |
+## Plan
 
-Tier 3 is intentionally **not** enabled in v0.3.0. “Experimental” must not
-mean that an unproven model can enter an unattended upload pipeline.
+1. **Split voice into TTS and ASR tracks**
 
-## v0.3.0 — Qwen3-TTS (Tier 1)
+   Do not treat voice as one architecture: TTS emits audio, while ASR consumes
+   it. Give each track a distinct converter, runtime, quality gate, and
+   feasibility model.
 
-### Goal
+2. **Add a `VoiceBackend` capability registry**
 
-Publish a complete Qwen3-TTS quant bundle only after the runtime generates a
-valid non-empty WAV file from it. This release supports TTS output only; it
-does not add ASR, arbitrary voice families, or subjective quality ranking.
+   Extend architecture support with the backend, converter, required companion
+   files, and supported quant types. This prevents the core pipeline from
+   becoming a chain of model-family conditionals.
 
-### Implementation work
+3. **Make a model bundle the unit of publication**
 
-1. Add the voice capability registry and make Qwen3-TTS the only enabled
-   v0.3.0 family. Keep Pocket TTS, Voxtral, and Qwen3-ASR visible as planned
-   capabilities but reject them from the execution path.
-2. Define a persisted bundle manifest: family, source revision, primary GGUF,
-   every required companion, byte size, SHA-256, and each file's Hub path.
-3. Adopt and pin the maintained MIT `predict-woo/qwen3-tts.cpp` converter and
-   runtime at `b3ba14077cf1b3e11b86e5f84aa9184605c89b28`. Its audited scope is
-   exactly `Qwen/Qwen3-TTS-12Hz-0.6B-Base`; the bundle is a talker GGUF plus an
-   F16 tokenizer/vocoder GGUF, not an assumed `BF16 + mmproj` layout.
-4. Build/locate `qwen3-tts-cli` with its vendored GGML DLLs and record the
-   pinned backend revision in the job record. This is a dedicated runtime,
-   rather than the evolving llama.cpp TTS path.
-5. After conversion, run a fixed smoke prompt with `qwen3-tts-cli`; require a
-   successful exit, a created WAV, a supported PCM header, non-zero frames,
-   and a plausible duration before any bundle member is uploaded.
-6. Upload the manifest and all bundle members resumably. Verify exact names,
-   sizes, and checksums from the Hub listing before rendering the card.
-7. Generate a voice-specific card: languages, sample rate, companion files,
-   exact `qwen3-tts-cli` usage, licence/provenance, and a clear notice that the
-   smoke validation is not a perceptual-quality score.
+   A voice release may include the primary GGUF, codec or mmproj, tokenizer,
+   speaker-reference requirements, and configuration. Track, upload, resume,
+   verify, and document all bundle members atomically.
 
-### Acceptance criteria
+4. **Start with two supported TTS families only**
 
-- A supported Qwen3-TTS source produces a complete manifest and no file is
-  published when the runtime smoke test fails.
-- Resume uses the manifest and skips only members whose remote size/checksum
-  match; it never treats a language GGUF alone as a finished voice release.
-- Offline tests cover capability gating, bundle validation, manifest stability,
-  failed runtime execution, invalid/empty WAV output, card facts, and resume.
-- One real end-to-end run is recorded against the pinned upstream revision on
-  Windows and Linux before tagging v0.3.0.
+   Target Qwen3-TTS and Pocket TTS first because llama.cpp already provides
+   documented inference paths for them. Add new families only after they pass
+   the same end-to-end acceptance suite.
 
-## v0.3.1 — Pocket TTS and automated quality scoring (Tier 1)
+5. **Build an audio-aware calibration pipeline**
 
-### Goal
+   Replace wiki-text-only calibration with a small, licensed multilingual
+   speech and prompt fixture set. Cover short and long utterances, punctuation,
+   numbers, non-English text, and speaker-conditioning cases.
 
-Add Pocket TTS without weakening the Qwen3-TTS contract, then rank or reject
-quants using repeatable audio checks in addition to v0.3.0's runtime smoke test.
+6. **Use quality gates, not just GGUF load checks**
 
-### Implementation work
+   For TTS, generate fixed prompts and reject silence, clipping, invalid WAV
+   headers, or wildly incorrect duration. For ASR, run a fixed audio corpus and
+   set a maximum word-error-rate regression relative to BF16.
 
-1. Add Pocket TTS's required language directory and mmproj/codec members to
-   the same manifest contract; validate its required speaker-reference input.
-2. Create a versioned, licensed benchmark pack of prompts and reference audio;
-   keep it separate from production jobs and record its revision in results.
-3. Record deterministic metrics: successful-generation rate, duration error,
-   silence/clipping checks, and ASR round-trip intelligibility where available.
-4. Establish per-family/per-language regression thresholds from BF16 baselines;
-   label metrics as automated proxies, not MOS or speaker-similarity claims.
-5. Publish a machine-readable `quality.json` with every bundle and add a
-   concise quality table to the model card.
+7. **Use a two-stage TTS quality assessment**
 
-### Acceptance criteria
+   Automate intelligibility checks with ASR round-trip word error rate, audio
+   duration, and silence checks. Require a brief human listening review only
+   for candidate quant types that pass automation.
 
-- Both Tier 1 families pass the same bundle and runtime contract.
-- A deliberately degraded output is rejected by the scoring gate.
-- Scores are reproducible from a pinned benchmark pack and runtime revision.
+8. **Quantize conservatively before expanding the sweep**
 
-## v0.4.0 — ASR/audio-understanding backend (Tier 2)
+   Begin with a small voice-safe set: Q8_0, Q6_K, Q5_K_M, and Q4_K_M. Add
+   lower-bit types only after measured intelligibility and speaker-similarity
+   results are acceptable.
 
-### Goal
+9. **Model feasibility in seconds of audio, not only parameters**
 
-Support Voxtral and Qwen3-ASR as audio-input models through a separate
-`llama-mtmd-cli`/`libmtmd` adapter. Do not route them through the TTS pipeline.
+   Estimate real-time factor, tokens or frames per second, first-audio latency,
+   VRAM or RAM, and bundle disk size. Report minutes required to synthesize one
+   hour of audio alongside the existing quantization estimates.
 
-### Implementation work
+10. **Validate through the real inference binary**
 
-1. Introduce an ASR bundle type with its audio encoder/projector and prompt
-   template, separate from TTS codecs and output WAV checks.
-2. Use a licensed transcription fixture set; validate normalized WER, language
-   handling, long-audio chunking, and no-audio/silence failure behaviour.
-3. Estimate feasibility by audio seconds, context/audio-token consumption,
-   encoder memory, and real-time factor rather than text imatrix cost.
-4. Add ASR-specific cards: transcription commands, supported formats,
-   language/prompt settings, benchmark corpus, WER, and known limitations.
-5. Keep streaming/server support explicitly experimental until it has its own
-   integration tests; batch CLI validation is the v0.4.0 release gate.
+    Extend `sanity.py` to invoke `llama-tts` or `whisper-cli`, rather than merely
+    inspecting metadata. This mirrors the recent GGUF load validation and
+    catches missing companion assets or configuration.
 
-### Acceptance criteria
+11. **Add voice-specific model-card sections**
 
-- A known fixture reaches the model-specific WER threshold after quantization.
-- Missing encoder/projector, invalid audio, and overlong audio fail before upload.
-- TTS and ASR jobs cannot be mistaken for one another in state, manifests, or cards.
+    Publish supported languages, sample rate, required files, the recommended
+    runtime command, and quality results for each quant. Prominently include
+    voice-cloning and consent limitations and the upstream model's license.
 
-## Tier 3 admission process
+12. **Keep ASR integration separate from the llama.cpp build**
 
-An experimental family becomes Tier 1 or Tier 2 only after all of these are
-available: an upstream or maintained adapter, a reproducible conversion path,
-a complete bundle definition, an actual runtime command, a small licensed test
-fixture, and a family-specific quality gate. Until then AgentQuantix may report
-the family as researched, but it must not offer `run`.
+    Build and cache whisper.cpp independently, with its own architecture and
+    model-format checks. It supports offline CPU and GPU inference and VAD,
+    making it the natural second milestone. See the
+    [whisper.cpp capabilities](https://github.com/ggml-org/whisper.cpp).
 
-## Delivery sequence and ownership boundaries
+13. **Create deterministic audio fixtures for CI**
 
-1. **Foundation (started now):** capability registry, bundle contract, WAV
-   validation, and unit tests. These are pure Python and do not alter current
-   text-model runs.
-2. **Qwen adapter:** source discovery/conversion, `qwen3-tts-cli` build lookup,
-   staging and manifest persistence.
-3. **Publication:** resumable bundle upload, remote verification, and cards.
-4. **Operational proof:** Windows/Linux end-to-end smoke runs, then v0.3.0 tag.
+    Commit tiny, licensed WAV clips with expected transcript and audio-header
+    assertions. Keep full quality benchmarks opt-in, but make conversion,
+    bundle integrity, and smoke inference mandatory.
 
-### Qwen conversion decision gate
+14. **Release in three milestones**
 
-Upstream llama.cpp documents `llama-tts` inference from published Qwen3-TTS
-GGUFs but does not document a raw-checkpoint converter. AgentQuantix has now
-adopted and pinned the separately audited `predict-woo/qwen3-tts.cpp` converter/
-runtime for the exact 0.6B Base source. The source must still pass a real
-Windows and Linux conversion-plus-generation gate before v0.3.0 is tagged; no
-other Qwen3-TTS variant inherits this support boundary.
-
-Never share the text `imatrix` path with a voice family merely because both
-produce GGUF. A family must explicitly supply its own calibration or explain
-why a normal quantization path is safe.
+    - **v0.3.0:** TTS bundle handling, Qwen3-TTS, runtime validation, and cards.
+    - **v0.3.1:** Pocket TTS and automated quality scoring.
+    - **v0.4.0:** A separate Whisper and ASR backend.

@@ -131,11 +131,27 @@ it and quietly find fewer leads.
 
 ---
 
+## Voice models
+
+Voice releases are split into two runtime tracks:
+
+- Qwen3-TTS and Pocket TTS use llama.cpp's `llama-tts`, GGUF primary models,
+  required mmproj companions, audio-aware fixtures, ASR round-trip WER, and a
+  human listening gate.
+- Whisper ASR uses a separately cached whisper.cpp build, its native GGML
+  binary format, 16 kHz PCM fixtures, and a WER regression gate against the
+  base-precision model.
+
+Start with `aqx voice list` and `aqx voice plan <repo>`. See [USAGE.md](USAGE.md)
+for the complete build, review, publication, and verification workflow.
+
+---
+
 ## Harnesses
 
 All logic lives in the CLI and one tool registry
 (`src/agentquantix/agent/tools.py`). Every harness is a thin adapter over the
-same eight tools and the same system prompt, so the agent behaves identically
+same tool registry and the same system prompt, so the agent behaves identically
 wherever it runs — and works with no harness at all.
 
 | | Setup |
@@ -151,9 +167,9 @@ OpenRouter loop against `urllib` — neither needs the `mcp` or `openai` package
 because a portability layer that needs a pip install in someone else's
 environment is not portable.
 
-The approval gate is enforced three times over: the prompt tells the model not
-to start a run unasked, the tool refuses without `user_approved=true`, and the
-built-in loop asks you directly before letting the call through.
+The approval gate is enforced three times over for both text and voice: the
+prompt tells the model not to start unasked, each start tool refuses without
+`user_approved=true`, and the built-in loop asks directly before allowing it.
 
 ---
 
@@ -163,6 +179,7 @@ built-in loop asks you directly before letting the call through.
 |---|---|
 | `HF_TOKEN` | Hugging Face token with write permission. Required. `HUGGING_FACE_HUB_TOKEN` also works, as does `hf auth login` (no variable needed). |
 | `INF_ROOT` | Where llama.cpp and the scratch tree live. Default `~/Documents/INF`. |
+| `AQX_VOICE_FIXTURES` | Override the licensed TTS prompt and ASR WAV fixture directory. |
 | `AQX_NAMESPACE` | Hub namespace to publish under. Defaults to whoever the token belongs to. |
 | `AQX_XET` | `auto` (default), `on` or `off`. Auto enables xet only for downloads over 46.6 GiB, where huggingface_hub requires it, and keeps uploads on the ~10x faster plain-HTTP path. You do not need to set `HF_HUB_DISABLE_XET` yourself. |
 | `KEEP_LOCAL_GGUF=1` | Do not delete quants after upload. Costs a lot of disk. |
@@ -190,6 +207,7 @@ src/agentquantix/
 ├── research.py       steps 1-3 end to end
 ├── report.py         the ranked table, the detail view, the markdown report
 ├── card.py           step 5: verification and the model card
+├── voice.py          voice registry, bundles, WAV gates, WER and voice cards
 ├── cli.py            aqx
 ├── mcp_server.py     MCP over stdio, no dependencies
 ├── pipeline/
@@ -197,10 +215,11 @@ src/agentquantix/
 │   ├── build.py      llama.cpp / fork builds
 │   ├── source.py     BF16 acquisition
 │   ├── imatrix.py    calibration, the forward pass, coverage gaps
-│   └── run.py        the orchestrator: overlap, delete-on-upload, resume
+│   ├── run.py        the text orchestrator: overlap, delete-on-upload, resume
+│   └── voice_release.py llama.cpp TTS and independent whisper.cpp ASR
 └── agent/
     ├── prompt.py     the system prompt, shared by every harness
-    ├── tools.py      the eight tools, defined once
+    ├── tools.py      the text and voice tools, defined once
     └── loop.py       the OpenAI-compatible loop for raw API keys
 ```
 

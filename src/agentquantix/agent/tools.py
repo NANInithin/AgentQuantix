@@ -21,9 +21,10 @@ Two rules the tool boundary enforces, regardless of harness:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from .. import card, config, feasibility, hub, report, research, sysprobe, voice
-from ..pipeline import run as run_mod
+from ..pipeline import run as run_mod, voice_release
 from ..pipeline.job import Job
 
 # =====================================================
@@ -58,9 +59,7 @@ TOOLS = [
             "architecture, check it against llama.cpp's supported list "
             "(hunting for a fork when it is not supported), and estimate "
             "disk, transfer and wall-clock time for a full quant sweep on "
-            "THIS machine. Also return the separate voice-model roadmap so "
-            "supported TTS work is not hidden by the text-only filter. "
-            "Read-only: downloads nothing, creates nothing. "
+            "THIS machine. Read-only: downloads nothing, creates nothing. "
             "Takes a minute or two for 100 models."),
         "input_schema": {
             "type": "object",
@@ -189,6 +188,63 @@ TOOLS = [
                 },
             },
             "required": ["models", "user_approved"],
+        },
+    },
+    {
+        "name": "plan_voice_release",
+        "description": (
+            "Plan a TTS or ASR release through the registered backend without "
+            "downloading, building, or publishing anything. Voice models must "
+            "use this tool instead of plan_quantization."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model": {"type": "string"},
+                "target_repo": {"type": "string"},
+                "quants": {"type": "array", "items": {"type": "string"}},
+                "language": {"type": "string"},
+                "speaker": {"type": "string"},
+            },
+            "required": ["model"],
+        },
+    },
+    {
+        "name": "start_voice_release",
+        "description": (
+            "Convert, quantize, validate and publish an explicitly approved "
+            "voice model. TTS publication is held until automated gates pass "
+            "and a human listening-review JSON accepts the candidate quant. "
+            "ASR uses its fixed corpus and WER regression gate."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model": {"type": "string"},
+                "target_repo": {"type": "string"},
+                "quants": {"type": "array", "items": {"type": "string"}},
+                "language": {"type": "string"},
+                "speaker": {"type": "string"},
+                "human_review": {"type": "string"},
+                "publish": {"type": "boolean", "default": True},
+                "user_approved": {"type": "boolean"},
+            },
+            "required": ["model", "user_approved"],
+        },
+    },
+    {
+        "name": "record_voice_review",
+        "description": (
+            "Record a user's explicit human listening decision for one TTS "
+            "quant after they have listened to the generated fixture WAVs."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model": {"type": "string"},
+                "quant": {"type": "string", "enum": list(voice.TTS_QUANTS)},
+                "accepted": {"type": "boolean"},
+                "reviewer": {"type": "string"},
+                "notes": {"type": "string"},
+            },
+            "required": ["model", "quant", "accepted", "reviewer"],
         },
     },
     {
@@ -330,6 +386,40 @@ def _options_from(arguments):
     return options
 
 
+def _voice_plan(arguments):
+    repo_id = arguments["model"]
+    allowed, reason, backend = voice.execution_gate(repo_id)
+    if not allowed:
+        raise ValueError(reason)
+    quants = list(arguments.get("quants") or backend.supported_quants)
+    unsupported = [quant for quant in quants
+                   if quant not in backend.supported_quants]
+    if unsupported:
+        raise ValueError(
+            f"{backend.id} does not support {unsupported}; choose from "
+            f"{list(backend.supported_quants)}")
+    suffix = "GGUF" if backend.model_format == "gguf" else "GGML"
+    return {
+        "model": repo_id,
+        "target_repo": arguments.get("target_repo") or
+                       f"{config.HF_NAMESPACE}/{repo_id.split('/')[-1]}-{suffix}",
+        "track": backend.track,
+        "backend": backend.id,
+        "runtime": backend.runtime,
+        "converter": backend.converter,
+        "model_format": backend.model_format,
+        "quants": quants,
+        "required_companions": list(backend.required_companions),
+        "speaker_reference": backend.speaker_reference,
+        "language": arguments.get("language"),
+        "speaker": arguments.get("speaker"),
+        "quality_gate": ("audio integrity, silence/clipping, ASR round-trip "
+                         "WER, then human listening review"
+                         if backend.track == voice.TTS else
+                         "fixed-corpus WER regression versus base precision"),
+    }
+
+
 def _assessments_for(models):
     """Assessments for named models, whether or not they were ever researched.
 
@@ -432,23 +522,25 @@ def call(name, arguments=None):
                 "table": report.table(result, limit=top)}
 
     if name == "describe_candidate":
-        if family := voice.family_for(arguments["model"]):
-            entry = next(item for item in voice.advisory_catalog()["candidates"]
-                         if item["family"] == family.name)
-            readiness = ("adapter preview is available"
-                         if entry["adapter_enabled"] else "support is planned")
-            return {
-                "text": (f"{entry['repo_id']} is a {entry['tier']} "
-                         f"{entry['modality']} model targeted for "
-                         f"{entry['release']}; {readiness}. {entry['note']}"),
-                "voice": entry,
-            }
+        if backend := voice.backend_for(arguments["model"]):
+            plan = _voice_plan({"model": arguments["model"]})
+            return {"text": (f"{arguments['model']} is a supported "
+                             f"{backend.track.upper()} model through "
+                             f"{backend.backend}; use plan_voice_release, not "
+                             "the text quantization pipeline."),
+                    "voice": plan}
         # Same rule as _assessments_for: a model the user names is assessed on
         # demand rather than refused for not being in a trending sweep.
         assessment = _assessments_for([arguments["model"]])[0]
         return {"text": report.detail(assessment), "assessment": assessment}
 
     if name == "plan_quantization":
+        voice_models = [model for model in arguments["models"]
+                        if voice.backend_for(model)]
+        if voice_models:
+            raise ValueError(
+                "voice models use plan_voice_release, not plan_quantization: "
+                + ", ".join(voice_models))
         assessments = _assessments_for(arguments["models"])
         blocked = [a for a in assessments if a["verdict"] == "blocked"]
         done = [a for a in assessments if a["verdict"] == "done"]
@@ -496,6 +588,12 @@ def call(name, arguments=None):
         }
 
     if name == "start_quantization":
+        voice_models = [model for model in arguments["models"]
+                        if voice.backend_for(model)]
+        if voice_models:
+            raise ValueError(
+                "voice models use start_voice_release, not the text pipeline: "
+                + ", ".join(voice_models))
         if not arguments.get("user_approved"):
             raise ValueError(
                 "start_quantization requires user_approved=true, and that is "
@@ -571,6 +669,38 @@ def call(name, arguments=None):
                 "failures": {name: result.get("failures")
                              for name, result in outcome["jobs"].items()
                              if result.get("failures")}}
+
+    if name == "plan_voice_release":
+        return _voice_plan(arguments)
+
+    if name == "record_voice_review":
+        path = (voice_release.work_dir(arguments["model"]) / "reviews"
+                / f"{arguments['quant']}.json")
+        voice.write_human_review(
+            path, quant=arguments["quant"], accepted=arguments["accepted"],
+            reviewer=arguments["reviewer"], notes=arguments.get("notes", ""))
+        return {"path": str(path), "recorded": True,
+                "accepted": bool(arguments["accepted"])}
+
+    if name == "start_voice_release":
+        if not arguments.get("user_approved"):
+            raise ValueError(
+                "start_voice_release requires user_approved=true after the "
+                "user sees plan_voice_release and explicitly approves it.")
+        plan = _voice_plan(arguments)
+        options = voice_release.VoiceReleaseOptions(
+            quants=plan["quants"], language=arguments.get("language"),
+            speaker=(Path(arguments["speaker"])
+                     if arguments.get("speaker") else None),
+            publish=arguments.get("publish", True),
+            human_review=(Path(arguments["human_review"])
+                          if arguments.get("human_review") else None),
+        )
+        if plan["track"] == voice.TTS:
+            return voice_release.run_tts_release(
+                plan["model"], plan["target_repo"], options)
+        return voice_release.run_asr_release(
+            plan["model"], plan["target_repo"], options)
 
     if name == "verify_published":
         repo = arguments["repo"]

@@ -49,16 +49,15 @@ build = ["ninja>=1.11"]
 # hard dependency -- but without it `aqx run` can only handle models that
 # already have an official GGUF.
 convert = ["torch>=2.0", "transformers>=4.40", "sentencepiece", "protobuf"]
-# The audited Qwen3-TTS adapter has its own converters. It uses the same torch
-# foundation as [convert], plus these explicit packages; the TTS runtime is a pinned
-# C++ checkout built on demand, not a Python dependency.
-voice-qwen = ["torch>=2.0", "numpy>=1.24", "safetensors>=0.4", "tqdm>=4.0", "gguf>=0.10"]
+# Voice conversion uses llama.cpp's current HF converter for TTS and
+# whisper.cpp's HF converter for ASR. Runtime inference remains native C++.
+voice = ["torch>=2.0", "transformers>=4.40", "safetensors>=0.4",
+         "sentencepiece", "protobuf"]
 dev = ["pytest>=8.0"]
 all = ["hf_xet>=1.0", "ninja>=1.11"]
 # Everything, conversion included. Large.
 full = ["hf_xet>=1.0", "ninja>=1.11", "torch>=2.0",
-        "transformers>=4.40", "sentencepiece", "protobuf", "numpy>=1.24",
-        "safetensors>=0.4", "tqdm>=4.0"]
+        "transformers>=4.40", "safetensors>=0.4", "sentencepiece", "protobuf"]
 
 [project.urls]
 Documentation = "https://github.com/NANInithin/AgentQuantix/blob/main/USAGE.md"
@@ -71,6 +70,9 @@ version = { attr = "agentquantix.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+agentquantix = ["fixtures/voice/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
