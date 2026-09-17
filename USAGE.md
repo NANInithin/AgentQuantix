@@ -298,9 +298,13 @@ listen to the samples and record a decision:
 aqx voice run Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M --no-publish -y
 aqx voice review Qwen/Qwen3-TTS-12Hz-1.7B-Base Q4_K_M \
   --reviewer "Your name" --accept --notes "Clear and correctly paced"
-aqx voice run Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M \
-  --review ~/.agentquantix/temp/voice/Qwen--Qwen3-TTS-12Hz-1.7B-Base/reviews/Q4_K_M.json -y
+aqx voice run Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M -y
 ```
+
+Recorded reviews are discovered automatically. A resumed run reuses its
+provenance-matched quality cache; releases created before that cache existed
+are rescored from the reviewed WAV and ASR artifacts without rerunning model
+inference. `--review` remains available as an explicit override.
 
 Pocket TTS additionally requires `--speaker <reference.wav>`. Whisper ASR is a
 separate whisper.cpp build and model format; it runs the committed 16 kHz PCM

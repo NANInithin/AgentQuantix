@@ -7,9 +7,10 @@ build, converter, model format, quantizer, and acceptance corpus.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,7 @@ from . import build as build_mod, sanity
 
 
 AUDIOCPP_REVISION = "v0.8.0"
+TTS_QUALITY_CACHE_SCHEMA = 1
 
 
 @dataclass
@@ -42,6 +44,17 @@ def _slug(repo_id: str) -> str:
 
 def work_dir(repo_id: str) -> Path:
     return config.TEMP_DIR / "voice" / _slug(repo_id)
+
+
+def _with_recorded_reviews(repo_id: str,
+                           options: VoiceReleaseOptions) -> VoiceReleaseOptions:
+    """Use reviews written by ``record_voice_review`` unless overridden."""
+    if options.human_review is not None:
+        return options
+    reviews = work_dir(repo_id) / "reviews"
+    if reviews.is_dir() and any(reviews.glob("*.json")):
+        return replace(options, human_review=reviews)
+    return options
 
 
 def _git_revision(directory: Path) -> str | None:
@@ -749,10 +762,120 @@ def _tiny_whisper() -> tuple[Path, Path]:
     return runtime, model
 
 
+def _path_stamp(path: Path | None) -> dict | None:
+    if path is None or not path.is_file():
+        return None
+    stat = path.stat()
+    return {"path": str(path.resolve()), "bytes": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns}
+
+
+def _tts_cache_inputs(bundle: voice.VoiceBundle, runtime: Path,
+                      asr_runtime: Path, asr_model: Path,
+                      fixtures: list[dict], options: VoiceReleaseOptions) -> dict:
+    return {
+        "schema": TTS_QUALITY_CACHE_SCHEMA,
+        "backend": bundle.backend.id,
+        "quant": bundle.quant,
+        "members": [_path_stamp(member.path) for member in bundle.members],
+        "runtime": _path_stamp(runtime),
+        "asr_runtime": _path_stamp(asr_runtime),
+        "asr_model": _path_stamp(asr_model),
+        "speaker": _path_stamp(options.speaker),
+        "language": options.language,
+        "max_roundtrip_wer": options.max_roundtrip_wer,
+        "fixtures": fixtures,
+    }
+
+
+def _aggregate_tts_quality(results: list[dict],
+                           max_roundtrip_wer: float) -> dict:
+    def average(key: str, digits: int):
+        values = [result.get(key) for result in results
+                  if isinstance(result.get(key), (int, float))]
+        return round(sum(values) / len(values), digits) if values else None
+
+    aggregate = {
+        "fixtures": len(results),
+        "intelligibility_metric": "WER for whitespace scripts; CER for CJK",
+        "roundtrip_wer": average("roundtrip_wer", 6),
+        "silence_ratio": round(max(r["silence_ratio"] for r in results), 6),
+        "clipping_ratio": round(max(r["clipping_ratio"] for r in results), 6),
+        "real_time_factor": average("real_time_factor", 4),
+        "frames_per_second": average("frames_per_second", 2),
+        "first_audio_seconds": average("first_output_seconds", 4),
+        "minutes_per_audio_hour": average("minutes_per_audio_hour", 2),
+    }
+    aggregate["passed"] = voice.quality_passed(aggregate, max_roundtrip_wer)
+    aggregate["results"] = results
+    return aggregate
+
+
+def _score_existing_tts_artifacts(bundle: voice.VoiceBundle,
+                                  fixtures: list[dict],
+                                  options: VoiceReleaseOptions,
+                                  quality_dir: Path,
+                                  review: dict | None = None) -> dict | None:
+    """Recheck legacy fixture artifacts without rerunning expensive inference.
+
+    This fallback is used only after an explicit human review exists. New runs
+    write a provenance-aware quality cache and resume from that instead.
+    """
+    newest_member = max(member.path.stat().st_mtime_ns
+                        for member in bundle.members)
+    results = []
+    for index, fixture in enumerate(fixtures):
+        stem = f"{index:02d}-{fixture['id']}"
+        output = quality_dir / f"{stem}.wav"
+        asr_audio = quality_dir / f"{stem}-16khz.wav"
+        prefix = quality_dir / f"{stem}-asr"
+        transcript_path = Path(str(prefix) + ".txt")
+        if not all(path.is_file()
+                   for path in (output, asr_audio, transcript_path)):
+            return None
+        if output.stat().st_mtime_ns < newest_member:
+            return None
+        words = max(1, len(voice.normalize_transcript(fixture["text"])))
+        generated = voice.validate_tts_audio(
+            output, min_seconds=max(0.15, words * 0.04),
+            max_seconds=min(180.0, max(4.0, words * 1.5)))
+        if (bundle.backend.sample_rate
+                and generated["sample_rate"] != bundle.backend.sample_rate):
+            return None
+        asr_facts = voice.inspect_wav(asr_audio)
+        if asr_facts["sample_rate"] != 16_000 or asr_facts["sample_width"] != 2:
+            return None
+        transcript = voice.read_whisper_transcript(prefix)
+        if not transcript:
+            return None
+        generated.update({
+            "id": fixture["id"], "text": fixture["text"],
+            "transcript": transcript,
+            "roundtrip_wer": round(
+                voice.word_error_rate(fixture["text"], transcript), 6),
+            "real_time_factor": None, "frames_per_second": None,
+            "first_output_seconds": None, "minutes_per_audio_hour": None,
+            "resumed_from_artifacts": True,
+        })
+        results.append(generated)
+    aggregate = _aggregate_tts_quality(results, options.max_roundtrip_wer)
+    notes = str((review or {}).get("notes", ""))
+    rtf = re.search(r"\bRTF\s+([0-9]+(?:\.[0-9]+)?)", notes,
+                    flags=re.IGNORECASE)
+    if rtf:
+        aggregate["real_time_factor"] = float(rtf.group(1))
+        aggregate["minutes_per_audio_hour"] = round(
+            aggregate["real_time_factor"] * 60, 2)
+        aggregate["performance_from_review"] = True
+    aggregate["resumed_from_artifacts"] = True
+    return aggregate
+
+
 def score_tts(bundle: voice.VoiceBundle, runtime: Path, options: VoiceReleaseOptions,
               fixtures: list[dict] | None = None,
               asr_runtime: Path | None = None,
-              asr_model: Path | None = None) -> dict:
+              asr_model: Path | None = None,
+              existing_review: dict | None = None) -> dict:
     fixtures = fixtures or load_fixtures(voice.TTS)
     fixtures = [fixture for fixture in fixtures
                 if bundle.backend.supports_language(fixture.get("language"))
@@ -764,6 +887,21 @@ def score_tts(bundle: voice.VoiceBundle, runtime: Path, options: VoiceReleaseOpt
         asr_runtime, asr_model = _tiny_whisper()
     quality_dir = bundle.primary.path.parent / "quality" / (bundle.quant or "base")
     quality_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = quality_dir / "quality-cache.json"
+    cache_inputs = _tts_cache_inputs(
+        bundle, Path(runtime), Path(asr_runtime), Path(asr_model), fixtures, options)
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        cached = None
+    if (isinstance(cached, dict) and cached.get("inputs") == cache_inputs
+            and isinstance(cached.get("quality"), dict)):
+        return cached["quality"]
+    if existing_review and existing_review.get("accepted"):
+        existing = _score_existing_tts_artifacts(
+            bundle, fixtures, options, quality_dir, existing_review)
+        if existing is not None:
+            return existing
     results = []
     for index, fixture in enumerate(fixtures):
         output = quality_dir / f"{index:02d}-{fixture['id']}.wav"
@@ -783,25 +921,10 @@ def score_tts(bundle: voice.VoiceBundle, runtime: Path, options: VoiceReleaseOpt
                           "transcript": transcribed["transcript"],
                           "roundtrip_wer": transcribed["wer"]})
         results.append(generated)
-    aggregate = {
-        "fixtures": len(results),
-        "intelligibility_metric": "WER for whitespace scripts; CER for CJK",
-        "roundtrip_wer": round(sum(r["roundtrip_wer"] for r in results)
-                                / len(results), 6),
-        "silence_ratio": round(max(r["silence_ratio"] for r in results), 6),
-        "clipping_ratio": round(max(r["clipping_ratio"] for r in results), 6),
-        "real_time_factor": round(sum(r["real_time_factor"] for r in results)
-                                  / len(results), 4),
-        "frames_per_second": round(sum(r["frames_per_second"] for r in results)
-                                   / len(results), 2),
-        "first_audio_seconds": round(sum(r["first_output_seconds"] for r in results)
-                                     / len(results), 4),
-        "minutes_per_audio_hour": round(
-            sum(r["minutes_per_audio_hour"] for r in results) / len(results), 2),
-    }
-    aggregate["passed"] = voice.quality_passed(
-        aggregate, options.max_roundtrip_wer)
-    aggregate["results"] = results
+    aggregate = _aggregate_tts_quality(results, options.max_roundtrip_wer)
+    cache_path.write_text(json.dumps({"inputs": cache_inputs, "quality": aggregate},
+                                     indent=2, sort_keys=True, default=str) + "\n",
+                          encoding="utf-8")
     return aggregate
 
 
@@ -974,6 +1097,16 @@ def _review_for(path: Path, quant: str) -> dict | None:
                  if isinstance(entry, dict) and entry.get("quant") == quant), None)
 
 
+def _review_skip_entry(review: dict | None) -> dict:
+    return {
+        "quality": None,
+        "published": False,
+        "reason": ("human listening review rejected this quant"
+                   if review is not None else
+                   "human listening review not recorded for this quant"),
+    }
+
+
 def _aggregate_bundles(bundles: list[voice.VoiceBundle]) -> voice.VoiceBundle:
     """One atomic publication containing every accepted quant variant."""
     if not bundles:
@@ -1021,6 +1154,12 @@ def run_audiocpp_tts_release(repo_id: str, target_repo: str,
     results = {}
     accepted = []
     for quant in options.quants or list(voice.available_quants(repo_id, backend)):
+        review = (_review_for(Path(options.human_review), quant)
+                  if options.human_review is not None else None)
+        if options.human_review is not None and (
+                review is None or not review.get("accepted")):
+            results[quant] = _review_skip_entry(review)
+            continue
         package_id = None
         runtime_model = None
         companions = ()
@@ -1059,7 +1198,9 @@ def run_audiocpp_tts_release(repo_id: str, target_repo: str,
             },
             runtime_model=runtime_model,
         )
-        quality = score_tts(bundle, runtime, options)
+        quality = score_tts(
+            bundle, runtime, options,
+            existing_review=review)
         bundle = voice.VoiceBundle(**{**bundle.__dict__, "quality": quality})
         entry = {"quality": quality, "feasibility": feasibility(bundle, quality)}
         if not quality["passed"]:
@@ -1069,14 +1210,9 @@ def run_audiocpp_tts_release(repo_id: str, target_repo: str,
             entry["published"] = False
             entry["reason"] = "human listening review required"
         else:
-            review = _review_for(Path(options.human_review), quant)
-            if not review or not review.get("accepted"):
-                entry["published"] = False
-                entry["reason"] = "human listening review did not accept this quant"
-            else:
-                accepted.append(bundle)
-                entry["published"] = False
-                entry["reason"] = "accepted and waiting for atomic bundle publication"
+            accepted.append(bundle)
+            entry["published"] = False
+            entry["reason"] = "accepted and waiting for atomic bundle publication"
         results[quant] = entry
     if accepted and options.publish:
         publication = publish_bundle(_aggregate_bundles(accepted), target_repo)
@@ -1090,7 +1226,8 @@ def run_audiocpp_tts_release(repo_id: str, target_repo: str,
 
 def run_tts_release(repo_id: str, target_repo: str,
                     options: VoiceReleaseOptions | None = None) -> dict:
-    options = options or VoiceReleaseOptions()
+    options = _with_recorded_reviews(
+        repo_id, options or VoiceReleaseOptions())
     selected = voice.backend_for(
         repo_id, track=voice.TTS, family=options.family)
     if selected is not None and selected.backend == "audio.cpp":
@@ -1109,6 +1246,12 @@ def run_tts_release(repo_id: str, target_repo: str,
         except Exception as error:
             imatrix_error = str(error)
     for quant in quants:
+        review = (_review_for(Path(options.human_review), quant)
+                  if options.human_review is not None else None)
+        if options.human_review is not None and (
+                review is None or not review.get("accepted")):
+            results[quant] = _review_skip_entry(review)
+            continue
         if quant in config.IMATRIX_REQUIRED and importance is None:
             results[quant] = {
                 "published": False,
@@ -1127,7 +1270,9 @@ def run_tts_release(repo_id: str, target_repo: str,
                            "speaker_reference": backend.speaker_reference,
                            "llama_cpp_revision": _git_revision(llama_dir)},
         )
-        quality = score_tts(bundle, runtime, options)
+        quality = score_tts(
+            bundle, runtime, options,
+            existing_review=review)
         bundle = voice.VoiceBundle(**{**bundle.__dict__, "quality": quality})
         entry = {"quality": quality, "feasibility": feasibility(bundle, quality)}
         if not quality["passed"]:
@@ -1137,14 +1282,9 @@ def run_tts_release(repo_id: str, target_repo: str,
             entry["published"] = False
             entry["reason"] = "human listening review required"
         else:
-            review = _review_for(Path(options.human_review), quant)
-            if not review or not review.get("accepted"):
-                entry["published"] = False
-                entry["reason"] = "human listening review did not accept this quant"
-            else:
-                accepted.append(bundle)
-                entry["published"] = False
-                entry["reason"] = "accepted and waiting for atomic bundle publication"
+            accepted.append(bundle)
+            entry["published"] = False
+            entry["reason"] = "accepted and waiting for atomic bundle publication"
         results[quant] = entry
     if accepted and options.publish:
         publication = publish_bundle(_aggregate_bundles(accepted), target_repo)

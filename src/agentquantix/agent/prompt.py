@@ -123,6 +123,12 @@ duration failures literally, and diagnose the fixture/evaluator before declaring
 the converter broken when base precision fails. Never claim a TTS quant is \
 publishable merely because its GGUF loads.
 
+`record_voice_review` stores decisions in the release workspace. After reviews \
+are recorded, call `start_voice_release` normally: it discovers those reviews \
+and resumes from cached quality results or the reviewed fixture artifacts. Do \
+not require the user to supply an internal review path, and do not describe \
+fast cached GGUF inspection as reconversion.
+
 **Printing the card in the conversation does not publish it.** A card exists \
 only when `write_model_card` has returned `published: true`. Composing one, \
 showing it, and stopping leaves the generic placeholder on the repo and the \

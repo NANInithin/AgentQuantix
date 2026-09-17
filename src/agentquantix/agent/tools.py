@@ -220,6 +220,8 @@ TOOLS = [
             "Convert, quantize, validate and publish an explicitly approved "
             "voice model. TTS publication is held until automated gates pass "
             "and a human listening-review JSON accepts the candidate quant. "
+            "Reviews recorded with record_voice_review are auto-discovered; "
+            "resume reuses cached scores or reviewed fixture artifacts. "
             "ASR uses its fixed corpus and WER/CER regression gate."),
         "input_schema": {
             "type": "object",

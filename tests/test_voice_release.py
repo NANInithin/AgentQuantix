@@ -1,9 +1,26 @@
 """Offline orchestration tests for the llama.cpp and whisper.cpp tracks."""
 
+import math
+import wave
+
 import pytest
 
 from agentquantix import voice
 from agentquantix.pipeline import voice_release
+
+
+def _wav(path, *, seconds=0.5, rate=16_000, amplitude=0.25):
+    frames = int(seconds * rate)
+    samples = bytearray()
+    for index in range(frames):
+        value = int(amplitude * 32767 * math.sin(
+            2 * math.pi * 440 * index / rate))
+        samples.extend(value.to_bytes(2, "little", signed=True))
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(rate)
+        output.writeframes(bytes(samples))
 
 
 def test_fixture_pack_covers_required_tts_cases():
@@ -22,6 +39,108 @@ def test_asr_fixture_has_expected_transcript_and_audio():
     fixture = voice_release.load_fixtures(voice.ASR)[0]
     assert fixture["transcript"].startswith("And so my fellow Americans")
     assert (voice_release.config.VOICE_FIXTURES_DIR / fixture["audio"]).is_file()
+
+
+def test_recorded_reviews_are_auto_discovered(tmp_path, monkeypatch):
+    monkeypatch.setattr(voice_release.config, "TEMP_DIR", tmp_path)
+    options = voice_release.VoiceReleaseOptions()
+    assert voice_release._with_recorded_reviews("org/model", options) is options
+
+    reviews = voice_release.work_dir("org/model") / "reviews"
+    voice.write_human_review(
+        reviews / "Q4_K.json", quant="Q4_K", accepted=True,
+        reviewer="Nithin")
+    discovered = voice_release._with_recorded_reviews("org/model", options)
+    assert discovered.human_review == reviews
+
+
+def test_reviewed_legacy_tts_artifacts_resume_without_inference(
+        tmp_path, monkeypatch):
+    backend = voice.backend_for("openbmb/VoxCPM2")
+    models = tmp_path / "models"
+    models.mkdir()
+    primary = models / "voxcpm2-Q4_K.gguf"
+    primary.write_bytes(b"model")
+    bundle = voice.VoiceBundle(
+        backend=backend,
+        primary=voice.BundleMember(primary, "primary", quant="Q4_K"),
+        source_repo="openbmb/VoxCPM2", source_revision="abc", quant="Q4_K")
+    quality = models / "quality" / "Q4_K"
+    quality.mkdir(parents=True)
+    _wav(quality / "00-short-en.wav", rate=24_000)
+    _wav(quality / "00-short-en-16khz.wav", rate=16_000)
+    (quality / "00-short-en-asr.txt").write_text(
+        "Hello world\n", encoding="utf-8")
+    runtime, asr_runtime, asr_model = (
+        tmp_path / "audiocpp_cli", tmp_path / "whisper-cli",
+        tmp_path / "ggml-tiny.bin")
+    for path in (runtime, asr_runtime, asr_model):
+        path.write_bytes(b"tool")
+
+    monkeypatch.setattr(
+        voice_release.sanity, "validate_tts_runtime",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("reviewed resume reran TTS inference")))
+    result = voice_release.score_tts(
+        bundle, runtime, voice_release.VoiceReleaseOptions(),
+        fixtures=[{"id": "short-en", "text": "Hello world", "language": "en"}],
+        asr_runtime=asr_runtime, asr_model=asr_model,
+        existing_review={"accepted": True, "notes": "Automated gate: RTF 5.0"})
+
+    assert result["passed"] is True
+    assert result["roundtrip_wer"] == 0
+    assert result["resumed_from_artifacts"] is True
+    assert result["real_time_factor"] == 5.0
+    assert result["minutes_per_audio_hour"] == 300.0
+    assert result["performance_from_review"] is True
+
+
+def test_tts_quality_cache_skips_repeated_inference(tmp_path, monkeypatch):
+    backend = voice.backend_for("openbmb/VoxCPM2")
+    models = tmp_path / "models"
+    models.mkdir()
+    primary = models / "voxcpm2-Q8_0.gguf"
+    primary.write_bytes(b"model")
+    bundle = voice.VoiceBundle(
+        backend=backend,
+        primary=voice.BundleMember(primary, "primary", quant="Q8_0"),
+        source_repo="openbmb/VoxCPM2", source_revision="abc", quant="Q8_0")
+    runtime, asr_runtime, asr_model = (
+        tmp_path / "audiocpp_cli", tmp_path / "whisper-cli",
+        tmp_path / "ggml-tiny.bin")
+    for path in (runtime, asr_runtime, asr_model):
+        path.write_bytes(b"tool")
+    calls = {"tts": 0, "asr": 0}
+
+    def synthesize(_runtime, _bundle, _text, output, **_kwargs):
+        calls["tts"] += 1
+        _wav(output, rate=24_000)
+        return {"elapsed_seconds": 1.0, "first_output_seconds": 0.1,
+                "seconds": 0.5, "sample_rate": 24_000, "sample_width": 2,
+                "channels": 1, "frames": 12_000, "rms": 0.1,
+                "silence_ratio": 0.0, "clipping_ratio": 0.0,
+                "real_time_factor": 2.0, "minutes_per_audio_hour": 120.0,
+                "frames_per_second": 12_000.0}
+
+    def transcribe(*_args, **_kwargs):
+        calls["asr"] += 1
+        return {"transcript": "Hello world", "wer": 0.0}
+
+    monkeypatch.setattr(voice_release.sanity, "validate_tts_runtime", synthesize)
+    monkeypatch.setattr(voice_release.sanity, "validate_asr_runtime", transcribe)
+    kwargs = {
+        "fixtures": [{"id": "short-en", "text": "Hello world",
+                      "language": "en"}],
+        "asr_runtime": asr_runtime,
+        "asr_model": asr_model,
+    }
+    first = voice_release.score_tts(
+        bundle, runtime, voice_release.VoiceReleaseOptions(), **kwargs)
+    second = voice_release.score_tts(
+        bundle, runtime, voice_release.VoiceReleaseOptions(), **kwargs)
+
+    assert first == second
+    assert calls == {"tts": 1, "asr": 1}
 
 
 def test_source_preflight_returns_revision_and_size():
