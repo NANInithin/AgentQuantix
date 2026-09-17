@@ -73,21 +73,49 @@ def _cmake_build(directory: Path, targets: tuple[str, ...]) -> None:
                        build_mod.build_jobs()])
 
 
-def ensure_whisper_tools() -> tuple[Path, Path, Path]:
-    """Build/cache whisper.cpp independently of llama.cpp."""
+def ensure_whisper_runtime() -> tuple[Path, Path]:
+    """Build/cache only whisper-cli, which is all TTS scoring requires."""
     directory = config.UPSTREAM_WHISPER
     if not directory.exists():
         directory.parent.mkdir(parents=True, exist_ok=True)
         build_mod.run(["git", "clone", "https://github.com/ggml-org/whisper.cpp.git",
                        directory])
     runtime = build_mod.find_binary(directory, "whisper-cli")
-    quantize = build_mod.find_binary(directory, "quantize")
-    if runtime is None or quantize is None:
-        _cmake_build(directory, ("whisper-cli", "quantize"))
+    if runtime is None:
+        _cmake_build(directory, ("whisper-cli",))
         runtime = build_mod.find_binary(directory, "whisper-cli")
-        quantize = build_mod.find_binary(directory, "quantize")
-    if runtime is None or quantize is None:
-        raise RuntimeError("whisper.cpp build did not produce whisper-cli and quantize")
+    if runtime is None:
+        raise RuntimeError("whisper.cpp build did not produce whisper-cli")
+    return directory, runtime
+
+
+def _whisper_quantizer_target(directory: Path) -> str:
+    """Return the CMake target used by this whisper.cpp checkout."""
+    cmake_file = directory / "examples" / "quantize" / "CMakeLists.txt"
+    try:
+        content = cmake_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        content = ""
+    return "whisper-quantize" if "whisper-quantize" in content else "quantize"
+
+
+def _find_whisper_quantizer(directory: Path) -> Path | None:
+    # Current whisper.cpp calls both the target and executable
+    # ``whisper-quantize``; older releases emitted ``quantize``.
+    return (build_mod.find_binary(directory, "whisper-quantize")
+            or build_mod.find_binary(directory, "quantize"))
+
+
+def ensure_whisper_tools() -> tuple[Path, Path, Path]:
+    """Return whisper-cli plus the version-appropriate ASR quantizer."""
+    directory, runtime = ensure_whisper_runtime()
+    quantize = _find_whisper_quantizer(directory)
+    if quantize is None:
+        _cmake_build(directory, (_whisper_quantizer_target(directory),))
+        quantize = _find_whisper_quantizer(directory)
+    if quantize is None:
+        raise RuntimeError(
+            "whisper.cpp build did not produce whisper-quantize or quantize")
     return directory, runtime, quantize
 
 
@@ -282,7 +310,7 @@ def load_fixtures(track: str, directory: Path | None = None) -> list[dict]:
 
 
 def _tiny_whisper() -> tuple[Path, Path]:
-    _, runtime, _ = ensure_whisper_tools()
+    _, runtime = ensure_whisper_runtime()
     from huggingface_hub import hf_hub_download
     model = Path(hf_hub_download(
         repo_id="ggerganov/whisper.cpp", filename="ggml-tiny.bin",

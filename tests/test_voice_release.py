@@ -51,6 +51,46 @@ def test_source_preflight_reports_inaccessible_registered_repo():
         voice_release.source_metadata("openai/whisper-small", api=Api())
 
 
+def test_tts_whisper_setup_requires_only_runtime(tmp_path, monkeypatch):
+    runtime = tmp_path / "build" / "bin" / "whisper-cli"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_bytes(b"runtime")
+    monkeypatch.setattr(voice_release.config, "UPSTREAM_WHISPER", tmp_path)
+    monkeypatch.setattr(
+        voice_release.build_mod, "find_binary",
+        lambda directory, name: runtime if name == "whisper-cli" else None)
+    monkeypatch.setattr(
+        voice_release, "_cmake_build",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("runtime-only setup tried to build a quantizer")))
+    directory, found = voice_release.ensure_whisper_runtime()
+    assert directory == tmp_path and found == runtime
+
+
+def test_asr_setup_uses_current_whisper_quantizer_target(tmp_path, monkeypatch):
+    cmake = tmp_path / "examples" / "quantize" / "CMakeLists.txt"
+    cmake.parent.mkdir(parents=True)
+    cmake.write_text("set(TARGET whisper-quantize)\n", encoding="utf-8")
+    runtime, quantizer = tmp_path / "whisper-cli", tmp_path / "whisper-quantize"
+    built = {"quantizer": False}
+    monkeypatch.setattr(
+        voice_release, "ensure_whisper_runtime", lambda: (tmp_path, runtime))
+
+    def find_binary(directory, name):
+        if name == "whisper-quantize" and built["quantizer"]:
+            return quantizer
+        return None
+
+    def build(directory, targets):
+        assert directory == tmp_path
+        assert targets == ("whisper-quantize",)
+        built["quantizer"] = True
+
+    monkeypatch.setattr(voice_release.build_mod, "find_binary", find_binary)
+    monkeypatch.setattr(voice_release, "_cmake_build", build)
+    assert voice_release.ensure_whisper_tools() == (tmp_path, runtime, quantizer)
+
+
 def test_tts_quantizer_rejects_lower_bit_sweep(tmp_path, monkeypatch):
     base = tmp_path / "model-BF16.gguf"
     base.write_bytes(b"base")

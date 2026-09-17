@@ -42,6 +42,10 @@ is not publishable when conversion omits its mmproj, runtime inference fails,
 the WAV gate fails, ASR round-trip WER exceeds the configured threshold, or the
 human review rejects the candidate quant.
 
+The round-trip gate requires only whisper.cpp's `whisper-cli`. It does not
+build the ASR-only quantizer; current whisper.cpp names that CMake target and
+binary `whisper-quantize`, while older checkouts used `quantize`.
+
 ## Publication contract
 
 All model members, `bundle.json`, `quality.json`, and the voice-specific model

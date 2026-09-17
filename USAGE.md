@@ -293,7 +293,8 @@ aqx voice run Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M \
 Pocket TTS additionally requires `--speaker <reference.wav>`. Whisper ASR is a
 separate whisper.cpp build and model format; it runs the committed 16 kHz PCM
 fixture corpus and rejects a quant whose WER regresses beyond the configured
-limit:
+limit. TTS round-trip scoring builds only `whisper-cli`; the version-specific
+`whisper-quantize` tool is built only for an actual ASR release:
 
 ```powershell
 aqx voice run openai/whisper-small --quant q5_0 -y
