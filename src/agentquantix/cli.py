@@ -402,6 +402,7 @@ def cmd_card(args):
 # =====================================================
 def _voice_plan(repo_id, target_repo=None, quants=None):
     from . import voice
+    from .pipeline import voice_release
 
     allowed, reason, backend = voice.execution_gate(repo_id)
     if not allowed:
@@ -413,6 +414,7 @@ def _voice_plan(repo_id, target_repo=None, quants=None):
         raise ValueError(
             f"{backend.id} does not support {unsupported}; choose from "
             f"{list(backend.supported_quants)}")
+    source = voice_release.source_metadata(repo_id)
     suffix = "GGUF" if backend.model_format == "gguf" else "GGML"
     return {
         "source": repo_id,
@@ -426,6 +428,9 @@ def _voice_plan(repo_id, target_repo=None, quants=None):
         "required_companions": list(backend.required_companions),
         "speaker_reference": backend.speaker_reference,
         "sample_rate": backend.sample_rate,
+        "source_revision": source["revision"],
+        "source_bytes": source["source_bytes"],
+        "source_gated": source["gated"],
         "quality_gate": ("WAV integrity + silence/clipping + ASR round-trip WER + "
                          "human listening review" if backend.track == voice.TTS
                          else "fixed-corpus WER regression versus the base model"),

@@ -49,12 +49,19 @@ def test_registry_splits_tts_and_asr_and_uses_native_quants():
     assert whisper.supported_quants == voice.WHISPER_QUANTS
     assert voice.backend_for("ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF") is None
     assert voice.backend_for("ggerganov/whisper.cpp") is None
+    assert voice.backend_for("Qwen/Qwen3-TTS-1.7B") is None
+    assert voice.advisory_catalog()["candidates"][0]["repo_id"] == (
+        "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
 
 
 def test_unknown_family_is_not_allowed_to_fall_through():
     allowed, reason, backend = voice.execution_gate("org/unknown-speech")
     assert not allowed and backend is None
     assert "converter" in reason and "quality gate" in reason
+
+    allowed, reason, backend = voice.execution_gate("Qwen/Qwen3-TTS-1.7B")
+    assert not allowed and backend is None
+    assert "Qwen/Qwen3-TTS-12Hz-1.7B-Base" in reason
 
 
 def test_bundle_requires_companions_and_is_stable(tmp_path):
@@ -170,6 +177,17 @@ def test_audio_gate_accepts_signal_and_rejects_silence_and_clipping(tmp_path):
         output.writeframes((32767).to_bytes(2, "little", signed=True) * 4000)
     with pytest.raises(voice.VoiceValidationError, match="clipped"):
         voice.validate_tts_audio(clipped)
+
+
+def test_tts_audio_is_resampled_to_whisper_contract(tmp_path):
+    source, destination = tmp_path / "tts.wav", tmp_path / "asr.wav"
+    _wav(source, seconds=1, rate=24_000)
+    voice.resample_pcm16_wav(source, destination)
+    facts = voice.inspect_wav(destination)
+    assert facts["sample_rate"] == 16_000
+    assert facts["sample_width"] == 2
+    assert facts["channels"] == 1
+    assert facts["seconds"] == pytest.approx(1, abs=0.001)
 
 
 def test_wer_and_regression_gate_are_deterministic():

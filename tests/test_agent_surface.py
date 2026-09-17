@@ -80,10 +80,23 @@ def test_describe_voice_model_uses_the_backend_registry(monkeypatch):
         tools_mod, "_assessments_for",
         lambda models: (_ for _ in ()).throw(
             AssertionError("voice model entered text assessment")))
+    monkeypatch.setattr(
+        tools_mod.voice_release, "source_metadata",
+        lambda model: {"revision": "abc", "source_bytes": 123,
+                       "gated": False})
     result = tools_mod.call(
         "describe_candidate", {"model": "Qwen/Qwen3-TTS-12Hz-1.7B-Base"})
     assert result["voice"]["backend"] == "llama-qwen3-tts"
     assert result["voice"]["runtime"] == "llama-tts"
+
+
+def test_voice_plan_rejects_invented_qwen_repo_before_hub_access(monkeypatch):
+    monkeypatch.setattr(
+        tools_mod.voice_release, "source_metadata",
+        lambda model: (_ for _ in ()).throw(
+            AssertionError("invalid repo reached Hub preflight")))
+    with pytest.raises(ValueError, match="Qwen3-TTS-12Hz-1.7B-Base"):
+        tools_mod.call("plan_voice_release", {"model": "Qwen/Qwen3-TTS-1.7B"})
 
 
 def test_text_tools_reject_registered_voice_models():

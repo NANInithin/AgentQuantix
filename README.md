@@ -135,7 +135,9 @@ it and quietly find fewer leads.
 
 Voice releases are split into two runtime tracks:
 
-- Qwen3-TTS and Pocket TTS use llama.cpp's `llama-tts`, GGUF primary models,
+- The validated Qwen3-TTS source is
+  `Qwen/Qwen3-TTS-12Hz-1.7B-Base`; it and Pocket TTS use llama.cpp's
+  `llama-tts`, GGUF primary models,
   required mmproj companions, audio-aware fixtures, ASR round-trip WER, and a
   human listening gate.
 - Whisper ASR uses a separately cached whisper.cpp build, its native GGML

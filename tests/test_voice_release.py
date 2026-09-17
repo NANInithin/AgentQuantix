@@ -21,6 +21,36 @@ def test_asr_fixture_has_expected_transcript_and_audio():
     assert (voice_release.config.VOICE_FIXTURES_DIR / fixture["audio"]).is_file()
 
 
+def test_source_preflight_returns_revision_and_size():
+    class Sibling:
+        size = 42
+        lfs = None
+
+    class Info:
+        sha = "revision"
+        gated = False
+        private = False
+        siblings = [Sibling(), Sibling()]
+
+    class Api:
+        def model_info(self, *_args, **_kwargs):
+            return Info()
+
+    result = voice_release.source_metadata(
+        "Qwen/Qwen3-TTS-12Hz-1.7B-Base", api=Api())
+    assert result["revision"] == "revision"
+    assert result["source_bytes"] == 84
+
+
+def test_source_preflight_reports_inaccessible_registered_repo():
+    class Api:
+        def model_info(self, *_args, **_kwargs):
+            raise RuntimeError("404 Repository Not Found")
+
+    with pytest.raises(voice.VoiceValidationError, match="not accessible"):
+        voice_release.source_metadata("openai/whisper-small", api=Api())
+
+
 def test_tts_quantizer_rejects_lower_bit_sweep(tmp_path, monkeypatch):
     base = tmp_path / "model-BF16.gguf"
     base.write_bytes(b"base")

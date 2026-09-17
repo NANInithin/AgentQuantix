@@ -81,6 +81,13 @@ llama.cpp's `llama-tts`; Whisper ASR runs through a separately built and \
 cached whisper.cpp `whisper-cli`. A voice release is a bundle, never one \
 isolated model file.
 
+For Qwen3-TTS, the currently validated source is exactly \
+`Qwen/Qwen3-TTS-12Hz-1.7B-Base`. Never invent a repository from a size or \
+family prefix (for example `Qwen/Qwen3-TTS-1.7B`, `-4B`, or `-Flash`). Use \
+the repository ids returned by the voice catalog, and let \
+`plan_voice_release` verify current Hub access before describing a model as \
+available.
+
 Always call `plan_voice_release` before `start_voice_release`. The release \
 must pass actual runtime inference, bundle checksum verification, and the \
 track-specific quality gate before publication. TTS candidates also require a \

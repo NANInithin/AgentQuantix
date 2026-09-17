@@ -8,6 +8,7 @@ GGML model format.
 
 from __future__ import annotations
 
+from array import array
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -16,6 +17,7 @@ import math
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import wave
@@ -25,6 +27,7 @@ TTS = "tts"
 ASR = "asr"
 TTS_QUANTS = ("Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M")
 WHISPER_QUANTS = ("q8_0", "q5_0", "q4_0")
+QWEN3_TTS_SOURCE_REPOS = ("Qwen/Qwen3-TTS-12Hz-1.7B-Base",)
 
 
 class VoiceValidationError(RuntimeError):
@@ -51,6 +54,8 @@ class VoiceBackend:
     model_format: str
     repo_prefixes: tuple[str, ...]
     supported_quants: tuple[str, ...]
+    repo_ids: tuple[str, ...] = ()
+    example_repos: tuple[str, ...] = ()
     companions: tuple[CompanionSpec, ...] = ()
     languages: tuple[str, ...] = ()
     sample_rate: int = 0
@@ -60,8 +65,14 @@ class VoiceBackend:
 
     def matches(self, repo_id: str) -> bool:
         value = (repo_id or "").casefold()
-        return any(value.startswith(prefix.casefold())
-                   for prefix in self.repo_prefixes)
+        return (any(value == candidate.casefold() for candidate in self.repo_ids)
+                or any(value.startswith(prefix.casefold())
+                       for prefix in self.repo_prefixes))
+
+    @property
+    def catalog_repo(self) -> str:
+        candidates = self.example_repos or self.repo_ids or self.repo_prefixes
+        return candidates[0]
 
     @property
     def required_companions(self) -> tuple[str, ...]:
@@ -77,9 +88,10 @@ BACKENDS = (
         converter="convert_hf_to_gguf.py",
         runtime="llama-tts",
         model_format="gguf",
-        # Converter inputs only. Pre-converted ggml-org bundles have a
-        # different import contract and are intentionally not matched here.
-        repo_prefixes=("Qwen/Qwen3-TTS-",),
+        # llama.cpp's converter and TTS documentation currently demonstrate
+        # this exact Base checkpoint. Do not infer support from a family prefix.
+        repo_prefixes=(),
+        repo_ids=QWEN3_TTS_SOURCE_REPOS,
         supported_quants=TTS_QUANTS,
         companions=(CompanionSpec(
             "mmproj", True, "Audio tokenizer/projector GGUF used by libmtmd"),),
@@ -96,7 +108,8 @@ BACKENDS = (
         converter="convert_hf_to_gguf.py",
         runtime="llama-tts",
         model_format="gguf",
-        repo_prefixes=("kyutai/pocket-tts",),
+        repo_prefixes=(),
+        repo_ids=("kyutai/pocket-tts",),
         supported_quants=TTS_QUANTS,
         companions=(CompanionSpec(
             "mmproj", True, "Pocket TTS codec/projector GGUF"),),
@@ -114,6 +127,7 @@ BACKENDS = (
         runtime="whisper-cli",
         model_format="whisper-ggml-bin",
         repo_prefixes=("openai/whisper-",),
+        example_repos=("openai/whisper-small",),
         supported_quants=WHISPER_QUANTS,
         languages=("multilingual",),
         sample_rate=16_000,
@@ -139,6 +153,10 @@ def backend_named(name: str) -> VoiceBackend:
 def execution_gate(repo_id: str, track: str | None = None):
     backend = backend_for(repo_id, track=track)
     if backend is None:
+        if (repo_id or "").casefold().startswith("qwen/qwen3-tts"):
+            supported = ", ".join(QWEN3_TTS_SOURCE_REPOS)
+            return False, (f"{repo_id} is not a supported Qwen3-TTS source. "
+                           f"Use the exact documented checkpoint: {supported}."), None
         return False, (f"{repo_id} has no registered voice backend; add a "
                        "converter, bundle contract, runtime, and quality gate."), None
     if not backend.enabled:
@@ -163,7 +181,8 @@ def advisory_catalog() -> dict:
             "milestone": backend.milestone,
             "status": "supported" if backend.enabled else "disabled",
             "agent_run_available": backend.enabled,
-            "repo_id": backend.repo_prefixes[0],
+            "repo_id": backend.catalog_repo,
+            "supported_repos": list(backend.repo_ids),
         } for backend in BACKENDS],
     }
 
@@ -414,6 +433,59 @@ def validate_tts_audio(path: Path | str, *, min_seconds: float = 0.15,
     if facts["clipping_ratio"] > max_clipping:
         raise VoiceValidationError("TTS output is clipped")
     return facts
+
+
+def resample_pcm16_wav(source: Path | str, destination: Path | str,
+                       target_rate: int = 16_000) -> Path:
+    """Write a mono 16-bit PCM WAV suitable for whisper.cpp.
+
+    TTS backends emit 24 kHz audio, while whisper.cpp's command-line examples
+    and our ASR contract use 16 kHz PCM. A small linear resampler keeps this
+    mandatory quality path dependency-free and deterministic in CI.
+    """
+    source, destination = Path(source), Path(destination)
+    try:
+        with wave.open(str(source), "rb") as input_wav:
+            if input_wav.getcomptype() != "NONE" or input_wav.getsampwidth() != 2:
+                raise VoiceValidationError(
+                    "ASR round-trip resampling requires 16-bit PCM WAV input")
+            channels = input_wav.getnchannels()
+            source_rate = input_wav.getframerate()
+            frames = input_wav.getnframes()
+            samples = array("h")
+            samples.frombytes(input_wav.readframes(frames))
+    except (wave.Error, EOFError) as error:
+        raise VoiceValidationError(f"cannot resample invalid WAV {source}: {error}") \
+            from error
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if channels < 1 or source_rate < 1 or not samples:
+        raise VoiceValidationError(f"cannot resample empty WAV: {source}")
+    mono = ([int(sum(samples[offset:offset + channels]) / channels)
+             for offset in range(0, len(samples), channels)]
+            if channels > 1 else list(samples))
+    output_count = max(1, round(len(mono) * target_rate / source_rate))
+    if output_count == 1 or len(mono) == 1:
+        converted = array("h", [mono[0]])
+    else:
+        scale = (len(mono) - 1) / (output_count - 1)
+        converted = array("h")
+        for index in range(output_count):
+            position = index * scale
+            left = int(position)
+            right = min(left + 1, len(mono) - 1)
+            fraction = position - left
+            converted.append(round(mono[left] * (1 - fraction)
+                                   + mono[right] * fraction))
+    if sys.byteorder != "little":
+        converted.byteswap()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(destination), "wb") as output_wav:
+        output_wav.setnchannels(1)
+        output_wav.setsampwidth(2)
+        output_wav.setframerate(target_rate)
+        output_wav.writeframes(converted.tobytes())
+    return destination
 
 
 def run_checked(command: list[str], *, output: Path | None = None,

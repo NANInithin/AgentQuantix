@@ -398,6 +398,7 @@ def _voice_plan(arguments):
         raise ValueError(
             f"{backend.id} does not support {unsupported}; choose from "
             f"{list(backend.supported_quants)}")
+    source = voice_release.source_metadata(repo_id)
     suffix = "GGUF" if backend.model_format == "gguf" else "GGML"
     return {
         "model": repo_id,
@@ -413,6 +414,9 @@ def _voice_plan(arguments):
         "speaker_reference": backend.speaker_reference,
         "language": arguments.get("language"),
         "speaker": arguments.get("speaker"),
+        "source_revision": source["revision"],
+        "source_bytes": source["source_bytes"],
+        "source_gated": source["gated"],
         "quality_gate": ("audio integrity, silence/clipping, ASR round-trip "
                          "WER, then human listening review"
                          if backend.track == voice.TTS else

@@ -4,7 +4,9 @@
 
 AgentQuantix supports Qwen3-TTS through upstream llama.cpp. The former pinned
 `predict-woo/qwen3-tts.cpp` adapter and `qwen3-tts-cli` runtime are not part of
-the release architecture.
+the release architecture. The initial validated source is exactly
+`Qwen/Qwen3-TTS-12Hz-1.7B-Base`; family-name and size-only aliases are rejected
+because several upstream 1.7B variants exist and have different semantics.
 
 | Property | Contract |
 | --- | --- |

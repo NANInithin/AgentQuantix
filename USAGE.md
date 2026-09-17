@@ -270,11 +270,17 @@ aqx voice plan Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M
 aqx voice plan openai/whisper-small --quant q5_0
 ```
 
+Planning verifies the repository against the Hub and records its exact source
+revision and byte size. Family or size-only aliases such as
+`Qwen/Qwen3-TTS-1.7B` are deliberately rejected because they are not real,
+unambiguous source repositories.
+
 TTS uses llama.cpp's `llama-tts`. A run converts the primary model and mmproj,
 builds the conservative Q8_0/Q6_K/Q5_K_M/Q4_K_M candidates, generates the
 licensed fixture prompts, rejects invalid/silent/clipped audio, and measures
-ASR round-trip WER. It stops before publication until you listen to the
-generated samples and record a decision:
+ASR round-trip WER. Generated 24 kHz TTS audio is deterministically resampled
+to the 16 kHz PCM input required by the Whisper gate. It stops before
+publication until you listen to the generated samples and record a decision:
 
 ```powershell
 aqx voice run Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M --no-publish -y

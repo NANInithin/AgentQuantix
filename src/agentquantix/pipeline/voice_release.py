@@ -101,6 +101,37 @@ def _snapshot(repo_id: str, destination: Path) -> tuple[Path, str | None]:
     return destination, revision
 
 
+def source_metadata(repo_id: str, api=None) -> dict:
+    """Verify that a planned voice source exists and is readable now."""
+    backend = voice.backend_for(repo_id)
+    if backend is None:
+        allowed, reason, _ = voice.execution_gate(repo_id)
+        assert not allowed
+        raise voice.VoiceValidationError(reason)
+    if api is None:
+        from huggingface_hub import HfApi
+        api = HfApi(token=config.TOKEN)
+    try:
+        info = api.model_info(repo_id, files_metadata=True, token=config.TOKEN)
+    except Exception as error:
+        detail = str(error).splitlines()[0] if str(error) else type(error).__name__
+        raise voice.VoiceValidationError(
+            f"registered voice source is not accessible: {repo_id}. "
+            f"Check the exact repo id and gated/private access. {detail}") from error
+    total = 0
+    for sibling in getattr(info, "siblings", ()) or ():
+        lfs = getattr(sibling, "lfs", None) or {}
+        total += (getattr(sibling, "size", None)
+                  or (lfs.get("size") if isinstance(lfs, dict) else 0) or 0)
+    return {
+        "repo_id": repo_id,
+        "revision": getattr(info, "sha", None),
+        "source_bytes": total or None,
+        "gated": bool(getattr(info, "gated", False)),
+        "private": bool(getattr(info, "private", False)),
+    }
+
+
 def _converter_requirements() -> list[str]:
     missing = []
     for package in ("torch", "transformers", "safetensors"):
@@ -283,9 +314,12 @@ def score_tts(bundle: voice.VoiceBundle, runtime: Path, options: VoiceReleaseOpt
             runtime, bundle, fixture["text"], output,
             language=fixture.get("language") or options.language,
             speaker=options.speaker, timeout=options.runtime_timeout)
+        asr_audio = quality_dir / f"{index:02d}-{fixture['id']}-16khz.wav"
+        asr_audio.unlink(missing_ok=True)
+        voice.resample_pcm16_wav(output, asr_audio)
         prefix = quality_dir / f"{index:02d}-{fixture['id']}-asr"
         transcribed = sanity.validate_asr_runtime(
-            asr_runtime, asr_model, output, fixture["text"], prefix,
+            asr_runtime, asr_model, asr_audio, fixture["text"], prefix,
             language=fixture.get("language"), timeout=options.runtime_timeout)
         generated.update({"id": fixture["id"], "text": fixture["text"],
                           "transcript": transcribed["transcript"],
