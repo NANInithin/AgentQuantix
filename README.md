@@ -138,7 +138,7 @@ Voice releases are split into two runtime tracks:
 - The validated Qwen3-TTS source is
   `Qwen/Qwen3-TTS-12Hz-1.7B-Base`; it and Pocket TTS use llama.cpp's
   `llama-tts`, GGUF primary models,
-  required mmproj companions, audio-aware fixtures, ASR round-trip WER, and a
+  required mmproj companions, audio-aware fixtures, ASR round-trip WER/CER, and a
   human listening gate.
 - A pinned, separately cached audio.cpp build exposes every TTS and ASR family
   in its upstream `model_specs` catalog, rather than an AgentQuantix model
@@ -229,7 +229,7 @@ src/agentquantix/
 ├── research.py       steps 1-3 end to end
 ├── report.py         the ranked table, the detail view, the markdown report
 ├── card.py           step 5: verification and the model card
-├── voice.py          voice registry, bundles, WAV gates, WER and voice cards
+├── voice.py          voice registry, bundles, WAV gates, WER/CER and voice cards
 ├── cli.py            aqx
 ├── mcp_server.py     MCP over stdio, no dependencies
 ├── pipeline/

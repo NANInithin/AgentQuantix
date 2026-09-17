@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import wave
 
 from . import archsupport, config
@@ -808,9 +809,14 @@ def validate_tts_audio(path: Path | str, *, min_seconds: float = 0.15,
                        max_silence: float = 0.98,
                        max_clipping: float = 0.02) -> dict:
     facts = inspect_wav(path)
-    if not min_seconds <= facts["seconds"] <= max_seconds:
+    if facts["seconds"] < min_seconds:
         raise VoiceValidationError(
-            f"implausible TTS duration: {facts['seconds']} seconds")
+            f"TTS output is too short: {facts['seconds']} seconds; "
+            f"minimum {round(min_seconds, 4)}")
+    if facts["seconds"] > max_seconds:
+        raise VoiceValidationError(
+            f"TTS output is too long: {facts['seconds']} seconds; "
+            f"maximum {round(max_seconds, 4)}")
     if facts["silence_ratio"] > max_silence or facts["rms"] < 0.0001:
         raise VoiceValidationError("TTS output is silent or almost entirely silent")
     if facts["clipping_ratio"] > max_clipping:
@@ -934,11 +940,49 @@ def run_tts_smoke(runtime: Path | str, bundle: VoiceBundle, prompt: str,
     return execution
 
 
-_WORD = re.compile(r"[^\w']+", re.UNICODE)
+_CJK_RANGES = (
+    (0x3040, 0x30FF),   # Hiragana and Katakana
+    (0x31F0, 0x31FF),   # Katakana phonetic extensions
+    (0x3400, 0x4DBF),   # CJK Unified Ideographs Extension A
+    (0x4E00, 0x9FFF),   # CJK Unified Ideographs
+    (0xF900, 0xFAFF),   # CJK Compatibility Ideographs
+    (0xFF66, 0xFF9F),   # Half-width Katakana
+    (0x20000, 0x2FA1F), # CJK extensions and compatibility supplement
+)
+
+
+def _is_cjk_character(character: str) -> bool:
+    value = ord(character)
+    return any(start <= value <= end for start, end in _CJK_RANGES)
 
 
 def normalize_transcript(text: str) -> list[str]:
-    return [word for word in _WORD.sub(" ", text.casefold()).split() if word]
+    """Tokenize for multilingual ASR comparison.
+
+    Whitespace languages use normal word tokens. Chinese and Japanese do not
+    reliably place spaces between words, so their Han/kana characters are
+    individual tokens. This makes the existing edit-distance gate behave as
+    WER for whitespace languages and CER for CJK instead of scoring one
+    character substitution as a 50-100% sentence error.
+    """
+    normalized = unicodedata.normalize("NFKC", text.casefold())
+    tokens, word = [], []
+
+    def flush_word():
+        if word:
+            tokens.append("".join(word))
+            word.clear()
+
+    for character in normalized:
+        if _is_cjk_character(character):
+            flush_word()
+            tokens.append(character)
+        elif character.isalnum() or character in ("'", "_"):
+            word.append(character)
+        else:
+            flush_word()
+    flush_word()
+    return tokens
 
 
 def word_error_rate(reference: str, hypothesis: str) -> float:
@@ -1084,13 +1128,13 @@ def render_model_card(bundle: VoiceBundle, target_repo: str,
         for item in manifest["members"])
     if isinstance(quality.get("quants"), dict):
         quality_rows = "\n".join(
-            f"| {quant} round-trip WER | {result.get('roundtrip_wer', '-')} |\n"
+            f"| {quant} round-trip WER/CER | {result.get('roundtrip_wer', '-')} |\n"
             f"| {quant} real-time factor | {result.get('real_time_factor', '-')} |\n"
             f"| {quant} automated gate | {result.get('passed', '-')} |"
             for quant, result in quality["quants"].items())
     else:
         quality_rows = "\n".join(
-            f"| {key.replace('_', ' ')} | {value} |"
+            f"| {'roundtrip WER/CER' if key == 'roundtrip_wer' else key.replace('_', ' ')} | {value} |"
             for key, value in quality.items()
             if isinstance(value, (str, int, float, bool)))
     quality_rows = quality_rows or "| status | Not measured |"

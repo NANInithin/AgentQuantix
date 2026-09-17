@@ -785,6 +785,7 @@ def score_tts(bundle: voice.VoiceBundle, runtime: Path, options: VoiceReleaseOpt
         results.append(generated)
     aggregate = {
         "fixtures": len(results),
+        "intelligibility_metric": "WER for whitespace scripts; CER for CJK",
         "roundtrip_wer": round(sum(r["roundtrip_wer"] for r in results)
                                 / len(results), 6),
         "silence_ratio": round(max(r["silence_ratio"] for r in results), 6),

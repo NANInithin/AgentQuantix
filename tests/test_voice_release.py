@@ -13,6 +13,9 @@ def test_fixture_pack_covers_required_tts_cases():
     assert any(item["language"] != "en" for item in fixtures)
     assert any(char.isdigit() for char in text)
     assert any(len(item["text"]) > 100 for item in fixtures)
+    by_id = {item["id"]: item["text"] for item in fixtures}
+    assert by_id["short-ja"] == "こんにちは、これは音声合成のテストです。"
+    assert by_id["short-zh"] == "你好，这是一个语音合成测试。"
 
 
 def test_asr_fixture_has_expected_transcript_and_audio():

@@ -220,7 +220,7 @@ TOOLS = [
             "Convert, quantize, validate and publish an explicitly approved "
             "voice model. TTS publication is held until automated gates pass "
             "and a human listening-review JSON accepts the candidate quant. "
-            "ASR uses its fixed corpus and WER regression gate."),
+            "ASR uses its fixed corpus and WER/CER regression gate."),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -458,9 +458,9 @@ def _voice_plan(arguments):
         "source_bytes": source["source_bytes"],
         "source_gated": source["gated"],
         "quality_gate": ("audio integrity, silence/clipping, ASR round-trip "
-                         "WER, then human listening review"
+                         "WER/CER, then human listening review"
                          if backend.track == voice.TTS else
-                         "fixed-corpus WER regression versus base precision"),
+                         "fixed-corpus WER/CER regression versus base precision"),
     }
     if missing_inputs:
         result["blocker"] = (

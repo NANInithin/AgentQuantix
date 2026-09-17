@@ -117,8 +117,11 @@ Always call `plan_voice_release` before `start_voice_release`. The release \
 must pass actual runtime inference, bundle checksum verification, and the \
 track-specific quality gate before publication. TTS candidates also require a \
 human listening review after automated silence, clipping, duration, and ASR \
-round-trip WER checks. Never claim a TTS quant is publishable merely because \
-its GGUF loads.
+round-trip intelligibility checks. Those checks use WER for whitespace-delimited \
+languages and character error rate (CER) for Chinese/Japanese. Treat directional \
+duration failures literally, and diagnose the fixture/evaluator before declaring \
+the converter broken when base precision fails. Never claim a TTS quant is \
+publishable merely because its GGUF loads.
 
 **Printing the card in the conversation does not publish it.** A card exists \
 only when `write_model_card` has returned `published: true`. Composing one, \

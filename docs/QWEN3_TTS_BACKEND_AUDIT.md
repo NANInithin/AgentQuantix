@@ -18,7 +18,7 @@ because several upstream 1.7B variants exist and have different semantics.
 | Primary quants | Every quant exposed by the installed llama.cpp quantizer |
 | Companion quant | Q8_0 |
 | Output gate | valid PCM WAV, plausible duration, non-silent, not clipped |
-| Intelligibility gate | Whisper ASR round-trip WER |
+| Intelligibility gate | Whisper ASR round-trip WER/CER |
 | Final gate | explicit human listening review |
 
 ## Conversion and runtime path
@@ -41,7 +41,7 @@ llama-tts -m Qwen3-TTS-Q4_K_M.gguf \
 
 The exact llama.cpp revision is recorded in the bundle configuration. A bundle
 is not publishable when conversion omits its mmproj, runtime inference fails,
-the WAV gate fails, ASR round-trip WER exceeds the configured threshold, or the
+the WAV gate fails, ASR round-trip WER/CER exceeds the configured threshold, or the
 human review rejects the candidate quant.
 
 The round-trip gate requires only whisper.cpp's `whisper-cli`. It does not

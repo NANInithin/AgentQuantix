@@ -208,6 +208,22 @@ def test_tts_smoke_runs_inference_and_enforces_audio_contract(tmp_path, monkeypa
     assert result["minutes_per_audio_hour"] == pytest.approx(30)
 
 
+def test_cjk_tts_duration_uses_character_count_not_whitespace(tmp_path, monkeypatch):
+    bundle = _bundle(tmp_path / "cjk")
+    output = tmp_path / "chinese.wav"
+
+    def fake_run(command, *, output, timeout):
+        _wav(output, seconds=4.48, rate=24_000)
+        return {"command": command, "elapsed_seconds": 1.0,
+                "first_output_seconds": 0.2, "stdout": ""}
+
+    monkeypatch.setattr(voice, "run_checked", fake_run)
+    result = voice.run_tts_smoke(
+        "llama-tts", bundle, "你好，这是一个语音合成测试。", output,
+        language="zh")
+    assert result["seconds"] == pytest.approx(4.48, abs=0.001)
+
+
 def test_asr_smoke_runs_inference_and_scores_transcript(tmp_path, monkeypatch):
     audio = tmp_path / "input.wav"
     _wav(audio, seconds=1, rate=16_000)
@@ -263,6 +279,11 @@ def test_tts_audio_is_resampled_to_whisper_contract(tmp_path):
 def test_wer_and_regression_gate_are_deterministic():
     assert voice.word_error_rate("Hello, world!", "hello world") == 0
     assert voice.word_error_rate("one two three", "one four three") == pytest.approx(1 / 3)
+    # One wrong character is one edit, not a 50-100% sentence-level word edit.
+    assert voice.word_error_rate("你好，这是一个语音合成测试。",
+                                 "也好，这是一个语音合成测试。") == pytest.approx(1 / 12)
+    assert voice.word_error_rate("これは音声合成のテストです。",
+                                 "これは音声合声のテストです。") == pytest.approx(1 / 13)
     assert voice.asr_regression(0.14, 0.10, 0.05)["passed"]
     assert not voice.asr_regression(0.16, 0.10, 0.05)["passed"]
 
@@ -287,7 +308,7 @@ def test_voice_card_contains_runtime_files_quality_and_consent(tmp_path):
     card = voice.render_model_card(bundle, "owner/model-GGUF", "apache-2.0")
     assert "llama-tts" in card
     assert "mmproj-Q8_0.gguf" in card
-    assert "roundtrip wer" in card
+    assert "roundtrip WER/CER" in card
     assert "explicit, lawful consent" in card
     assert "24000 Hz" in card
 

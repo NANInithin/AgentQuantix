@@ -50,7 +50,8 @@ References: [llama.cpp TTS](https://github.com/ggml-org/llama.cpp/blob/master/to
 
    For TTS, generate fixed prompts and reject silence, clipping, invalid WAV
    headers, or wildly incorrect duration. For ASR, run a fixed audio corpus and
-   set a maximum word-error-rate regression relative to BF16.
+   set a maximum WER regression relative to BF16 for whitespace-delimited
+   languages and a CER regression for Chinese/Japanese.
 
 7. **Use a two-stage TTS quality assessment**
 
@@ -90,7 +91,7 @@ References: [llama.cpp TTS](https://github.com/ggml-org/llama.cpp/blob/master/to
 
     Build and cache whisper.cpp independently, with its own architecture and
     model-format checks. Route audio.cpp ASR families through the same catalog
-    mechanism as audio.cpp TTS, but with ASR fixtures and WER gates. Whisper
+    mechanism as audio.cpp TTS, but with ASR fixtures and WER/CER gates. Whisper
     supports offline CPU and GPU inference and VAD. See the
     [whisper.cpp capabilities](https://github.com/ggml-org/whisper.cpp).
 

@@ -289,7 +289,8 @@ all TTS and ASR families from that revision's upstream `model_specs`, uses each
 family's declared source tensors and builds the full runtime
 instead of a hand-maintained family subset. Every TTS path generates the
 licensed fixture prompts, rejects invalid/silent/clipped audio, and measures
-ASR round-trip WER. Generated audio is deterministically resampled to the
+ASR round-trip WER for whitespace-delimited languages or CER for Chinese and
+Japanese. Generated audio is deterministically resampled to the
 16 kHz PCM input required by the Whisper gate. Publication waits until you
 listen to the samples and record a decision:
 

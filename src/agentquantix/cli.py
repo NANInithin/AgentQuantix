@@ -457,9 +457,9 @@ def _voice_plan(repo_id, target_repo=None, quants=None, family=None,
         "source_revision": source["revision"],
         "source_bytes": source["source_bytes"],
         "source_gated": source["gated"],
-        "quality_gate": ("WAV integrity + silence/clipping + ASR round-trip WER + "
+        "quality_gate": ("WAV integrity + silence/clipping + ASR round-trip WER/CER + "
                          "human listening review" if backend.track == voice.TTS
-                         else "fixed-corpus WER regression versus the base model"),
+                         else "fixed-corpus WER/CER regression versus the base model"),
     }
     if missing_inputs:
         result["blocker"] = (
