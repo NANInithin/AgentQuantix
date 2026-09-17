@@ -426,11 +426,15 @@ def _voice_plan(arguments):
             f"{backend.id} does not support {unsupported}; choose from "
             f"{list(available)}")
     source = voice_release.source_metadata(repo_id, family=family)
+    source_inputs = voice_release.audiocpp_source_plan(
+        repo_id, backend, source.get("source_files"))
+    missing_inputs = [item for item in source_inputs
+                      if item["status"] == "missing"]
     suffix = "GGUF" if backend.model_format.endswith("gguf") else "GGML"
     source_name = repo_id.split("/")[-1].replace(":", "-")
-    return {
+    result = {
         "model": repo_id,
-        "status": "ready",
+        "status": "blocked" if missing_inputs else "ready",
         "target_repo": arguments.get("target_repo") or
                        f"{config.HF_NAMESPACE}/{source_name}-{suffix}",
         "track": backend.track,
@@ -446,6 +450,7 @@ def _voice_plan(arguments):
                          "references are narrowed to published precisions"),
         "fork_leads": [],
         "required_companions": list(backend.required_companions),
+        "required_source_inputs": source_inputs,
         "speaker_reference": backend.speaker_reference,
         "language": arguments.get("language"),
         "speaker": arguments.get("speaker"),
@@ -457,6 +462,11 @@ def _voice_plan(arguments):
                          if backend.track == voice.TTS else
                          "fixed-corpus WER regression versus base precision"),
     }
+    if missing_inputs:
+        result["blocker"] = (
+            "source repository is missing backend-declared tensor inputs: "
+            + ", ".join(item["required_path"] for item in missing_inputs))
+    return result
 
 
 def _assessments_for(models):

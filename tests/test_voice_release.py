@@ -26,11 +26,14 @@ def test_source_preflight_returns_revision_and_size():
         size = 42
         lfs = None
 
+        def __init__(self, name):
+            self.rfilename = name
+
     class Info:
         sha = "revision"
         gated = False
         private = False
-        siblings = [Sibling(), Sibling()]
+        siblings = [Sibling("model.safetensors"), Sibling("config.json")]
 
     class Api:
         def model_info(self, *_args, **_kwargs):
@@ -40,6 +43,7 @@ def test_source_preflight_returns_revision_and_size():
         "Qwen/Qwen3-TTS-12Hz-1.7B-Base", api=Api())
     assert result["revision"] == "revision"
     assert result["source_bytes"] == 84
+    assert result["source_files"] == ["config.json", "model.safetensors"]
 
 
 def test_source_preflight_reports_inaccessible_registered_repo():
@@ -216,6 +220,64 @@ def test_audiocpp_conversion_uses_namespaced_sources_and_inspects(
     assert any(value.startswith("weights=") for value in inputs)
     assert any(value.startswith("audiovae_weights=") for value in inputs)
     assert commands[1][:2] == [converter, "--inspect"]
+
+
+def test_audiocpp_prepares_official_pytorch_component_with_pinned_utility(
+        tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "model.safetensors").write_bytes(b"weights")
+    (source / "audiovae.pth").write_bytes(b"official audio vae")
+    audio_dir = tmp_path / "audio.cpp"
+    spec_path = audio_dir / "model_specs" / "voxcpm2.json"
+    spec_path.parent.mkdir(parents=True)
+    spec_path.write_text(
+        (voice.AUDIOCPP_SPECS_DIR / "voxcpm2.json").read_text(encoding="utf-8"),
+        encoding="utf-8")
+    manager = audio_dir / "tools" / "model_manager_deprecated.py"
+    manager.parent.mkdir(parents=True)
+    manager.write_text("# pinned audio.cpp utility\n", encoding="utf-8")
+    converter = audio_dir / "audiocpp_gguf"
+    commands = []
+
+    def run(command, _label):
+        commands.append(command)
+        if "--output-file" in command:
+            output = voice_release.Path(
+                command[command.index("--output-file") + 1])
+            output.write_bytes(b"s" * 2048)
+        if "--output" in command:
+            output = voice_release.Path(command[command.index("--output") + 1])
+            output.write_bytes(b"g" * 2048)
+
+    monkeypatch.setattr(voice_release, "_run", run)
+    backend = voice.backend_for("openbmb/VoxCPM2")
+    output = voice_release.convert_audiocpp_model(
+        source, backend, converter, audio_dir, tmp_path / "models", "Q8_0")
+
+    assert output.is_file()
+    assert (source / "audiovae.safetensors").is_file()
+    prepare = commands[0]
+    assert prepare[1:4] == [manager, "install", "voxcpm2_audiovae"]
+    assert prepare[prepare.index("--source-file") + 1] == (
+        source / "audiovae.pth")
+    inputs = [str(commands[1][index + 1]) for index, value in
+              enumerate(commands[1]) if value == "--input"]
+    assert any(value.startswith("audiovae_weights=") and
+               value.endswith("audiovae.safetensors") for value in inputs)
+
+
+def test_audiocpp_source_plan_discloses_prepared_inputs():
+    backend = voice.backend_for("openbmb/VoxCPM2")
+    inputs = voice_release.audiocpp_source_plan(
+        "openbmb/VoxCPM2", backend,
+        ["config.json", "model.safetensors", "audiovae.pth"])
+
+    assert [item["namespace"] for item in inputs] == [
+        "weights", "audiovae_weights"]
+    assert inputs[0]["status"] == "ready"
+    assert inputs[1]["status"] == "needs_preparation"
+    assert inputs[1]["preparation"]["package"] == "voxcpm2_audiovae"
 
 
 def test_audiocpp_conversion_contract_is_not_family_hardcoded(

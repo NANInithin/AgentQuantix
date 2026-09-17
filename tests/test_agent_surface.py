@@ -98,11 +98,16 @@ def test_describe_voxcpm_uses_audiocpp_not_text_assessment(monkeypatch):
     monkeypatch.setattr(
         tools_mod.voice_release, "source_metadata",
         lambda model, **kwargs: {"revision": "abc", "source_bytes": 123,
-                                 "gated": False})
+                                 "gated": False,
+                                 "source_files": ["model.safetensors",
+                                                  "audiovae.pth"]})
     result = tools_mod.call("describe_candidate", {"model": "openbmb/VoxCPM2"})
     assert result["voice"]["backend"] == "audiocpp-voxcpm2-tts"
     assert result["voice"]["runtime"] == "audiocpp_cli"
     assert result["voice"]["quants"] == list(voice.AUDIOCPP_QUANTS)
+    inputs = result["voice"]["required_source_inputs"]
+    assert inputs[1]["status"] == "needs_preparation"
+    assert inputs[1]["preparation"]["package"] == "voxcpm2_audiovae"
 
 
 def test_voice_plan_uses_hub_preflight_for_catalog_matched_repo(monkeypatch):

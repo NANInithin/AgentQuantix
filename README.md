@@ -146,6 +146,12 @@ Voice releases are split into two runtime tracks:
   contract, languages, package variants, speaker requirements, and validated
   precisions. `--family` is available only as an ambiguity override for custom
   or renamed repositories.
+- Plans distinguish published bundle companions from source tensor inputs.
+  When an official checkpoint uses a backend-supported preparation format,
+  AgentQuantix runs the pinned audio.cpp utility before GGUF conversion. For
+  example, VoxCPM2's official `audiovae.pth` is converted to the
+  `audiovae.safetensors` input expected by `audiocpp_gguf` rather than being
+  mistaken for a missing model component.
 - Whisper ASR uses a separately cached whisper.cpp build, its native GGML
   binary format, 16 kHz PCM fixtures, and a WER regression gate against the
   base-precision model.

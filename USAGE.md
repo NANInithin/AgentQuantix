@@ -314,8 +314,17 @@ aqx voice run openai/whisper-small --quant q5_0 -y
 VoxCPM2 is one example of automatic catalog resolution:
 
 ```powershell
+aqx voice plan openbmb/VoxCPM2 --quant Q8_0
 aqx voice run openbmb/VoxCPM2 --quant Q8_0 --no-publish -y
 ```
+
+The plan reports `required_source_inputs` separately from
+`required_companions`. OpenBMB publishes VoxCPM2's AudioVAE as
+`audiovae.pth`, while `audiocpp_gguf` consumes `audiovae.safetensors`.
+AgentQuantix detects that exact source layout and runs audio.cpp's pinned
+`voxcpm2_audiovae` preparation utility before conversion. The prepared VAE is
+embedded into the standalone GGUF; it is not a missing publication companion
+and is never substituted from another checkpoint.
 
 Speaker references follow the selected family's catalog task. They are
 optional for Higgs text-to-speech and can be supplied for cloning:

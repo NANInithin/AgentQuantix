@@ -209,7 +209,12 @@ def source_metadata(repo_id: str, api=None, family: str | None = None) -> dict:
             f"registered voice source is not accessible: {repo_id}. "
             f"Check the exact repo id and gated/private access. {detail}") from error
     total = 0
+    source_files = []
     for sibling in getattr(info, "siblings", ()) or ():
+        name = (getattr(sibling, "rfilename", None)
+                or getattr(sibling, "path", None))
+        if name:
+            source_files.append(str(name).replace("\\", "/"))
         lfs = getattr(sibling, "lfs", None) or {}
         total += (getattr(sibling, "size", None)
                   or (lfs.get("size") if isinstance(lfs, dict) else 0) or 0)
@@ -217,9 +222,68 @@ def source_metadata(repo_id: str, api=None, family: str | None = None) -> dict:
         "repo_id": repo_id,
         "revision": getattr(info, "sha", None),
         "source_bytes": total or None,
+        "source_files": sorted(source_files) if source_files else None,
         "gated": bool(getattr(info, "gated", False)),
         "private": bool(getattr(info, "private", False)),
     }
+
+
+def audiocpp_source_plan(repo_id: str, backend: voice.VoiceBackend,
+                         source_files: list[str] | None = None) -> list[dict]:
+    """Describe tensor inputs separately from published companions.
+
+    A source tensor can be embedded into the resulting standalone GGUF and is
+    therefore not a bundle companion.  Plans still need to disclose it before
+    a multi-gigabyte download begins.  When the official repo carries a
+    same-named ``.pth`` instead of the SafeTensors input, record the pinned
+    audio.cpp preparation package that will adapt it.
+    """
+    if backend.backend != "audio.cpp" or _audiocpp_package_reference(
+            repo_id, backend):
+        return []
+    spec = voice.AUDIOCPP_SPEC_REGISTRY.get(backend.family, {})
+    contract = next((item for item in spec.get("sources", [])
+                     if item.get("format") == "safetensors"), None)
+    if contract is None:
+        return []
+    known = ({str(path).replace("\\", "/") for path in source_files}
+             if source_files is not None else None)
+    roots = contract.get("roots", {})
+    result = []
+    for namespace, value in contract.get("tensors", {}).items():
+        reference = value.get("source") if isinstance(value, dict) else value
+        if not isinstance(reference, str) or ":" not in reference:
+            continue
+        root_name, relative = reference.split(":", 1)
+        root = str(roots.get(root_name, "")).replace("\\", "/")
+        root = "" if root == "." else root.rstrip("/")
+        required = "/".join(part for part in (root, relative) if part)
+        available = required if known is not None and required in known else None
+        preparation = None
+        alternatives = []
+        if required.casefold().endswith(".safetensors"):
+            pytorch_path = required[:-len(".safetensors")] + ".pth"
+            alternatives.append(pytorch_path)
+            if known is not None and not available and pytorch_path in known:
+                available = pytorch_path
+                package_id = f"{backend.family}_{Path(required).stem}"
+                preparation = {
+                    "tool": "audio.cpp model_manager_deprecated.py",
+                    "package": package_id,
+                    "output": required,
+                }
+        status = ("unknown" if known is None else
+                  "ready" if available == required else
+                  "needs_preparation" if available else "missing")
+        result.append({
+            "namespace": str(namespace),
+            "required_path": required,
+            "accepted_source_paths": [required, *alternatives],
+            "available_path": available,
+            "status": status,
+            "preparation": preparation,
+        })
+    return result
 
 
 def find_backend_forks(repo_id: str) -> list[dict]:
@@ -393,6 +457,63 @@ def _audiocpp_tensor_inputs(source: Path, spec: dict) -> list[str]:
     return inputs
 
 
+def _prepare_audiocpp_tensor_sources(source: Path, spec: dict,
+                                     audio_dir: Path) -> list[str]:
+    """Adapt source formats through audio.cpp's own pinned utilities.
+
+    Some official repositories use a safe PyTorch weights-only checkpoint for
+    one component even though ``audiocpp_gguf`` accepts SafeTensors inputs.
+    audio.cpp ships narrowly scoped preparation packages for those cases.  The
+    package id follows its catalog convention ``<family>_<component stem>``;
+    deriving it from the model spec keeps AgentQuantix free of per-repository
+    conversion code.
+
+    VoxCPM2 is the first such route: OpenBMB publishes ``audiovae.pth`` and the
+    audio.cpp utility ``voxcpm2_audiovae`` writes the required
+    ``audiovae.safetensors`` without substituting a different VAE.
+    """
+    source_contract = next((item for item in spec.get("sources", [])
+                            if item.get("format") == "safetensors"), None)
+    if source_contract is None:
+        return _audiocpp_tensor_inputs(source, spec)
+
+    roots = source_contract.get("roots", {})
+    for namespace, value in source_contract.get("tensors", {}).items():
+        reference = value.get("source") if isinstance(value, dict) else value
+        if not isinstance(reference, str) or ":" not in reference:
+            continue
+        root_name, relative = reference.split(":", 1)
+        root_value = roots.get(root_name)
+        if not isinstance(root_value, str) or root_value.startswith("$"):
+            continue
+        expected = (source / root_value / relative).resolve()
+        if expected.is_file() or expected.suffix.casefold() != ".safetensors":
+            continue
+        pytorch_source = expected.with_suffix(".pth")
+        if not pytorch_source.is_file():
+            continue
+
+        manager = audio_dir / "tools" / "model_manager_deprecated.py"
+        if not manager.is_file():
+            raise voice.VoiceValidationError(
+                f"audio.cpp {spec['family']} needs {expected.name}, but the "
+                f"official source provides {pytorch_source.name} and the "
+                "pinned backend has no model preparation utility")
+        package_id = f"{spec['family']}_{expected.stem}"
+        _run([
+            sys.executable, manager, "install", package_id,
+            "--source-file", pytorch_source,
+            "--output-file", expected,
+            "--overwrite",
+        ], f"prepare {spec['family']} {namespace} from {pytorch_source.name}")
+        if not expected.is_file() or expected.stat().st_size < 1024:
+            raise voice.VoiceValidationError(
+                f"audio.cpp preparation package {package_id} did not produce "
+                f"a valid {expected.name}")
+
+    return _audiocpp_tensor_inputs(source, spec)
+
+
 def convert_audiocpp_model(source: Path, backend: voice.VoiceBackend,
                            converter: Path, audio_dir: Path, output_dir: Path,
                            quant: str) -> Path:
@@ -407,7 +528,8 @@ def convert_audiocpp_model(source: Path, backend: voice.VoiceBackend,
     if not output.exists():
         command = [converter]
         spec_path, spec = _audiocpp_spec(audio_dir, backend.family)
-        for tensor_input in _audiocpp_tensor_inputs(source, spec):
+        for tensor_input in _prepare_audiocpp_tensor_sources(
+                source, spec, audio_dir):
             command += ["--input", tensor_input]
         command += [
             "--root", source,

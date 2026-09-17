@@ -428,11 +428,15 @@ def _voice_plan(repo_id, target_repo=None, quants=None, family=None,
             f"{backend.id} does not support {unsupported}; choose from "
             f"{list(available)}")
     source = voice_release.source_metadata(repo_id, family=family)
+    source_inputs = voice_release.audiocpp_source_plan(
+        repo_id, backend, source.get("source_files"))
+    missing_inputs = [item for item in source_inputs
+                      if item["status"] == "missing"]
     suffix = "GGUF" if backend.model_format.endswith("gguf") else "GGML"
     source_name = repo_id.split("/")[-1].replace(":", "-")
-    return {
+    result = {
         "source": repo_id,
-        "status": "ready",
+        "status": "blocked" if missing_inputs else "ready",
         "target": target_repo or f"{config.namespace()}/{source_name}-{suffix}",
         "track": backend.track,
         "backend": backend.backend,
@@ -447,6 +451,7 @@ def _voice_plan(repo_id, target_repo=None, quants=None, family=None,
                          "references are narrowed to published precisions"),
         "fork_leads": [],
         "required_companions": list(backend.required_companions),
+        "required_source_inputs": source_inputs,
         "speaker_reference": backend.speaker_reference,
         "sample_rate": backend.sample_rate,
         "source_revision": source["revision"],
@@ -456,6 +461,11 @@ def _voice_plan(repo_id, target_repo=None, quants=None, family=None,
                          "human listening review" if backend.track == voice.TTS
                          else "fixed-corpus WER regression versus the base model"),
     }
+    if missing_inputs:
+        result["blocker"] = (
+            "source repository is missing backend-declared tensor inputs: "
+            + ", ".join(item["required_path"] for item in missing_inputs))
+    return result
 
 
 def cmd_voice(args):
