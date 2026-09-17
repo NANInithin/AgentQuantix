@@ -200,6 +200,12 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "model": {"type": "string"},
+                "family": {"type": "string",
+                           "description": "Optional audio.cpp catalog family "
+                                          "when the repo name is ambiguous."},
+                "hunt_forks": {"type": "boolean", "default": True,
+                               "description": "Search voice-runtime forks and "
+                                              "upstream PRs when unresolved."},
                 "target_repo": {"type": "string"},
                 "quants": {"type": "array", "items": {"type": "string"}},
                 "language": {"type": "string"},
@@ -219,6 +225,10 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "model": {"type": "string"},
+                "family": {"type": "string",
+                           "description": "Optional audio.cpp catalog family "
+                                          "when the repo name is ambiguous."},
+                "hunt_forks": {"type": "boolean", "default": True},
                 "target_repo": {"type": "string"},
                 "quants": {"type": "array", "items": {"type": "string"}},
                 "language": {"type": "string"},
@@ -239,7 +249,8 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "model": {"type": "string"},
-                "quant": {"type": "string", "enum": list(voice.TTS_QUANTS)},
+                "quant": {"type": "string",
+                          "enum": list(voice.TTS_REVIEW_QUANTS)},
                 "accepted": {"type": "boolean"},
                 "reviewer": {"type": "string"},
                 "notes": {"type": "string"},
@@ -388,28 +399,52 @@ def _options_from(arguments):
 
 def _voice_plan(arguments):
     repo_id = arguments["model"]
-    allowed, reason, backend = voice.execution_gate(repo_id)
+    family = arguments.get("family")
+    allowed, reason, backend = voice.execution_gate(repo_id, family=family)
     if not allowed:
-        raise ValueError(reason)
-    quants = list(arguments.get("quants") or backend.supported_quants)
+        leads = (voice_release.find_backend_forks(repo_id)
+                 if arguments.get("hunt_forks", True) else [])
+        return {
+            "model": repo_id,
+            "status": "blocked",
+            "blocker": reason,
+            "fork_hunt": ("searched" if arguments.get("hunt_forks", True)
+                          else "disabled"),
+            "fork_leads": leads,
+            "next": ("A lead must still prove its converter, model spec, "
+                     "bundle contract, and smoke inference before execution."
+                     if leads else
+                     "No installed backend or current fork/PR lead was found."),
+        }
+    available = voice.available_quants(repo_id, backend)
+    quants = [voice.normalize_quant(backend, quant) for quant in
+              (arguments.get("quants") or available)]
     unsupported = [quant for quant in quants
-                   if quant not in backend.supported_quants]
+                   if quant not in available]
     if unsupported:
         raise ValueError(
             f"{backend.id} does not support {unsupported}; choose from "
-            f"{list(backend.supported_quants)}")
-    source = voice_release.source_metadata(repo_id)
-    suffix = "GGUF" if backend.model_format == "gguf" else "GGML"
+            f"{list(available)}")
+    source = voice_release.source_metadata(repo_id, family=family)
+    suffix = "GGUF" if backend.model_format.endswith("gguf") else "GGML"
+    source_name = repo_id.split("/")[-1].replace(":", "-")
     return {
         "model": repo_id,
+        "status": "ready",
         "target_repo": arguments.get("target_repo") or
-                       f"{config.HF_NAMESPACE}/{repo_id.split('/')[-1]}-{suffix}",
+                       f"{config.HF_NAMESPACE}/{source_name}-{suffix}",
         "track": backend.track,
         "backend": backend.id,
+        "family": backend.family,
+        "backend_status": backend.status,
         "runtime": backend.runtime,
         "converter": backend.converter,
         "model_format": backend.model_format,
         "quants": quants,
+        "available_quants": list(available),
+        "quant_source": ("native converter/quantizer capability; package "
+                         "references are narrowed to published precisions"),
+        "fork_leads": [],
         "required_companions": list(backend.required_companions),
         "speaker_reference": backend.speaker_reference,
         "language": arguments.get("language"),
@@ -533,6 +568,15 @@ def call(name, arguments=None):
                              f"{backend.backend}; use plan_voice_release, not "
                              "the text quantization pipeline."),
                     "voice": plan}
+        if voice.looks_like_voice_model(arguments["model"]):
+            plan = _voice_plan({"model": arguments["model"]})
+            return {
+                "text": (f"{arguments['model']} looks like a voice model but "
+                         "does not resolve through an installed backend. The "
+                         "voice fork hunt was used instead of misrouting it "
+                         "through text quantization."),
+                "voice": plan,
+            }
         # Same rule as _assessments_for: a model the user names is assessed on
         # demand rather than refused for not being in a trending sweep.
         assessment = _assessments_for([arguments["model"]])[0]
@@ -692,6 +736,10 @@ def call(name, arguments=None):
                 "start_voice_release requires user_approved=true after the "
                 "user sees plan_voice_release and explicitly approves it.")
         plan = _voice_plan(arguments)
+        if plan.get("status") != "ready":
+            raise ValueError(
+                f"voice release is blocked: {plan.get('blocker')}; "
+                f"fork leads: {plan.get('fork_leads', [])}")
         options = voice_release.VoiceReleaseOptions(
             quants=plan["quants"], language=arguments.get("language"),
             speaker=(Path(arguments["speaker"])
@@ -699,6 +747,7 @@ def call(name, arguments=None):
             publish=arguments.get("publish", True),
             human_review=(Path(arguments["human_review"])
                           if arguments.get("human_review") else None),
+            family=arguments.get("family"),
         )
         if plan["track"] == voice.TTS:
             return voice_release.run_tts_release(

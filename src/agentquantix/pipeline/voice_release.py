@@ -1,8 +1,8 @@
 """End-to-end TTS and ASR release pipelines.
 
 The publication unit is a verified :class:`VoiceBundle`.  TTS uses the cached
-llama.cpp checkout; ASR has a separate whisper.cpp checkout, build, converter,
-model format, quantizer, and acceptance corpus.
+llama.cpp or audio.cpp checkout; ASR has a separate whisper.cpp checkout,
+build, converter, model format, quantizer, and acceptance corpus.
 """
 
 from __future__ import annotations
@@ -14,8 +14,11 @@ import shutil
 import subprocess
 import sys
 
-from .. import config, voice
+from .. import archsupport, config, voice
 from . import build as build_mod, sanity
+
+
+AUDIOCPP_REVISION = "v0.8.0"
 
 
 @dataclass
@@ -29,10 +32,12 @@ class VoiceReleaseOptions:
     runtime_timeout: int = 900
     pocket_language: str = "english"
     human_review: Path | None = None
+    family: str | None = None
 
 
 def _slug(repo_id: str) -> str:
-    return repo_id.replace("/", "--").replace("\\", "--")
+    return (repo_id.replace("/", "--").replace("\\", "--")
+            .replace(":", "--"))
 
 
 def work_dir(repo_id: str) -> Path:
@@ -61,6 +66,53 @@ def ensure_llama_tts() -> tuple[Path, Path, Path]:
     if runtime is None:
         raise RuntimeError("llama.cpp build completed without llama-tts")
     return llama_dir, runtime, quantize
+
+
+def _audio_cpp_defines() -> list[str]:
+    cuda = build_mod.has_cuda_toolkit()
+    defines = [
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DAUDIOCPP_DEPLOYMENT_BUILD=ON",
+        # The runtime catalog is the capability boundary. Building a custom
+        # two-family subset would make AgentQuantix itself the allowlist.
+        "-DAUDIOCPP_MODEL_SET=full",
+        f"-DENGINE_ENABLE_CUDA={'ON' if cuda else 'OFF'}",
+    ]
+    if cuda and (arch := build_mod.cuda_arch_from_gpu()):
+        defines.append(f"-DCMAKE_CUDA_ARCHITECTURES={arch}")
+    return defines
+
+
+def ensure_audiocpp_tools() -> tuple[Path, Path, Path]:
+    """Build/cache the pinned audio.cpp CLI and standalone GGUF converter."""
+    directory = config.UPSTREAM_AUDIOCPP
+    if not directory.exists():
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        build_mod.run([
+            "git", "-c", "url.https://github.com/.insteadOf=git@github.com:",
+            "clone", "--depth", "1", "--branch", AUDIOCPP_REVISION,
+            "--recursive", "https://github.com/0xShug0/audio.cpp.git", directory,
+        ])
+    runtime = build_mod.find_binary(directory, "audiocpp_cli")
+    converter = build_mod.find_binary(directory, "audiocpp_gguf")
+    if runtime is None or converter is None:
+        build_mod.run([
+            "git", "-c", "url.https://github.com/.insteadOf=git@github.com:",
+            "-C", directory, "submodule", "update", "--init", "--recursive",
+        ])
+        build_mod.run(["cmake", "-S", directory, "-B", directory / "build",
+                       *_audio_cpp_defines()])
+        build_mod.run([
+            "cmake", "--build", directory / "build", "--config", "Release",
+            "--target", "audiocpp_cli", "audiocpp_gguf", "-j",
+            build_mod.build_jobs(),
+        ])
+        runtime = build_mod.find_binary(directory, "audiocpp_cli")
+        converter = build_mod.find_binary(directory, "audiocpp_gguf")
+    if runtime is None or converter is None:
+        raise RuntimeError(
+            "audio.cpp build did not produce audiocpp_cli and audiocpp_gguf")
+    return directory, runtime, converter
 
 
 def _cmake_build(directory: Path, targets: tuple[str, ...]) -> None:
@@ -129,13 +181,23 @@ def _snapshot(repo_id: str, destination: Path) -> tuple[Path, str | None]:
     return destination, revision
 
 
-def source_metadata(repo_id: str, api=None) -> dict:
+def source_metadata(repo_id: str, api=None, family: str | None = None) -> dict:
     """Verify that a planned voice source exists and is readable now."""
-    backend = voice.backend_for(repo_id)
+    backend = voice.backend_for(repo_id, family=family)
     if backend is None:
-        allowed, reason, _ = voice.execution_gate(repo_id)
+        allowed, reason, _ = voice.execution_gate(repo_id, family=family)
         assert not allowed
         raise voice.VoiceValidationError(reason)
+    if (repo_id.casefold().startswith("audio.cpp:")
+            or any(repo_id.casefold() == item.casefold()
+                   for item in backend.package_ids)):
+        return {
+            "repo_id": repo_id,
+            "revision": f"audio.cpp-{AUDIOCPP_REVISION}",
+            "source_bytes": None,
+            "gated": False,
+            "private": False,
+        }
     if api is None:
         from huggingface_hub import HfApi
         api = HfApi(token=config.TOKEN)
@@ -158,6 +220,20 @@ def source_metadata(repo_id: str, api=None) -> dict:
         "gated": bool(getattr(info, "gated", False)),
         "private": bool(getattr(info, "private", False)),
     }
+
+
+def find_backend_forks(repo_id: str) -> list[dict]:
+    """Run the same publisher-fork/upstream-PR hunt used by text models."""
+    from .. import hub
+
+    try:
+        candidate = hub.one(repo_id)
+        hub.enrich(candidate, check_ggufs=False, want_readme=False)
+    except Exception:
+        # A Hub lookup error must not hide the normal unsupported-family
+        # explanation. The repo name still gives the hunt useful needles.
+        candidate = hub.Candidate(repo_id=repo_id, rank=0)
+    return archsupport.find_voice_forks(candidate)
 
 
 def _converter_requirements() -> list[str]:
@@ -217,15 +293,248 @@ def convert_tts_source(repo_id: str, options: VoiceReleaseOptions
     return backend, base, mmproj, revision, runtime, quantizer, llama_dir
 
 
-def quantize_tts(base: Path, quantizer: Path, quant: str) -> Path:
-    quant = quant.upper()
-    if quant not in voice.TTS_QUANTS:
+def _tts_imatrix(base: Path, llama_dir: Path) -> tuple[Path, list[str]]:
+    """Build an importance matrix from the licensed multilingual TTS prompts."""
+    from . import imatrix as imatrix_mod
+
+    executable = build_mod.find_binary(llama_dir, "llama-imatrix")
+    if executable is None:
         raise voice.VoiceValidationError(
-            f"voice-safe TTS quants are {', '.join(voice.TTS_QUANTS)}")
+            "llama.cpp build has no llama-imatrix for low-bit TTS quants")
+    calibration = base.with_name(base.stem + "-voice-calibration.txt")
+    prompts = [item["text"] for item in load_fixtures(voice.TTS)]
+    calibration.write_text("\n".join(prompts) + "\n", encoding="utf-8")
+    output = base.with_name(base.stem + "-imatrix.dat")
+    if (not output.exists()
+            or output.stat().st_mtime < calibration.stat().st_mtime):
+        try:
+            _run([executable, "-m", base, "-f", calibration,
+                  "-o", output, "-ngl", "0"], "llama TTS imatrix")
+        except Exception:
+            output.unlink(missing_ok=True)
+            raise
+    gap_args = []
+    for layer in imatrix_mod.gap_layers(base, output):
+        gap_args += ["--tensor-type",
+                     rf"blk\.{layer}\.={config.GAP_FALLBACK_TYPE}"]
+    return output, gap_args
+
+
+def quantize_tts(base: Path, quantizer: Path, quant: str,
+                 imatrix: Path | None = None,
+                 gap_args: list[str] | None = None) -> Path:
+    quant = quant.upper()
+    if not quant or any(character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+                        for character in quant):
+        raise voice.VoiceValidationError(
+            f"invalid llama.cpp TTS quant name: {quant!r}")
+    if quant in config.IMATRIX_REQUIRED and imatrix is None:
+        raise voice.VoiceValidationError(
+            f"{quant} requires a TTS importance matrix")
     output = base.with_name(base.name.replace("-BF16.gguf", f"-{quant}.gguf"))
     if not output.exists():
-        _run([quantizer, base, output, quant], f"quantize TTS {quant}")
+        extra = []
+        if imatrix is not None and (quant in config.IQ_QUANTS
+                                   or quant in config.IMATRIX_GUIDED):
+            extra = ["--imatrix", imatrix]
+            if quant in config.GAP_AFFECTED:
+                extra += gap_args or []
+        _run([quantizer, *extra, base, output, quant],
+             f"quantize TTS {quant}")
     return output
+
+
+def _audiocpp_spec(audio_dir: Path, family: str) -> tuple[Path, dict]:
+    path = audio_dir / "model_specs" / f"{family}.json"
+    try:
+        spec = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise voice.VoiceValidationError(
+            f"audio.cpp catalog has no readable spec for {family}: {error}") from error
+    if spec.get("family") != family:
+        raise voice.VoiceValidationError(
+            f"audio.cpp model spec family mismatch: expected {family}")
+    return path, spec
+
+
+def _audiocpp_tensor_inputs(source: Path, spec: dict) -> list[str]:
+    """Resolve the generic safetensors input contract from a model spec."""
+    source_contract = next((item for item in spec.get("sources", [])
+                            if item.get("format") == "safetensors"), None)
+    if source_contract is None:
+        raise voice.VoiceValidationError(
+            f"audio.cpp {spec['family']} has no safetensors conversion contract; "
+            "use one of the GGUF packages declared by that backend catalog")
+    roots = source_contract.get("roots", {})
+    inputs = []
+    missing = []
+    for namespace, value in source_contract.get("tensors", {}).items():
+        reference = value.get("source") if isinstance(value, dict) else value
+        if not isinstance(reference, str) or ":" not in reference:
+            raise voice.VoiceValidationError(
+                f"invalid audio.cpp tensor source for {namespace}: {reference!r}")
+        root_name, relative = reference.split(":", 1)
+        root_value = roots.get(root_name)
+        if not isinstance(root_value, str) or root_value.startswith("$"):
+            raise voice.VoiceValidationError(
+                f"audio.cpp {spec['family']} has an unresolved source root "
+                f"{root_name!r}")
+        path = (source / root_value / relative).resolve()
+        if not path.is_file():
+            missing.append(f"{namespace}={path}")
+        inputs.append(f"{namespace}={path}")
+    if missing:
+        raise voice.VoiceValidationError(
+            f"{spec['family']} source is missing audio.cpp-declared tensor "
+            "inputs: " + ", ".join(missing))
+    if not inputs:
+        raise voice.VoiceValidationError(
+            f"audio.cpp {spec['family']} declares no safetensors inputs")
+    return inputs
+
+
+def convert_audiocpp_model(source: Path, backend: voice.VoiceBackend,
+                           converter: Path, audio_dir: Path, output_dir: Path,
+                           quant: str) -> Path:
+    """Create and inspect one self-contained audio.cpp-native GGUF."""
+    quant = quant.upper()
+    if quant not in voice.AUDIOCPP_QUANTS:
+        raise voice.VoiceValidationError(
+            "audio.cpp converter quants are "
+            + ", ".join(voice.AUDIOCPP_QUANTS))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output = output_dir / f"{backend.family}-{quant}.gguf"
+    if not output.exists():
+        command = [converter]
+        spec_path, spec = _audiocpp_spec(audio_dir, backend.family)
+        for tensor_input in _audiocpp_tensor_inputs(source, spec):
+            command += ["--input", tensor_input]
+        command += [
+            "--root", source,
+            "--output", output,
+            "--type", quant.casefold(),
+            "--family", backend.family,
+            "--model-spec", spec_path,
+            "--overwrite",
+        ]
+        _run(command, f"convert {backend.family} {quant}")
+    _run([converter, "--inspect", output], f"inspect {backend.family} {quant}")
+    if not output.is_file() or output.stat().st_size < 1024:
+        raise voice.VoiceValidationError(
+            f"audio.cpp conversion produced no valid {quant} GGUF")
+    return output
+
+
+def _audiocpp_package_reference(repo_id: str,
+                                backend: voice.VoiceBackend) -> bool:
+    if (repo_id.casefold() == f"audio.cpp:{backend.family}".casefold()
+            or any(repo_id.casefold() == package.casefold()
+                   for package in backend.package_ids)):
+        return True
+    spec = voice.AUDIOCPP_SPEC_REGISTRY.get(backend.family, {})
+    defaults = spec.get("package_defaults", {}).get("download", {})
+    for package in spec.get("packages", []):
+        if package.get("format") != "gguf":
+            continue
+        download = {**defaults, **package.get("download", {})}
+        package_repo = str(download.get("repo", ""))
+        # The backend has already been resolved (with an explicit family when
+        # this is a shared aggregate repo), so the matching package is safe.
+        if package_repo and package_repo.casefold() == repo_id.casefold():
+            return True
+    return False
+
+
+def _select_audiocpp_package(spec: dict, repo_id: str, quant: str) -> dict:
+    packages = [package for package in spec.get("packages", [])
+                if package.get("format") == "gguf"]
+    exact = [package for package in packages
+             if str(package.get("id", "")).casefold() == repo_id.casefold()]
+    if exact:
+        if _audio_cpp_precision(exact[0]) != quant.upper():
+            raise voice.VoiceValidationError(
+                f"package {repo_id} has precision {_audio_cpp_precision(exact[0])}, "
+                f"not requested {quant.upper()}")
+        return exact[0]
+    candidates = [package for package in packages
+                  if _audio_cpp_precision(package) == quant.upper()]
+    recommended_id = spec.get("ui", {}).get("recommended_package")
+    recommended = next((package for package in packages
+                        if package.get("id") == recommended_id), None)
+    if recommended is not None:
+        same_variant = [package for package in candidates
+                        if package.get("target_directory") ==
+                        recommended.get("target_directory")]
+        if len(same_variant) == 1:
+            return same_variant[0]
+    defaults = [package for package in candidates if package.get("default")]
+    if len(defaults) == 1:
+        return defaults[0]
+    if len(candidates) == 1:
+        return candidates[0]
+    choices = ", ".join(str(package.get("id")) for package in candidates)
+    raise voice.VoiceValidationError(
+        f"audio.cpp family {spec['family']} has no unique {quant.upper()} "
+        f"package; use one package id explicitly: {choices or 'none'}")
+
+
+def _audio_cpp_precision(package: dict) -> str:
+    return str(package.get("precision", "")).upper()
+
+
+def _audiocpp_package_provenance(backend: voice.VoiceBackend,
+                                 package_id: str) -> tuple[str | None,
+                                                           str | None]:
+    spec = voice.AUDIOCPP_SPEC_REGISTRY.get(backend.family, {})
+    package = next((item for item in spec.get("packages", [])
+                    if item.get("id") == package_id), {})
+    download = {**spec.get("package_defaults", {}).get("download", {}),
+                **package.get("download", {})}
+    return download.get("repo"), download.get("revision", "main")
+
+
+def install_audiocpp_package(audio_dir: Path, backend: voice.VoiceBackend,
+                             repo_id: str, models_root: Path,
+                             quant: str) -> tuple[Path, tuple[Path, ...], str]:
+    """Install exactly one package from audio.cpp's own model catalog."""
+    _, spec = _audiocpp_spec(audio_dir, backend.family)
+    package = _select_audiocpp_package(spec, repo_id, quant)
+    manager = audio_dir / "tools" / "model_manager_v2.py"
+    _run([sys.executable, manager, "install", package["id"],
+          "--models-root", models_root],
+         f"install audio.cpp package {package['id']}")
+    target = models_root / package["target_directory"]
+    strip_prefix = str(package.get("strip_prefix", "")).rstrip("/")
+    paths = []
+    for remote in package.get("files", []):
+        relative = str(remote)
+        if strip_prefix and relative.startswith(strip_prefix + "/"):
+            relative = relative[len(strip_prefix) + 1:]
+        path = target / relative
+        if not path.is_file():
+            raise voice.VoiceValidationError(
+                f"audio.cpp package {package['id']} is missing {path}")
+        paths.append(path)
+    if not paths:
+        raise voice.VoiceValidationError(
+            f"audio.cpp package {package['id']} installed no files")
+    ggufs = [path for path in paths if path.suffix.casefold() == ".gguf"]
+    primary = ggufs[0] if ggufs else paths[0]
+    runtime_model = target if len(paths) > 1 or len(ggufs) > 1 else primary
+    return runtime_model, tuple(paths), str(package["id"])
+
+
+def prepare_audiocpp_source(repo_id: str, track: str,
+                            family: str | None = None):
+    """Download a catalog-resolved source and return audio.cpp tools."""
+    backend = voice.backend_for(repo_id, track=track, family=family)
+    if backend is None or backend.backend != "audio.cpp":
+        raise voice.VoiceValidationError(
+            f"no audio.cpp {track.upper()} backend for {repo_id}")
+    audio_dir, runtime, converter = ensure_audiocpp_tools()
+    root = work_dir(repo_id)
+    source, revision = _snapshot(repo_id, root / "source")
+    return backend, source, revision, runtime, converter, audio_dir, root / "models"
 
 
 def _standard_whisper_name(repo_id: str) -> str | None:
@@ -324,8 +633,7 @@ def score_tts(bundle: voice.VoiceBundle, runtime: Path, options: VoiceReleaseOpt
               asr_model: Path | None = None) -> dict:
     fixtures = fixtures or load_fixtures(voice.TTS)
     fixtures = [fixture for fixture in fixtures
-                if (fixture.get("language") in bundle.backend.languages
-                    or "multilingual" in bundle.backend.languages)
+                if bundle.backend.supports_language(fixture.get("language"))
                 and (not fixture.get("speaker_conditioned") or options.speaker)]
     if not fixtures:
         raise voice.VoiceValidationError(
@@ -393,6 +701,38 @@ def score_asr(model: Path, runtime: Path, options: VoiceReleaseOptions,
         "wer": round(sum(result["wer"] for result in results) / len(results), 6),
         "real_time_factor": round(sum(result["real_time_factor"] for result in results)
                                   / len(results), 4),
+        "audio_seconds_per_second": round(
+            sum(result["audio_seconds_per_second"] for result in results)
+            / len(results), 4),
+        "results": results,
+    }
+
+
+def score_audiocpp_asr(backend: voice.VoiceBackend, model: Path,
+                       runtime: Path, options: VoiceReleaseOptions,
+                       fixtures: list[dict] | None = None) -> dict:
+    fixtures = fixtures or load_fixtures(voice.ASR)
+    results = []
+    for index, fixture in enumerate(fixtures):
+        if not backend.supports_language(fixture.get("language")):
+            continue
+        audio = config.VOICE_FIXTURES_DIR / fixture["audio"]
+        output = model.parent / "quality" / model.stem / f"{index:02d}.txt"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.unlink(missing_ok=True)
+        result = voice.run_audiocpp_asr_smoke(
+            runtime, backend, model, audio, fixture["transcript"], output,
+            language=fixture.get("language"), timeout=options.runtime_timeout)
+        result["id"] = fixture["id"]
+        results.append(result)
+    if not results:
+        raise voice.VoiceValidationError(
+            f"no ASR fixtures match {backend.family}'s declared languages")
+    return {
+        "fixtures": len(results),
+        "wer": round(sum(result["wer"] for result in results) / len(results), 6),
+        "real_time_factor": round(sum(result["real_time_factor"]
+                                       for result in results) / len(results), 4),
         "audio_seconds_per_second": round(
             sum(result["audio_seconds_per_second"] for result in results)
             / len(results), 4),
@@ -533,16 +873,128 @@ def _aggregate_bundles(bundles: list[voice.VoiceBundle]) -> voice.VoiceBundle:
     )
 
 
+def run_audiocpp_tts_release(repo_id: str, target_repo: str,
+                             options: VoiceReleaseOptions) -> dict:
+    """Convert, validate, review, and publish an audio.cpp TTS source."""
+    backend = voice.backend_for(repo_id, track=voice.TTS, family=options.family)
+    assert backend is not None
+    package_mode = _audiocpp_package_reference(repo_id, backend)
+    if package_mode:
+        audio_dir, runtime, converter = ensure_audiocpp_tools()
+        models = work_dir(repo_id) / "models"
+        source = None
+        revision = f"audio.cpp-{AUDIOCPP_REVISION}"
+    else:
+        backend, source, revision, runtime, converter, audio_dir, models = \
+            prepare_audiocpp_source(repo_id, voice.TTS, options.family)
+    if backend.speaker_reference == "required":
+        if options.speaker is None:
+            raise voice.VoiceValidationError(
+                f"{backend.family} requires --speaker with a consented WAV reference")
+        if not options.speaker.is_file():
+            raise voice.VoiceValidationError(
+                f"speaker reference does not exist: {options.speaker}")
+
+    results = {}
+    accepted = []
+    for quant in options.quants or list(voice.available_quants(repo_id, backend)):
+        package_id = None
+        runtime_model = None
+        companions = ()
+        if package_mode:
+            runtime_model, paths, package_id = install_audiocpp_package(
+                audio_dir, backend, repo_id, models, quant)
+            bundle_source, bundle_revision = _audiocpp_package_provenance(
+                backend, package_id)
+            primary = next((path for path in paths
+                            if path.suffix.casefold() == ".gguf"), paths[0])
+            primary_member = voice.BundleMember(
+                primary, "primary", hub_path=str(primary.relative_to(models)),
+                quant=quant)
+            companions = tuple(voice.BundleMember(
+                path, "package-member", hub_path=str(path.relative_to(models)),
+                quant=quant) for path in paths if path != primary)
+        else:
+            assert source is not None
+            primary = convert_audiocpp_model(
+                source, backend, converter, audio_dir, models, quant)
+            primary_member = voice.BundleMember(primary, "primary", quant=quant)
+            bundle_source, bundle_revision = repo_id, revision
+        bundle = voice.VoiceBundle(
+            backend=backend,
+            primary=primary_member,
+            companions=companions,
+            source_repo=bundle_source,
+            source_revision=bundle_revision,
+            quant=quant,
+            configuration={
+                "language": options.language,
+                "speaker_reference": backend.speaker_reference,
+                "audio_cpp_revision": _git_revision(audio_dir),
+                "package_format": "standalone GGUF with embedded model spec",
+                "audio_cpp_package": package_id,
+            },
+            runtime_model=runtime_model,
+        )
+        quality = score_tts(bundle, runtime, options)
+        bundle = voice.VoiceBundle(**{**bundle.__dict__, "quality": quality})
+        entry = {"quality": quality, "feasibility": feasibility(bundle, quality)}
+        if not quality["passed"]:
+            entry["published"] = False
+            entry["reason"] = "automated quality gate failed"
+        elif options.human_review is None:
+            entry["published"] = False
+            entry["reason"] = "human listening review required"
+        else:
+            review = _review_for(Path(options.human_review), quant)
+            if not review or not review.get("accepted"):
+                entry["published"] = False
+                entry["reason"] = "human listening review did not accept this quant"
+            else:
+                accepted.append(bundle)
+                entry["published"] = False
+                entry["reason"] = "accepted and waiting for atomic bundle publication"
+        results[quant] = entry
+    if accepted and options.publish:
+        publication = publish_bundle(_aggregate_bundles(accepted), target_repo)
+        for bundle in accepted:
+            results[bundle.quant]["publication"] = publication
+            results[bundle.quant]["published"] = True
+            results[bundle.quant].pop("reason", None)
+    return {"backend": backend.id, "source": repo_id, "target": target_repo,
+            "results": results}
+
+
 def run_tts_release(repo_id: str, target_repo: str,
                     options: VoiceReleaseOptions | None = None) -> dict:
     options = options or VoiceReleaseOptions()
+    selected = voice.backend_for(
+        repo_id, track=voice.TTS, family=options.family)
+    if selected is not None and selected.backend == "audio.cpp":
+        return run_audiocpp_tts_release(repo_id, target_repo, options)
     backend, base, mmproj, revision, runtime, quantizer, llama_dir = \
         convert_tts_source(repo_id, options)
-    quants = options.quants or list(backend.supported_quants)
+    quants = options.quants or list(
+        voice.available_quants(repo_id, backend, llama_dir=llama_dir))
     results = {}
     accepted = []
+    importance, gap_args, imatrix_error = None, [], None
+    if any(quant in config.IQ_QUANTS or quant in config.IMATRIX_GUIDED
+           for quant in quants):
+        try:
+            importance, gap_args = _tts_imatrix(base, llama_dir)
+        except Exception as error:
+            imatrix_error = str(error)
     for quant in quants:
-        primary = quantize_tts(base, quantizer, quant)
+        if quant in config.IMATRIX_REQUIRED and importance is None:
+            results[quant] = {
+                "published": False,
+                "reason": "skipped: this quant requires an importance matrix",
+                "imatrix_error": imatrix_error,
+            }
+            continue
+        primary = quantize_tts(
+            base, quantizer, quant, imatrix=importance, gap_args=gap_args)
         bundle = voice.VoiceBundle(
             backend=backend,
             primary=voice.BundleMember(primary, "primary", quant=quant),
@@ -584,12 +1036,16 @@ def run_tts_release(repo_id: str, target_repo: str,
 def run_asr_release(repo_id: str, target_repo: str,
                     options: VoiceReleaseOptions | None = None) -> dict:
     options = options or VoiceReleaseOptions()
+    selected = voice.backend_for(
+        repo_id, track=voice.ASR, family=options.family)
+    if selected is not None and selected.backend == "audio.cpp":
+        return run_audiocpp_asr_release(repo_id, target_repo, options)
     backend, base, revision, runtime, quantizer, whisper_dir = \
         prepare_whisper_source(repo_id)
     baseline = score_asr(base, runtime, options)
     results = {}
     accepted = []
-    for quant in options.quants or list(backend.supported_quants):
+    for quant in options.quants or list(voice.available_quants(repo_id, backend)):
         model = quantize_whisper(base, quantizer, quant)
         quality = score_asr(model, runtime, options)
         quality["regression"] = voice.asr_regression(
@@ -618,3 +1074,97 @@ def run_asr_release(repo_id: str, target_repo: str,
             results[bundle.quant].pop("reason", None)
     return {"backend": backend.id, "source": repo_id, "target": target_repo,
             "baseline": baseline, "results": results}
+
+
+def run_audiocpp_asr_release(repo_id: str, target_repo: str,
+                             options: VoiceReleaseOptions) -> dict:
+    """Convert and quality-gate any ASR family in audio.cpp's catalog."""
+    backend = voice.backend_for(repo_id, track=voice.ASR, family=options.family)
+    assert backend is not None
+    package_mode = _audiocpp_package_reference(repo_id, backend)
+    if package_mode:
+        audio_dir, runtime, converter = ensure_audiocpp_tools()
+        models = work_dir(repo_id) / "models"
+        source = None
+        revision = f"audio.cpp-{AUDIOCPP_REVISION}"
+    else:
+        backend, source, revision, runtime, converter, audio_dir, models = \
+            prepare_audiocpp_source(repo_id, voice.ASR, options.family)
+    requested = options.quants or list(voice.available_quants(repo_id, backend))
+    baseline_quant = next((quant for quant in ("BF16", "F16", "F32", "ORIG")
+                           if quant in requested), requested[0])
+    package_artifacts = {}
+
+    def prepare(quant):
+        if not package_mode:
+            assert source is not None
+            model = convert_audiocpp_model(
+                source, backend, converter, audio_dir, models, quant)
+            return model, (model,), None
+        runtime_model, paths, package_id = install_audiocpp_package(
+            audio_dir, backend, repo_id, models, quant)
+        package_artifacts[quant] = (runtime_model, paths, package_id)
+        return runtime_model, paths, package_id
+
+    baseline_model, _, _ = prepare(baseline_quant)
+    baseline = score_audiocpp_asr(backend, baseline_model, runtime, options)
+    results = {}
+    accepted = []
+    for quant in requested:
+        if quant == baseline_quant:
+            model, paths, package_id = (package_artifacts.get(quant)
+                                        or (baseline_model,
+                                            (baseline_model,), None))
+        else:
+            model, paths, package_id = prepare(quant)
+        quality = (baseline if quant == baseline_quant else
+                   score_audiocpp_asr(backend, model, runtime, options))
+        quality = dict(quality)
+        quality["regression"] = voice.asr_regression(
+            quality["wer"], baseline["wer"], options.max_wer_regression)
+        primary = next((path for path in paths
+                        if path.suffix.casefold() == ".gguf"), paths[0])
+        if package_id:
+            bundle_source, bundle_revision = _audiocpp_package_provenance(
+                backend, package_id)
+        else:
+            bundle_source, bundle_revision = repo_id, revision
+        companions = tuple(voice.BundleMember(
+            path, "package-member",
+            hub_path=(str(path.relative_to(models)) if package_mode else None),
+            quant=quant) for path in paths if path != primary)
+        bundle = voice.VoiceBundle(
+            backend=backend,
+            primary=voice.BundleMember(
+                primary, "asr-model",
+                hub_path=(str(primary.relative_to(models))
+                          if package_mode else None), quant=quant),
+            companions=companions,
+            source_repo=bundle_source, source_revision=bundle_revision,
+            quant=quant,
+            configuration={
+                "sample_rate": 16_000,
+                "audio_cpp_revision": _git_revision(audio_dir),
+                "package_format": "standalone GGUF with embedded model spec",
+                "audio_cpp_package": package_id,
+            },
+            quality=quality,
+            runtime_model=model if package_mode else None,
+        )
+        passed = quality["regression"]["passed"]
+        entry = {"quality": quality, "feasibility": feasibility(bundle, quality),
+                 "published": False,
+                 "reason": ("accepted and waiting for atomic bundle publication"
+                            if passed else "WER regression gate failed")}
+        if passed:
+            accepted.append(bundle)
+        results[quant] = entry
+    if accepted and options.publish:
+        publication = publish_bundle(_aggregate_bundles(accepted), target_repo)
+        for bundle in accepted:
+            results[bundle.quant]["publication"] = publication
+            results[bundle.quant]["published"] = True
+            results[bundle.quant].pop("reason", None)
+    return {"backend": backend.id, "source": repo_id, "target": target_repo,
+            "baseline_quant": baseline_quant, "baseline": baseline,
+            "results": results}

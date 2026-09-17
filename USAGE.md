@@ -267,6 +267,10 @@ List the registered backends and inspect a plan without downloading anything:
 ```powershell
 aqx voice list
 aqx voice plan Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M
+aqx voice plan openbmb/VoxCPM2 --quant Q8_0
+aqx voice plan bosonai/higgs-tts-3-4b --quant Q8_0
+aqx voice plan ResembleAI/chatterbox --quant Q8_0
+aqx voice plan Qwen/Qwen3-ASR-0.6B --quant Q8_0
 aqx voice plan openai/whisper-small --quant q5_0
 ```
 
@@ -275,12 +279,19 @@ revision and byte size. Family or size-only aliases such as
 `Qwen/Qwen3-TTS-1.7B` are deliberately rejected because they are not real,
 unambiguous source repositories.
 
-TTS uses llama.cpp's `llama-tts`. A run converts the primary model and mmproj,
-builds the conservative Q8_0/Q6_K/Q5_K_M/Q4_K_M candidates, generates the
+Qwen3-TTS and Pocket TTS use llama.cpp's `llama-tts`. A run converts the
+primary model and mmproj and builds every quant exposed by the installed
+llama.cpp quantizer. Low-bit guided types use an importance matrix built from
+the multilingual voice fixtures; types that require it are skipped explicitly
+if that matrix cannot be produced. The pinned audio.cpp
+`audiocpp_cli`/`audiocpp_gguf` toolchain is catalog-driven: AgentQuantix loads
+all TTS and ASR families from that revision's upstream `model_specs`, uses each
+family's declared source tensors and builds the full runtime
+instead of a hand-maintained family subset. Every TTS path generates the
 licensed fixture prompts, rejects invalid/silent/clipped audio, and measures
-ASR round-trip WER. Generated 24 kHz TTS audio is deterministically resampled
-to the 16 kHz PCM input required by the Whisper gate. It stops before
-publication until you listen to the generated samples and record a decision:
+ASR round-trip WER. Generated audio is deterministically resampled to the
+16 kHz PCM input required by the Whisper gate. Publication waits until you
+listen to the samples and record a decision:
 
 ```powershell
 aqx voice run Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M --no-publish -y
@@ -299,6 +310,54 @@ limit. TTS round-trip scoring builds only `whisper-cli`; the version-specific
 ```powershell
 aqx voice run openai/whisper-small --quant q5_0 -y
 ```
+
+VoxCPM2 is one example of automatic catalog resolution:
+
+```powershell
+aqx voice run openbmb/VoxCPM2 --quant Q8_0 --no-publish -y
+```
+
+Speaker references follow the selected family's catalog task. They are
+optional for Higgs text-to-speech and can be supplied for cloning:
+
+```powershell
+aqx voice run bosonai/higgs-tts-3-4b --quant Q8_0 `
+  --speaker C:\path\to\reference.wav --no-publish -y
+```
+
+Known upstream source repositories are resolved automatically. For a custom or
+renamed checkpoint whose name does not identify a unique audio.cpp family, use
+the generic override rather than changing AgentQuantix code:
+
+```powershell
+aqx voice plan owner/my-kokoro-finetune --family kokoro_tts
+aqx voice run owner/my-kokoro-finetune --family kokoro_tts --quant Q8_0 -y
+```
+
+The catalog can also install and validate audio.cpp's published package for a
+family, or an exact package variant, without inventing a source-repo mapping:
+
+```powershell
+aqx voice plan audio.cpp:fish_audio --quant Q8_0
+aqx voice plan qwen3_tts_0_6b_base_q8_0
+```
+
+An audio.cpp GGUF is not interchangeable with a llama.cpp GGUF. The manifest
+records the converter, runtime family, source revision, and audio.cpp revision
+needed to reproduce and execute the bundle.
+
+Quant planning is source-specific. A direct safetensors source gets all nine
+types accepted by `audiocpp_gguf` (`orig`, `f16`, `bf16`, `q8_0`, and the
+`q2_k` through `q6_k` family). A virtual `audio.cpp:<family>`, exact package id,
+or package repository is narrowed to the precisions actually published for
+that package. whisper.cpp plans all ten types printed by its native quantizer.
+
+If no installed catalog resolves the model, planning automatically searches
+publisher-owned forks and open PRs for llama.cpp, audio.cpp, whisper.cpp, and
+NeMo-Speech.cpp. The blocked plan includes `fork_leads`; use
+`--no-fork-hunt` only when an offline or rate-limited plan is preferred. A lead
+does not become runnable until its converter, model spec, bundle members, and
+real inference path are verified.
 
 Every successful release publishes all accepted quant files, required
 companions, `bundle.json`, `quality.json`, and `README.md` in one Hub commit,

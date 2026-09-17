@@ -22,6 +22,16 @@
       "id": "short-fr",
       "language": "fr",
       "text": "Bonjour, ceci est un test vocal multilingue."
+    },
+    {
+      "id": "short-ja",
+      "language": "ja",
+      "text": "こんにちは、これは音声合成のテストです。"
+    },
+    {
+      "id": "short-zh",
+      "language": "zh",
+      "text": "你好，这是一个语音合成测试。"
     }
   ]
 }

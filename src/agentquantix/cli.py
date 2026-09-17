@@ -21,7 +21,7 @@ from pathlib import Path
 import sys
 
 from . import (card, config, feasibility, report, research, sysprobe,
-               transfer)
+               transfer, voice)
 from .pipeline import build as build_mod, run as run_mod, source as source_mod
 from .pipeline.job import Job
 
@@ -400,31 +400,52 @@ def cmd_card(args):
 # =====================================================
 # voice
 # =====================================================
-def _voice_plan(repo_id, target_repo=None, quants=None):
+def _voice_plan(repo_id, target_repo=None, quants=None, family=None,
+                hunt_forks=True):
     from . import voice
     from .pipeline import voice_release
 
-    allowed, reason, backend = voice.execution_gate(repo_id)
+    allowed, reason, backend = voice.execution_gate(repo_id, family=family)
     if not allowed:
-        raise ValueError(reason)
-    requested = list(quants or backend.supported_quants)
+        leads = (voice_release.find_backend_forks(repo_id)
+                 if hunt_forks else [])
+        return {
+            "source": repo_id, "status": "blocked", "blocker": reason,
+            "fork_hunt": "searched" if hunt_forks else "disabled",
+            "fork_leads": leads,
+            "next": ("A lead must still prove its converter, model spec, "
+                     "bundle contract, and smoke inference before execution."
+                     if leads else
+                     "No installed backend or current fork/PR lead was found."),
+        }
+    available = voice.available_quants(repo_id, backend)
+    requested = [voice.normalize_quant(backend, quant)
+                 for quant in (quants or available)]
     unsupported = [quant for quant in requested
-                   if quant not in backend.supported_quants]
+                   if quant not in available]
     if unsupported:
         raise ValueError(
             f"{backend.id} does not support {unsupported}; choose from "
-            f"{list(backend.supported_quants)}")
-    source = voice_release.source_metadata(repo_id)
-    suffix = "GGUF" if backend.model_format == "gguf" else "GGML"
+            f"{list(available)}")
+    source = voice_release.source_metadata(repo_id, family=family)
+    suffix = "GGUF" if backend.model_format.endswith("gguf") else "GGML"
+    source_name = repo_id.split("/")[-1].replace(":", "-")
     return {
         "source": repo_id,
-        "target": target_repo or f"{config.namespace()}/{repo_id.split('/')[-1]}-{suffix}",
+        "status": "ready",
+        "target": target_repo or f"{config.namespace()}/{source_name}-{suffix}",
         "track": backend.track,
         "backend": backend.backend,
+        "family": backend.family,
+        "backend_status": backend.status,
         "runtime": backend.runtime,
         "converter": backend.converter,
         "model_format": backend.model_format,
         "quants": requested,
+        "available_quants": list(available),
+        "quant_source": ("native converter/quantizer capability; package "
+                         "references are narrowed to published precisions"),
+        "fork_leads": [],
         "required_companions": list(backend.required_companions),
         "speaker_reference": backend.speaker_reference,
         "sample_rate": backend.sample_rate,
@@ -446,7 +467,9 @@ def cmd_voice(args):
         return 0
 
     if args.voice_command == "plan":
-        _print(json.dumps(_voice_plan(args.repo, args.target, args.quant), indent=2))
+        _print(json.dumps(_voice_plan(
+            args.repo, args.target, args.quant, args.family,
+            not args.no_fork_hunt), indent=2))
         return 0
 
     if args.voice_command == "review":
@@ -465,8 +488,11 @@ def cmd_voice(args):
         _print(json.dumps({"valid": not problems, "problems": problems}, indent=2))
         return 1 if problems else 0
 
-    plan = _voice_plan(args.repo, args.target, args.quant)
+    plan = _voice_plan(args.repo, args.target, args.quant, args.family,
+                       not args.no_fork_hunt)
     _print(json.dumps(plan, indent=2))
+    if plan.get("status") != "ready":
+        return 2
     if args.dry_run:
         return 0
     if not args.yes:
@@ -482,6 +508,7 @@ def cmd_voice(args):
         max_wer_regression=args.max_wer_regression,
         pocket_language=args.pocket_language,
         human_review=Path(args.review) if args.review else None,
+        family=args.family,
     )
     if plan["track"] == voice.TTS:
         result = voice_release.run_tts_release(args.repo, plan["target"], options)
@@ -527,6 +554,14 @@ def cmd_doctor(args):
     elif not build_mod.find_binary(config.UPSTREAM_WHISPER, "whisper-cli"):
         notes.append("whisper.cpp is present but whisper-cli is not built - "
                      "the first voice run will build it independently.")
+    if not config.UPSTREAM_AUDIOCPP.exists():
+        notes.append(f"audio.cpp is not cached at {config.UPSTREAM_AUDIOCPP} - "
+                     "the first catalog-backed audio.cpp release will clone "
+                     "and build the full runtime.")
+    elif (not build_mod.find_binary(config.UPSTREAM_AUDIOCPP, "audiocpp_cli")
+          or not build_mod.find_binary(config.UPSTREAM_AUDIOCPP, "audiocpp_gguf")):
+        notes.append("audio.cpp is present but its CLI/converter is not built - "
+                     "the first audio.cpp release will build both tools.")
     if not info["gpus"]:
         notes.append("No CUDA GPU detected - the imatrix pass will run on CPU "
                      "and take considerably longer.")
@@ -697,20 +732,31 @@ def build_parser():
     voice_plan = voice_sub.add_parser("plan", help="show a voice release plan")
     voice_plan.add_argument("repo")
     voice_plan.add_argument("--target")
+    voice_plan.add_argument(
+        "--family", help="audio.cpp catalog family when repo-name detection "
+                         "would be ambiguous")
     voice_plan.add_argument("--quant", action="append",
                             help="quant to release; repeat for more than one")
+    voice_plan.add_argument("--no-fork-hunt", action="store_true",
+                            help="do not search backend forks and open PRs")
     voice_plan.set_defaults(func=cmd_voice)
 
     voice_run = voice_sub.add_parser(
         "run", help="convert, quantize, validate and optionally publish a bundle")
     voice_run.add_argument("repo")
     voice_run.add_argument("--target")
+    voice_run.add_argument(
+        "--family", help="audio.cpp catalog family when repo-name detection "
+                         "would be ambiguous")
     voice_run.add_argument("--quant", action="append",
-                           help="quant to release; defaults to the backend-safe set")
+                           help="quant to release; defaults to every type the source can produce")
+    voice_run.add_argument("--no-fork-hunt", action="store_true",
+                           help="do not search backend forks and open PRs")
     voice_run.add_argument("--language")
     voice_run.add_argument("--pocket-language", default="english")
     voice_run.add_argument("--speaker",
-                           help="speaker-reference WAV/MP3 required by Pocket TTS")
+                           help="consented speaker-reference WAV when the "
+                                "selected backend task requires or supports it")
     voice_run.add_argument("--review",
                            help="human listening-review JSON produced by voice review")
     voice_run.add_argument("--max-roundtrip-wer", type=float, default=0.35)
@@ -725,7 +771,7 @@ def build_parser():
         "review", help="record the required human listening decision")
     voice_review.add_argument("repo")
     voice_review.add_argument("quant",
-                              choices=["Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M"])
+                              choices=list(voice.TTS_REVIEW_QUANTS))
     voice_review.add_argument("--reviewer", required=True)
     decision = voice_review.add_mutually_exclusive_group(required=True)
     decision.add_argument("--accept", action="store_true")

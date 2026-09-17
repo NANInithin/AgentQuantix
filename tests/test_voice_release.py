@@ -67,6 +67,24 @@ def test_tts_whisper_setup_requires_only_runtime(tmp_path, monkeypatch):
     assert directory == tmp_path and found == runtime
 
 
+def test_audiocpp_build_enables_the_full_backend_catalog(monkeypatch):
+    monkeypatch.setattr(voice_release.build_mod, "has_cuda_toolkit", lambda: False)
+    defines = voice_release._audio_cpp_defines()
+    assert "-DAUDIOCPP_MODEL_SET=full" in defines
+    assert not any(value.startswith("-DAUDIOCPP_MODELS=") for value in defines)
+
+
+def test_audio_cpp_virtual_family_preflight_needs_no_hub_call():
+    class Api:
+        def model_info(self, *_args, **_kwargs):
+            raise AssertionError("catalog package preflight contacted the Hub")
+
+    result = voice_release.source_metadata(
+        "audio.cpp:fish_audio", api=Api())
+    assert result["revision"].startswith("audio.cpp-v")
+    assert result["source_bytes"] is None
+
+
 def test_asr_setup_uses_current_whisper_quantizer_target(tmp_path, monkeypatch):
     cmake = tmp_path / "examples" / "quantize" / "CMakeLists.txt"
     cmake.parent.mkdir(parents=True)
@@ -91,12 +109,31 @@ def test_asr_setup_uses_current_whisper_quantizer_target(tmp_path, monkeypatch):
     assert voice_release.ensure_whisper_tools() == (tmp_path, runtime, quantizer)
 
 
-def test_tts_quantizer_rejects_lower_bit_sweep(tmp_path, monkeypatch):
+def test_tts_quantizer_requires_imatrix_for_required_low_bit_type(
+        tmp_path, monkeypatch):
     base = tmp_path / "model-BF16.gguf"
     base.write_bytes(b"base")
     monkeypatch.setattr(voice_release, "_run", lambda *args, **kwargs: None)
-    with pytest.raises(voice.VoiceValidationError, match="voice-safe"):
+    with pytest.raises(voice.VoiceValidationError, match="importance matrix"):
         voice_release.quantize_tts(base, tmp_path / "quantize", "IQ2_XXS")
+
+
+def test_tts_quantizer_passes_imatrix_to_low_bit_type(tmp_path, monkeypatch):
+    base = tmp_path / "model-BF16.gguf"
+    matrix = tmp_path / "imatrix.dat"
+    base.write_bytes(b"base")
+    matrix.write_bytes(b"matrix")
+    commands = []
+
+    def run(command, _label):
+        commands.append(command)
+        command[-2].write_bytes(b"quantized")
+
+    monkeypatch.setattr(voice_release, "_run", run)
+    output = voice_release.quantize_tts(
+        base, tmp_path / "quantize", "IQ2_XXS", imatrix=matrix)
+    assert output.name == "model-IQ2_XXS.gguf"
+    assert commands[0][:3] == [tmp_path / "quantize", "--imatrix", matrix]
 
 
 def test_tts_quantizer_uses_requested_conservative_quant(tmp_path, monkeypatch):
@@ -145,6 +182,83 @@ def test_qwen_conversion_produces_primary_and_companion(tmp_path, monkeypatch):
     assert primary.is_file() and mmproj.is_file()
     assert revision == "source-revision"
     assert len(commands) == 2 and "--mmproj" in commands[1][0]
+
+
+def test_audiocpp_conversion_uses_namespaced_sources_and_inspects(
+        tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "model.safetensors").write_bytes(b"weights")
+    (source / "audiovae.safetensors").write_bytes(b"audio")
+    audio_dir = tmp_path / "audio.cpp"
+    spec = audio_dir / "model_specs" / "voxcpm2.json"
+    spec.parent.mkdir(parents=True)
+    spec.write_text(
+        (voice.AUDIOCPP_SPECS_DIR / "voxcpm2.json").read_text(encoding="utf-8"),
+        encoding="utf-8")
+    converter = audio_dir / "audiocpp_gguf"
+    commands = []
+
+    def run(command, _label):
+        commands.append(command)
+        if "--output" in command:
+            output = voice_release.Path(command[command.index("--output") + 1])
+            output.write_bytes(b"x" * 2048)
+
+    monkeypatch.setattr(voice_release, "_run", run)
+    backend = voice.backend_for("openbmb/VoxCPM2")
+    output = voice_release.convert_audiocpp_model(
+        source, backend, converter, audio_dir, tmp_path / "models", "Q8_0")
+    assert output.name == "voxcpm2-Q8_0.gguf"
+    assert "--family" in commands[0] and "voxcpm2" in commands[0]
+    inputs = [str(commands[0][index + 1]) for index, value in
+              enumerate(commands[0]) if value == "--input"]
+    assert any(value.startswith("weights=") for value in inputs)
+    assert any(value.startswith("audiovae_weights=") for value in inputs)
+    assert commands[1][:2] == [converter, "--inspect"]
+
+
+def test_audiocpp_conversion_contract_is_not_family_hardcoded(
+        tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    for name in ("ve.safetensors", "s3gen.safetensors", "t3_cfg.safetensors",
+                 "t3_mtl23ls_v2.safetensors", "t3_mtl23ls_v3.safetensors"):
+        (source / name).write_bytes(b"weights")
+    audio_dir = tmp_path / "audio.cpp"
+    specs = audio_dir / "model_specs"
+    specs.mkdir(parents=True)
+    (specs / "chatterbox.json").write_text(
+        (voice.AUDIOCPP_SPECS_DIR / "chatterbox.json").read_text(
+            encoding="utf-8"), encoding="utf-8")
+    commands = []
+
+    def run(command, _label):
+        commands.append(command)
+        if "--output" in command:
+            output = voice_release.Path(command[command.index("--output") + 1])
+            output.write_bytes(b"x" * 2048)
+
+    monkeypatch.setattr(voice_release, "_run", run)
+    backend = voice.backend_for("ResembleAI/chatterbox")
+    voice_release.convert_audiocpp_model(
+        source, backend, audio_dir / "audiocpp_gguf", audio_dir,
+        tmp_path / "models", "Q8_0")
+    inputs = [str(commands[0][index + 1]) for index, value in
+              enumerate(commands[0]) if value == "--input"]
+    assert any(value.startswith("voice_encoder_weights=") for value in inputs)
+    assert any(value.startswith("s3gen_weights=") for value in inputs)
+
+
+def test_audiocpp_package_selection_follows_recommended_variant():
+    spec = voice.AUDIOCPP_SPEC_REGISTRY["qwen3_tts"]
+    selected = voice_release._select_audiocpp_package(
+        spec, "audio.cpp:qwen3_tts", "BF16")
+    assert selected["id"] == "qwen3_tts_1_7b_base_bf16"
+
+    exact = voice_release._select_audiocpp_package(
+        spec, "qwen3_tts_0_6b_base_q8_0", "Q8_0")
+    assert exact["id"] == "qwen3_tts_0_6b_base_q8_0"
 
 
 def test_whisper_quantizer_keeps_native_format(tmp_path, monkeypatch):

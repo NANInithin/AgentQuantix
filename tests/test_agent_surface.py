@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from agentquantix import mcp_server
+from agentquantix import mcp_server, voice
 from agentquantix.agent import prompt as prompt_mod, tools as tools_mod
 
 
@@ -82,21 +82,64 @@ def test_describe_voice_model_uses_the_backend_registry(monkeypatch):
             AssertionError("voice model entered text assessment")))
     monkeypatch.setattr(
         tools_mod.voice_release, "source_metadata",
-        lambda model: {"revision": "abc", "source_bytes": 123,
-                       "gated": False})
+        lambda model, **kwargs: {"revision": "abc", "source_bytes": 123,
+                                 "gated": False})
     result = tools_mod.call(
         "describe_candidate", {"model": "Qwen/Qwen3-TTS-12Hz-1.7B-Base"})
     assert result["voice"]["backend"] == "llama-qwen3-tts"
     assert result["voice"]["runtime"] == "llama-tts"
 
 
-def test_voice_plan_rejects_invented_qwen_repo_before_hub_access(monkeypatch):
+def test_describe_voxcpm_uses_audiocpp_not_text_assessment(monkeypatch):
+    monkeypatch.setattr(
+        tools_mod, "_assessments_for",
+        lambda models: (_ for _ in ()).throw(
+            AssertionError("VoxCPM2 entered text assessment")))
     monkeypatch.setattr(
         tools_mod.voice_release, "source_metadata",
-        lambda model: (_ for _ in ()).throw(
-            AssertionError("invalid repo reached Hub preflight")))
-    with pytest.raises(ValueError, match="Qwen3-TTS-12Hz-1.7B-Base"):
+        lambda model, **kwargs: {"revision": "abc", "source_bytes": 123,
+                                 "gated": False})
+    result = tools_mod.call("describe_candidate", {"model": "openbmb/VoxCPM2"})
+    assert result["voice"]["backend"] == "audiocpp-voxcpm2-tts"
+    assert result["voice"]["runtime"] == "audiocpp_cli"
+    assert result["voice"]["quants"] == list(voice.AUDIOCPP_QUANTS)
+
+
+def test_voice_plan_uses_hub_preflight_for_catalog_matched_repo(monkeypatch):
+    monkeypatch.setattr(
+        tools_mod.voice_release, "source_metadata",
+        lambda model, **kwargs: (_ for _ in ()).throw(
+            voice.VoiceValidationError("registered voice source is not accessible")))
+    with pytest.raises(voice.VoiceValidationError, match="not accessible"):
         tools_mod.call("plan_voice_release", {"model": "Qwen/Qwen3-TTS-1.7B"})
+
+
+def test_unresolved_voice_plan_returns_cached_fork_hunt_evidence(monkeypatch):
+    lead = {"backend": "audio.cpp", "repo": "org/audio.cpp",
+            "ref": "model/new-voice", "actionable": False}
+    monkeypatch.setattr(
+        tools_mod.voice_release, "find_backend_forks", lambda _repo: [lead])
+    result = tools_mod.call(
+        "plan_voice_release", {"model": "org/NewVoice"})
+    assert result["status"] == "blocked"
+    assert result["fork_hunt"] == "searched"
+    assert result["fork_leads"] == [lead]
+
+    with pytest.raises(ValueError, match="voice release is blocked"):
+        tools_mod.call("start_voice_release", {
+            "model": "org/NewVoice", "user_approved": True})
+
+
+def test_describe_likely_unknown_voice_model_does_not_use_text(monkeypatch):
+    monkeypatch.setattr(
+        tools_mod, "_assessments_for",
+        lambda _models: (_ for _ in ()).throw(
+            AssertionError("likely voice model entered text assessment")))
+    monkeypatch.setattr(
+        tools_mod.voice_release, "find_backend_forks", lambda _repo: [])
+    result = tools_mod.call("describe_candidate", {"model": "org/NewVoice-TTS"})
+    assert result["voice"]["status"] == "blocked"
+    assert result["voice"]["fork_hunt"] == "searched"
 
 
 def test_text_tools_reject_registered_voice_models():

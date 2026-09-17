@@ -39,17 +39,25 @@ def _bundle(tmp_path, family="qwen3-tts", quant="Q4_K_M"):
 def test_registry_splits_tts_and_asr_and_uses_native_quants():
     qwen = voice.backend_for("Qwen/Qwen3-TTS-12Hz-1.7B-Base")
     pocket = voice.backend_for("kyutai/pocket-tts")
+    voxcpm = voice.backend_for("openbmb/VoxCPM2")
+    higgs = voice.backend_for("bosonai/higgs-tts-3-4b")
     whisper = voice.backend_for("openai/whisper-small")
 
     assert qwen.track == pocket.track == voice.TTS
     assert qwen.runtime == pocket.runtime == "llama-tts"
     assert qwen.supported_quants == voice.TTS_QUANTS
+    assert voxcpm.backend == higgs.backend == "audio.cpp"
+    assert voxcpm.runtime == higgs.runtime == "audiocpp_cli"
+    assert voxcpm.supported_quants == voice.AUDIOCPP_QUANTS
+    assert higgs.supported_quants == voice.AUDIOCPP_QUANTS
+    assert voxcpm.speaker_reference == "optional"
+    assert higgs.speaker_reference == "optional"
     assert whisper.track == voice.ASR and whisper.runtime == "whisper-cli"
     assert whisper.model_format == "whisper-ggml-bin"
     assert whisper.supported_quants == voice.WHISPER_QUANTS
     assert voice.backend_for("ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF") is None
     assert voice.backend_for("ggerganov/whisper.cpp") is None
-    assert voice.backend_for("Qwen/Qwen3-TTS-1.7B") is None
+    assert voice.backend_for("Qwen/Qwen3-TTS-1.7B").backend == "audio.cpp"
     assert voice.advisory_catalog()["candidates"][0]["repo_id"] == (
         "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
 
@@ -57,11 +65,11 @@ def test_registry_splits_tts_and_asr_and_uses_native_quants():
 def test_unknown_family_is_not_allowed_to_fall_through():
     allowed, reason, backend = voice.execution_gate("org/unknown-speech")
     assert not allowed and backend is None
-    assert "converter" in reason and "quality gate" in reason
+    assert "model family" in reason and "catalog family" in reason
 
     allowed, reason, backend = voice.execution_gate("Qwen/Qwen3-TTS-1.7B")
-    assert not allowed and backend is None
-    assert "Qwen/Qwen3-TTS-12Hz-1.7B-Base" in reason
+    assert allowed and backend.backend == "audio.cpp"
+    assert backend.family == "qwen3_tts"
 
 
 def test_bundle_requires_companions_and_is_stable(tmp_path):
@@ -112,12 +120,74 @@ def test_tts_commands_apply_family_requirements(tmp_path):
         voice.llama_tts_command("llama-tts", pocket, "Hi", tmp_path / "p.wav")
 
 
+def test_audiocpp_tts_command_uses_catalog_family(tmp_path):
+    backend = voice.backend_for("openbmb/VoxCPM2")
+    primary = tmp_path / "voxcpm2-Q8_0.gguf"
+    primary.write_bytes(b"model")
+    bundle = voice.VoiceBundle(
+        backend=backend,
+        primary=voice.BundleMember(primary, "primary", quant="Q8_0"),
+        quant="Q8_0")
+    command = voice.tts_command(
+        "audiocpp_cli", bundle, "Hello", tmp_path / "out.wav", language="en")
+    assert command[:5] == [
+        "audiocpp_cli", "--task", "tts", "--family", "voxcpm2"]
+    assert "--model" in command and "--backend" in command
+    assert command[command.index("--backend") + 1] == "best"
+
+    chatterbox = voice.backend_for("ResembleAI/chatterbox")
+    assert chatterbox.family == "chatterbox"
+    assert chatterbox.supported_quants == voice.AUDIOCPP_QUANTS
+
+
+def test_quant_availability_distinguishes_sources_from_packages(monkeypatch):
+    voxcpm = voice.backend_for("openbmb/VoxCPM2")
+    assert voice.available_quants(
+        "openbmb/VoxCPM2", voxcpm) == voice.AUDIOCPP_QUANTS
+    assert voice.available_quants(
+        "audio.cpp:voxcpm2", voxcpm) == ("Q8_0", "BF16", "ORIG")
+
+    whisper = voice.backend_for("openai/whisper-small")
+    assert len(voice.available_quants("openai/whisper-small", whisper)) == 10
+    assert "q2_k" in voice.WHISPER_QUANTS
+
+    qwen = voice.backend_for("Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+    monkeypatch.setattr(
+        voice.archsupport, "supported_quants",
+        lambda *_args: {"Q4_K_M", "Q8_0", "F16", "NEW_QUANT"})
+    assert voice.available_quants("Qwen/Qwen3-TTS-12Hz-1.7B-Base", qwen) == (
+        "Q4_K_M", "Q8_0", "NEW_QUANT")
+
+
+def test_audiocpp_registry_is_generated_from_the_complete_catalog():
+    assert len(voice.AUDIOCPP_SPECS) >= 80
+    assert voice.backend_for("Qwen/Qwen3-ASR-0.6B").family == "qwen3_asr"
+    assert voice.backend_for("audio.cpp:fish_audio").family == "fish_audio"
+    assert voice.backend_for(
+        "org/custom-checkpoint", track=voice.TTS,
+        family="kokoro_tts").family == "kokoro_tts"
+    assert voice.backend_for(
+        "Qwen/Qwen3-TTS-12Hz-1.7B-Base", track=voice.TTS,
+        family="qwen3_tts").backend == "audio.cpp"
+    assert voice.backend_for("trklou/audio.cpp").family == "f5_tts"
+
+
 def test_whisper_command_uses_separate_cli_and_output_file(tmp_path):
     command = voice.whisper_command(
         "whisper-cli", "model.bin", "input.wav", tmp_path / "transcript",
         language="en", vad=True)
     assert command[:5] == ["whisper-cli", "-m", "model.bin", "-f", "input.wav"]
     assert "--output-txt" in command and "--vad" in command
+
+
+def test_audiocpp_asr_command_uses_catalog_family(tmp_path):
+    backend = voice.backend_for("Qwen/Qwen3-ASR-0.6B")
+    command = voice.audiocpp_asr_command(
+        "audiocpp_cli", backend, "model.gguf", "input.wav",
+        tmp_path / "transcript.txt", language="en")
+    assert command[:5] == [
+        "audiocpp_cli", "--task", "asr", "--family", "qwen3_asr"]
+    assert "--text-out" in command and "--audio" in command
 
 
 def test_tts_smoke_runs_inference_and_enforces_audio_contract(tmp_path, monkeypatch):

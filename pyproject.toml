@@ -49,7 +49,7 @@ build = ["ninja>=1.11"]
 # hard dependency -- but without it `aqx run` can only handle models that
 # already have an official GGUF.
 convert = ["torch>=2.0", "transformers>=4.40", "sentencepiece", "protobuf"]
-# Voice conversion uses llama.cpp's current HF converter for TTS and
+# Voice conversion uses native llama.cpp/audio.cpp tooling for TTS and
 # whisper.cpp's HF converter for ASR. Runtime inference remains native C++.
 voice = ["torch>=2.0", "transformers>=4.40", "safetensors>=0.4",
          "sentencepiece", "protobuf"]
@@ -72,7 +72,7 @@ version = { attr = "agentquantix.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-agentquantix = ["fixtures/voice/*"]
+agentquantix = ["fixtures/voice/*", "fixtures/audio_cpp_model_specs/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

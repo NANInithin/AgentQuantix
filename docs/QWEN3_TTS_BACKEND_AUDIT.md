@@ -15,7 +15,7 @@ because several upstream 1.7B variants exist and have different semantics.
 | Runtime | `llama-tts` |
 | Primary format | GGUF |
 | Required companion | audio tokenizer/projector `mmproj` GGUF |
-| Initial primary quants | Q8_0, Q6_K, Q5_K_M, Q4_K_M |
+| Primary quants | Every quant exposed by the installed llama.cpp quantizer |
 | Companion quant | Q8_0 |
 | Output gate | valid PCM WAV, plausible duration, non-silent, not clipped |
 | Intelligibility gate | Whisper ASR round-trip WER |
@@ -25,7 +25,9 @@ because several upstream 1.7B variants exist and have different semantics.
 
 The pipeline downloads a pinned source revision, converts the primary model and
 mmproj with the converter from the same llama.cpp checkout, then quantizes only
-the primary model through the conservative TTS quant set. It validates every
+the primary model through that checkout's full quant set. Guided and required
+low-bit types use an importance matrix built from the multilingual voice
+fixtures. It validates every
 candidate through the actual runtime:
 
 ```bash

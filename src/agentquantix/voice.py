@@ -1,9 +1,10 @@
 """Voice backend registry, bundle contract, audio gates, and quality metrics.
 
-TTS and ASR deliberately share data structures, not runtime semantics.  TTS
-produces WAV audio through llama.cpp's ``llama-tts``.  ASR consumes 16-bit WAV
-audio through the independently built ``whisper-cli`` and uses whisper.cpp's
-GGML model format.
+TTS and ASR deliberately share data structures, not runtime semantics. TTS
+produces WAV audio through a family-specific native runtime: llama.cpp's
+``llama-tts`` or audio.cpp's ``audiocpp_cli``. ASR consumes 16-bit WAV audio
+through the independently built ``whisper-cli`` and uses whisper.cpp's GGML
+model format.
 """
 
 from __future__ import annotations
@@ -22,12 +23,29 @@ import tempfile
 import time
 import wave
 
+from . import archsupport, config
+
 
 TTS = "tts"
 ASR = "asr"
-TTS_QUANTS = ("Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M")
-WHISPER_QUANTS = ("q8_0", "q5_0", "q4_0")
+# Fallback for planning before llama.cpp has been cloned.  When a checkout is
+# present, available_quants() asks its quantize.cpp table instead so forks and
+# newly-added upstream types are discovered rather than hard-coded here.
+TTS_QUANTS = tuple(config.DEFAULT_QUANTS)
+# Types accepted by audio.cpp's generic GGUF converter.  These are independent
+# of the smaller set of prebuilt precisions listed in a family's package spec.
+AUDIOCPP_QUANTS = (
+    "ORIG", "F16", "BF16", "Q8_0", "Q2_K", "Q3_K", "Q4_K", "Q5_K",
+    "Q6_K",
+)
+# The names printed and accepted by whisper.cpp/examples/common-ggml.cpp.
+WHISPER_QUANTS = (
+    "q4_0", "q4_1", "q5_0", "q5_1", "q8_0",
+    "q2_k", "q3_k", "q4_k", "q5_k", "q6_k",
+)
 QWEN3_TTS_SOURCE_REPOS = ("Qwen/Qwen3-TTS-12Hz-1.7B-Base",)
+AUDIOCPP_SPECS_DIR = (Path(__file__).parent / "fixtures"
+                      / "audio_cpp_model_specs")
 
 
 class VoiceValidationError(RuntimeError):
@@ -60,6 +78,11 @@ class VoiceBackend:
     languages: tuple[str, ...] = ()
     sample_rate: int = 0
     speaker_reference: str = "none"  # none, optional, required
+    runtime_task: str = ""
+    display_name: str = ""
+    status: str = "supported"
+    package_ids: tuple[str, ...] = ()
+    match_aliases: tuple[str, ...] = ()
     milestone: str = ""
     enabled: bool = True
 
@@ -68,6 +91,20 @@ class VoiceBackend:
         return (any(value == candidate.casefold() for candidate in self.repo_ids)
                 or any(value.startswith(prefix.casefold())
                        for prefix in self.repo_prefixes))
+
+    def supports_language(self, language: str | None) -> bool:
+        if not language or not self.languages:
+            return True
+        requested = language.casefold()
+        aliases = {"en": "english", "fr": "french", "ja": "japanese",
+                   "zh": "chinese", "es": "spanish"}
+        for item in self.languages:
+            value = item.casefold()
+            if (value in ("auto", "multilingual") or "+ languages" in value
+                    or value == requested or value.startswith(requested + "-")
+                    or value == aliases.get(requested)):
+                return True
+        return False
 
     @property
     def catalog_repo(self) -> str:
@@ -79,7 +116,7 @@ class VoiceBackend:
         return tuple(spec.role for spec in self.companions if spec.required)
 
 
-BACKENDS = (
+CORE_BACKENDS = (
     VoiceBackend(
         id="llama-qwen3-tts",
         family="qwen3-tts",
@@ -134,13 +171,245 @@ BACKENDS = (
         milestone="v0.4.0",
     ),
 )
+
+
+def _audio_cpp_specs() -> tuple[dict, ...]:
+    """Load the catalog shipped by the pinned audio.cpp revision.
+
+    The files are copied unchanged from audio.cpp's ``model_specs`` directory.
+    They are data, not an AgentQuantix allowlist: upgrading the pinned backend
+    and syncing that directory is enough to expose newly declared families.
+    """
+    specs = []
+    for path in sorted(AUDIOCPP_SPECS_DIR.glob("*.json")):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict) and value.get("family"):
+            specs.append(value)
+    return tuple(specs)
+
+
+AUDIOCPP_SPECS = _audio_cpp_specs()
+AUDIOCPP_SPEC_REGISTRY = {
+    str(spec["family"]): spec for spec in AUDIOCPP_SPECS
+}
+
+
+def _audio_cpp_quant(value: str) -> str:
+    return str(value).upper()
+
+
+def _audio_cpp_source_repos(spec: dict) -> tuple[str, ...]:
+    defaults = spec.get("package_defaults", {}).get("download", {})
+    repos = []
+    for package in spec.get("packages", []):
+        if package.get("format") != "safetensors":
+            continue
+        download = {**defaults, **package.get("download", {})}
+        if repo := download.get("repo"):
+            repos.append(str(repo))
+    return tuple(dict.fromkeys(repos))
+
+
+def _audio_cpp_package_repos(spec: dict) -> tuple[str, ...]:
+    defaults = spec.get("package_defaults", {}).get("download", {})
+    repos = []
+    for package in spec.get("packages", []):
+        if package.get("format") != "gguf":
+            continue
+        download = {**defaults, **package.get("download", {})}
+        if repo := download.get("repo"):
+            repos.append(str(repo))
+    return tuple(dict.fromkeys(repos))
+
+
+def _audio_cpp_package_quants(spec: dict) -> tuple[str, ...]:
+    values = [_audio_cpp_quant(package.get("precision", ""))
+              for package in spec.get("packages", [])
+              if package.get("format") == "gguf"
+              and package.get("precision")]
+    return tuple(dict.fromkeys(values))
+
+
+def _audio_cpp_has_conversion(spec: dict) -> bool:
+    return any(source.get("format") == "safetensors"
+               for source in spec.get("sources", []))
+
+
+def _audio_cpp_quants(spec: dict) -> tuple[str, ...]:
+    """Every precision this family can consume or create.
+
+    Package precision is not converter capability.  Some packages contain an
+    F32 or Q4_0 artifact even though the generic converter does not emit that
+    type; conversely a source-backed family can be converted to every type the
+    converter exposes even when only Q8_0 has been uploaded by audio.cpp.
+    """
+    converter = AUDIOCPP_QUANTS if _audio_cpp_has_conversion(spec) else ()
+    return tuple(dict.fromkeys((*converter, *_audio_cpp_package_quants(spec))))
+
+
+def _audio_cpp_aliases(spec: dict) -> tuple[str, ...]:
+    aliases = [str(spec.get("family", "")), str(spec.get("display_name", ""))]
+    for package in spec.get("packages", []):
+        aliases.extend((str(package.get("id", "")),
+                        str(package.get("target_directory", ""))))
+    return tuple(value for value in dict.fromkeys(aliases) if value)
+
+
+def _audio_cpp_backends() -> tuple[VoiceBackend, ...]:
+    backends = []
+    for spec in AUDIOCPP_SPECS:
+        tasks = tuple(str(task) for task in spec.get("tasks", []))
+        tracks = []
+        if "tts" in tasks and spec.get("category") == "tts":
+            tracks.append((TTS, "tts"))
+        elif "clone" in tasks and spec.get("category") == "tts":
+            tracks.append((TTS, "clon"))
+        if "asr" in tasks:
+            tracks.append((ASR, "asr"))
+        for track, runtime_task in tracks:
+            clone = "speaker_reference" in spec.get(
+                "capabilities", {}).get("clone", [])
+            speaker = ("required" if runtime_task == "clon" else
+                       "optional" if clone else "none")
+            family = str(spec["family"])
+            backends.append(VoiceBackend(
+                id=f"audiocpp-{family}-{track}",
+                family=family,
+                track=track,
+                backend="audio.cpp",
+                converter="audiocpp_gguf",
+                runtime="audiocpp_cli",
+                model_format="audiocpp-gguf",
+                repo_prefixes=(),
+                repo_ids=_audio_cpp_source_repos(spec),
+                example_repos=(f"audio.cpp:{family}",),
+                supported_quants=_audio_cpp_quants(spec),
+                languages=tuple(str(item) for item in spec.get("languages", [])),
+                speaker_reference=speaker,
+                runtime_task=runtime_task,
+                display_name=str(spec.get("display_name", family)),
+                status=str(spec.get("status", "unknown")),
+                package_ids=tuple(str(item.get("id"))
+                                  for item in spec.get("packages", [])
+                                  if item.get("id")),
+                match_aliases=_audio_cpp_aliases(spec),
+                milestone="audio.cpp catalog",
+                enabled=True,
+            ))
+    return tuple(backends)
+
+
+AUDIOCPP_BACKENDS = _audio_cpp_backends()
+BACKENDS = (*CORE_BACKENDS, *AUDIOCPP_BACKENDS)
 BACKEND_REGISTRY = {backend.id: backend for backend in BACKENDS}
+AUDIOCPP_PACKAGE_REPOS = {
+    family: _audio_cpp_package_repos(spec)
+    for family, spec in AUDIOCPP_SPEC_REGISTRY.items()
+}
+TTS_REVIEW_QUANTS = tuple(dict.fromkeys(
+    (*TTS_QUANTS, *(quant for backend in AUDIOCPP_BACKENDS
+                    if backend.track == TTS
+                    for quant in backend.supported_quants))))
 
 
-def backend_for(repo_id: str, track: str | None = None) -> VoiceBackend | None:
-    return next((backend for backend in BACKENDS
+_GENERIC_MODEL_TOKENS = {
+    "audio", "voice", "speech", "model", "base", "small", "large", "hf",
+    "gguf", "tts", "asr", "stt", "v1", "v2", "v3",
+}
+
+_VOICE_NAME_HINTS = (
+    "tts", "asr", "speech", "voice", "whisper", "audio", "parakeet",
+    "voxcpm", "talker", "codec",
+)
+
+
+def looks_like_voice_model(repo_id: str) -> bool:
+    """Conservative routing hint for models not yet in an installed catalog."""
+    name = repo_id.split("/")[-1].casefold()
+    tokens = set(re.findall(r"[a-z]+", name))
+    return any(hint in tokens or hint in name for hint in _VOICE_NAME_HINTS)
+
+
+def _name_tokens(value: str) -> set[str]:
+    return {token for token in re.findall(r"[a-z]+|\d+", value.casefold())
+            if token not in _GENERIC_MODEL_TOKENS and len(token) > 1}
+
+
+def _compact_name(value: str) -> str:
+    return "".join(re.findall(r"[a-z0-9]+", value.casefold()))
+
+
+def _audio_cpp_backend_for(repo_id: str, track: str | None = None,
+                           family: str | None = None) -> VoiceBackend | None:
+    candidates = [backend for backend in AUDIOCPP_BACKENDS
+                  if track is None or backend.track == track]
+    if family:
+        exact = [backend for backend in candidates
+                 if backend.family.casefold() == family.casefold()]
+        return exact[0] if len(exact) == 1 else None
+
+    value = (repo_id or "").casefold()
+    exact = [backend for backend in candidates
+             if backend.matches(repo_id)
+             or value == f"audio.cpp:{backend.family}".casefold()
+             or any(value == package.casefold()
+                    for package in backend.package_ids)]
+    if len(exact) == 1:
+        return exact[0]
+
+    package_repo_matches = [
+        backend for backend in candidates
+        if any(value == repo.casefold()
+               for repo in AUDIOCPP_PACKAGE_REPOS.get(backend.family, ()))
+    ]
+    if len(package_repo_matches) == 1:
+        return package_repo_matches[0]
+
+    # A third-party GGUF repository is not a convertible source checkpoint,
+    # and GGUF schemas are runtime-specific. Only catalog package ids/repos
+    # may select an already-converted audio.cpp artifact.
+    if "gguf" in repo_id.split("/")[-1].casefold():
+        return None
+
+    compact = _compact_name(repo_id)
+    tokens = _name_tokens(repo_id)
+    scored = []
+    for backend in candidates:
+        score = 0
+        family_name = _compact_name(backend.family)
+        display_name = _compact_name(backend.display_name)
+        if len(family_name) >= 5 and (family_name in compact or compact in family_name):
+            score += 100
+        if len(display_name) >= 5 and (display_name in compact or compact in display_name):
+            score += 80
+        overlap = tokens & _name_tokens(
+            " ".join((backend.family, backend.display_name)))
+        score += 12 * len(overlap)
+        if backend.track == TTS and "tts" in value:
+            score += 2
+        if backend.track == ASR and any(word in value for word in ("asr", "stt")):
+            score += 2
+        if score:
+            scored.append((score, backend))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if not scored or scored[0][0] < 12:
+        return None
+    if len(scored) > 1 and scored[0][0] == scored[1][0]:
+        return None
+    return scored[0][1]
+
+
+def backend_for(repo_id: str, track: str | None = None,
+                family: str | None = None) -> VoiceBackend | None:
+    if family:
+        return _audio_cpp_backend_for(repo_id, track=track, family=family)
+    core = next((backend for backend in CORE_BACKENDS
                  if (track is None or backend.track == track)
                  and backend.matches(repo_id)), None)
+    return core or _audio_cpp_backend_for(repo_id, track=track)
 
 
 def backend_named(name: str) -> VoiceBackend:
@@ -150,15 +419,68 @@ def backend_named(name: str) -> VoiceBackend:
         raise VoiceValidationError(f"unknown voice backend: {name}") from error
 
 
-def execution_gate(repo_id: str, track: str | None = None):
-    backend = backend_for(repo_id, track=track)
+def available_quants(repo_id: str, backend: VoiceBackend,
+                     llama_dir: Path | None = None) -> tuple[str, ...]:
+    """Quant types actually obtainable from this particular source.
+
+    A normal HF safetensors source can use the converter's full type table. A
+    virtual family, exact package id, or package repository can only install
+    artifacts that audio.cpp has published. llama.cpp is queried from source
+    so a fork's quant table is authoritative.
+    """
+    if backend.backend == "llama.cpp":
+        discovered = archsupport.supported_quants(llama_dir)
+        if discovered:
+            preferred = [quant for quant in config.DEFAULT_QUANTS
+                         if quant in discovered]
+            preferred += sorted(discovered - set(preferred))
+            return tuple(quant for quant in preferred
+                         if quant not in {"COPY", "F16", "F32", "BF16"})
+        return TTS_QUANTS
+    if backend.backend == "whisper.cpp":
+        return WHISPER_QUANTS
+    if backend.backend == "audio.cpp":
+        spec = AUDIOCPP_SPEC_REGISTRY.get(backend.family, {})
+        package = next((item for item in spec.get("packages", [])
+                        if str(item.get("id", "")).casefold() ==
+                        repo_id.casefold()), None)
+        if package is not None and package.get("precision"):
+            return (_audio_cpp_quant(package["precision"]),)
+        package_repos = AUDIOCPP_PACKAGE_REPOS.get(backend.family, ())
+        is_package_reference = (
+            repo_id.casefold() == f"audio.cpp:{backend.family}".casefold()
+            or any(repo_id.casefold() == value.casefold()
+                   for value in package_repos))
+        if is_package_reference:
+            return _audio_cpp_package_quants(spec)
+        if _audio_cpp_has_conversion(spec):
+            return AUDIOCPP_QUANTS
+        return _audio_cpp_package_quants(spec)
+    return backend.supported_quants
+
+
+def default_quants(repo_id: str, backend: VoiceBackend) -> tuple[str, ...]:
+    """Compatibility name for the complete source-specific quant sweep."""
+    return available_quants(repo_id, backend)
+
+
+def normalize_quant(backend: VoiceBackend, quant: str) -> str:
+    """Use the spelling expected by the selected native converter."""
+    return quant.casefold() if backend.backend == "whisper.cpp" else quant.upper()
+
+
+def execution_gate(repo_id: str, track: str | None = None,
+                   family: str | None = None):
+    backend = backend_for(repo_id, track=track, family=family)
     if backend is None:
         if (repo_id or "").casefold().startswith("qwen/qwen3-tts"):
             supported = ", ".join(QWEN3_TTS_SOURCE_REPOS)
             return False, (f"{repo_id} is not a supported Qwen3-TTS source. "
                            f"Use the exact documented checkpoint: {supported}."), None
-        return False, (f"{repo_id} has no registered voice backend; add a "
-                       "converter, bundle contract, runtime, and quality gate."), None
+        return False, (f"{repo_id} does not resolve to a model family declared "
+                       "by an installed voice backend. For an audio.cpp model "
+                       "whose repository name is ambiguous, pass its catalog "
+                       "family explicitly."), None
     if not backend.enabled:
         return False, f"{backend.family} is registered but disabled.", backend
     return True, (f"{backend.family} is supported through {backend.backend} "
@@ -168,6 +490,13 @@ def execution_gate(repo_id: str, track: str | None = None):
 def advisory_catalog() -> dict:
     return {
         "tracks": [TTS, ASR],
+        "audio_cpp_catalog": {
+            "spec_families": len(AUDIOCPP_SPECS),
+            "release_routes": len(AUDIOCPP_BACKENDS),
+            "revision_source": "bundled model_specs from pinned audio.cpp",
+            "categories": sorted({str(spec.get("category", "unknown"))
+                                  for spec in AUDIOCPP_SPECS}),
+        },
         "candidates": [{
             "backend": backend.id,
             "family": backend.family,
@@ -179,10 +508,11 @@ def advisory_catalog() -> dict:
             "required_companions": list(backend.required_companions),
             "speaker_reference": backend.speaker_reference,
             "milestone": backend.milestone,
-            "status": "supported" if backend.enabled else "disabled",
+            "status": backend.status if backend.enabled else "disabled",
             "agent_run_available": backend.enabled,
             "repo_id": backend.catalog_repo,
             "supported_repos": list(backend.repo_ids),
+            "package_ids": list(backend.package_ids),
         } for backend in BACKENDS],
     }
 
@@ -229,6 +559,7 @@ class VoiceBundle:
     quant: str | None = None
     configuration: dict = field(default_factory=dict)
     quality: dict | None = None
+    runtime_model: Path | None = None
     created_at: str = field(default_factory=lambda:
                             datetime.now(timezone.utc).isoformat())
 
@@ -373,6 +704,58 @@ def whisper_command(runtime: Path | str, model: Path | str, audio: Path | str,
     if vad:
         command.append("--vad")
     return command
+
+
+def audiocpp_tts_command(runtime: Path | str, bundle: VoiceBundle,
+                         prompt: str, output: Path | str,
+                         language: str | None = None,
+                         speaker: Path | str | None = None) -> list[str]:
+    """Build an audio.cpp CLI command for a standalone GGUF bundle."""
+    if bundle.backend.track != TTS or bundle.backend.backend != "audio.cpp":
+        raise VoiceValidationError(
+            "audiocpp_cli can only validate an audio.cpp TTS bundle")
+    if bundle.backend.speaker_reference == "required" and not speaker:
+        raise VoiceValidationError(
+            f"{bundle.backend.family} requires a speaker reference")
+    command = [str(runtime), "--task", bundle.backend.runtime_task or "tts", "--family",
+               bundle.backend.family, "--model",
+               str(bundle.runtime_model or bundle.primary.path),
+               "--backend", "best", "--text", prompt,
+               "--out", str(output), "--metrics"]
+    if language:
+        command += ["--language", language]
+    if speaker:
+        command += ["--voice-ref", str(speaker)]
+    return command
+
+
+def audiocpp_asr_command(runtime: Path | str, backend: VoiceBackend,
+                         model: Path | str, audio: Path | str,
+                         output: Path | str,
+                         language: str | None = None) -> list[str]:
+    if backend.track != ASR or backend.backend != "audio.cpp":
+        raise VoiceValidationError(
+            "audiocpp_cli can only validate an audio.cpp ASR bundle")
+    command = [str(runtime), "--task", backend.runtime_task or "asr",
+               "--family", backend.family, "--model", str(model),
+               "--backend", "best", "--audio", str(audio),
+               "--text-out", str(output), "--metrics"]
+    if language:
+        command += ["--language", language]
+    return command
+
+
+def tts_command(runtime: Path | str, bundle: VoiceBundle, prompt: str,
+                output: Path | str, language: str | None = None,
+                speaker: Path | str | None = None) -> list[str]:
+    """Dispatch TTS validation to the bundle's declared native runtime."""
+    if bundle.backend.backend == "llama.cpp":
+        return llama_tts_command(runtime, bundle, prompt, output, language, speaker)
+    if bundle.backend.backend == "audio.cpp":
+        return audiocpp_tts_command(
+            runtime, bundle, prompt, output, language, speaker)
+    raise VoiceValidationError(
+        f"no TTS command builder for backend {bundle.backend.backend}")
 
 
 def _decode_samples(raw: bytes, width: int):
@@ -530,7 +913,7 @@ def run_tts_smoke(runtime: Path | str, bundle: VoiceBundle, prompt: str,
     if output.exists():
         raise VoiceValidationError(f"smoke output already exists: {output}")
     execution = run_checked(
-        llama_tts_command(runtime, bundle, prompt, output, language, speaker),
+        tts_command(runtime, bundle, prompt, output, language, speaker),
         output=output, timeout=timeout)
     words = max(1, len(normalize_transcript(prompt)))
     audio = validate_tts_audio(
@@ -606,6 +989,38 @@ def run_asr_smoke(runtime: Path | str, model: Path | str, audio: Path | str,
     return execution
 
 
+def run_audiocpp_asr_smoke(runtime: Path | str, backend: VoiceBackend,
+                           model: Path | str, audio: Path | str,
+                           expected: str, output: Path | str,
+                           language: str | None = None,
+                           timeout: int = 600) -> dict:
+    audio_facts = inspect_wav(audio)
+    if audio_facts["sample_width"] != 2 or audio_facts["sample_rate"] != 16_000:
+        raise VoiceValidationError(
+            "audio.cpp ASR fixtures must be 16 kHz 16-bit PCM WAV")
+    output = Path(output)
+    execution = run_checked(
+        audiocpp_asr_command(runtime, backend, model, audio, output, language),
+        timeout=timeout)
+    transcript = (output.read_text(encoding="utf-8", errors="replace").strip()
+                  if output.is_file() else "")
+    if not transcript:
+        match = re.search(r"(?m)^text_output=(.*)$", execution["stdout"])
+        transcript = match.group(1).strip() if match else ""
+    if not transcript:
+        raise VoiceValidationError("audiocpp_cli produced no transcript")
+    execution.update({
+        "transcript": transcript,
+        "wer": round(word_error_rate(expected, transcript), 6),
+        "audio_seconds": audio_facts["seconds"],
+        "real_time_factor": round(
+            execution["elapsed_seconds"] / audio_facts["seconds"], 4),
+        "audio_seconds_per_second": round(
+            audio_facts["seconds"] / execution["elapsed_seconds"], 4),
+    })
+    return execution
+
+
 def asr_regression(candidate_wer: float, baseline_wer: float,
                    max_regression: float = 0.05) -> dict:
     regression = candidate_wer - baseline_wer
@@ -638,12 +1053,31 @@ def render_model_card(bundle: VoiceBundle, target_repo: str,
                       license_name: str | None = None) -> str:
     manifest = bundle.manifest()
     quality = bundle.quality or {}
-    command = (f"llama-tts -m {bundle.primary.remote_path}"
-               + (f" -mm {next((m.remote_path for m in bundle.companions if m.role == 'mmproj'), '')}"
-                  if any(m.role == "mmproj" for m in bundle.companions) else "")
-               + " -p \"Hello world\" --output out.wav"
-               if bundle.backend.track == TTS else
-               f"whisper-cli -m {bundle.primary.remote_path} -f input.wav")
+    package_members = any(member.role == "package-member"
+                          for member in bundle.companions)
+    runtime_artifact = bundle.primary.remote_path
+    if package_members:
+        parent = Path(runtime_artifact).parent.as_posix()
+        runtime_artifact = parent if parent != "." else runtime_artifact
+    if bundle.backend.track == TTS and bundle.backend.backend == "audio.cpp":
+        command = (f"audiocpp_cli --task {bundle.backend.runtime_task or 'tts'} "
+                   f"--family {bundle.backend.family} "
+                   f"--model {runtime_artifact} --backend best "
+                   "--text \"Hello world\""
+                   + (" --voice-ref reference.wav"
+                      if bundle.backend.speaker_reference == "required" else "")
+                   + " --out out.wav")
+    elif bundle.backend.track == TTS:
+        command = (f"llama-tts -m {bundle.primary.remote_path}"
+                   + (f" -mm {next((m.remote_path for m in bundle.companions if m.role == 'mmproj'), '')}"
+                      if any(m.role == "mmproj" for m in bundle.companions) else "")
+                   + " -p \"Hello world\" --output out.wav")
+    elif bundle.backend.backend == "audio.cpp":
+        command = (f"audiocpp_cli --task asr --family {bundle.backend.family} "
+                   f"--model {runtime_artifact} --backend best "
+                   "--audio input.wav --text-out transcript.txt")
+    else:
+        command = f"whisper-cli -m {bundle.primary.remote_path} -f input.wav"
     rows = "\n".join(
         f"| `{item['path']}` | {item['role']} | {item['quant'] or '-'} | "
         f"{item['bytes'] / 1024 ** 2:.1f} MiB |"
@@ -685,7 +1119,7 @@ of publication: download every required file listed below.
 
 Supported languages: {language}
 
-Expected sample rate: {bundle.backend.sample_rate} Hz
+Expected sample rate: {f'{bundle.backend.sample_rate} Hz' if bundle.backend.sample_rate else 'runtime-reported; see quality.json'}
 
 Speaker reference: {bundle.backend.speaker_reference}
 
@@ -711,5 +1145,5 @@ terms before use.
 ## License
 
 The upstream model license ({license_name or 'see upstream model'}) applies to
-the model artifacts. llama.cpp and whisper.cpp retain their respective licenses.
+the model artifacts. {bundle.backend.backend} retains its own license.
 """

@@ -140,9 +140,23 @@ Voice releases are split into two runtime tracks:
   `llama-tts`, GGUF primary models,
   required mmproj companions, audio-aware fixtures, ASR round-trip WER, and a
   human listening gate.
+- A pinned, separately cached audio.cpp build exposes every TTS and ASR family
+  in its upstream `model_specs` catalog, rather than an AgentQuantix model
+  allowlist. The catalog supplies each family's tasks, source conversion
+  contract, languages, package variants, speaker requirements, and validated
+  precisions. `--family` is available only as an ambiguity override for custom
+  or renamed repositories.
 - Whisper ASR uses a separately cached whisper.cpp build, its native GGML
   binary format, 16 kHz PCM fixtures, and a WER regression gate against the
   base-precision model.
+- Quant lists come from the native converter. Direct audio.cpp sources expose
+  all nine `audiocpp_gguf` output types, package references expose only files
+  that exist, whisper.cpp exposes all ten native integer types, and llama.cpp
+  TTS reads the current checkout's quant table. Required low-bit llama types
+  use an importance matrix made from the voice fixtures.
+- An unresolved voice model triggers a cached GitHub hunt across the supported
+  runtimes' publisher forks and open PRs. Leads are reported without pretending
+  they are runnable before their conversion and bundle contracts are verified.
 
 Start with `aqx voice list` and `aqx voice plan <repo>`. See [USAGE.md](USAGE.md)
 for the complete build, review, publication, and verification workflow.

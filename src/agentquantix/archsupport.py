@@ -33,6 +33,12 @@ from . import config
 
 GITHUB_API = "https://api.github.com"
 UPSTREAM_REPO = "ggml-org/llama.cpp"
+VOICE_UPSTREAMS = {
+    "llama.cpp": "ggml-org/llama.cpp",
+    "audio.cpp": "0xShug0/audio.cpp",
+    "whisper.cpp": "ggml-org/whisper.cpp",
+    "NeMo-Speech.cpp": "NVIDIA/NeMo-Speech.cpp",
+}
 
 
 # =====================================================
@@ -253,6 +259,25 @@ def _fork_cache_put(key, leads):
         pass
 
 
+def _voice_fork_cache():
+    try:
+        return json.loads(
+            (config.STATE_DIR / "voice-fork-leads.json").read_text())
+    except Exception:
+        return {}
+
+
+def _voice_fork_cache_put(key, leads):
+    try:
+        cache = _voice_fork_cache()
+        cache[key] = {"leads": leads, "found_at": time.time()}
+        path = config.STATE_DIR / "voice-fork-leads.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(cache, indent=2))
+    except Exception:
+        pass
+
+
 def find_fork(candidate, use_cache=True):
     """Repos/branches that plausibly add support for this architecture.
 
@@ -332,4 +357,80 @@ def find_fork(candidate, use_cache=True):
 
     if key:
         _fork_cache_put(key, unique)
+    return unique
+
+
+def find_voice_forks(candidate, use_cache=True):
+    """Find backend forks or open PRs that may support a voice model.
+
+    This deliberately mirrors :func:`find_fork`: publisher-owned forks with a
+    model-named branch rank ahead of community pull requests, results are
+    cached, and GitHub failures become an empty result rather than blocking a
+    plan. A lead is evidence to investigate, not permission to pretend that a
+    converter, bundle contract, and inference path have already been proven.
+    """
+    needles = _needles(candidate)
+    if not needles:
+        return []
+    identity = (candidate.architectures or
+                [candidate.model_type or candidate.name])[0]
+    key = f"{candidate.repo_id}:{identity}"
+    if use_cache:
+        entry = _voice_fork_cache().get(key)
+        if entry:
+            age = time.time() - entry.get("found_at", 0)
+            ttl = FORK_CACHE_HIT_S if entry.get("leads") else FORK_CACHE_MISS_S
+            if age < ttl:
+                return entry["leads"]
+
+    leads = []
+    for backend, upstream in VOICE_UPSTREAMS.items():
+        repo_name = upstream.split("/")[-1]
+        query = f"{candidate.org} {repo_name} in:name fork:true"
+        found = _github_json(
+            f"{GITHUB_API}/search/repositories?q={urllib.parse.quote(query)}"
+            "&per_page=10")
+        for repo in (found or {}).get("items", [])[:10]:
+            full_name = repo.get("full_name", "")
+            if not full_name.casefold().endswith(
+                    "/" + repo_name.casefold()):
+                continue
+            for branch in _branches_matching(full_name, needles):
+                leads.append({
+                    "kind": "publisher-fork",
+                    "confidence": "high",
+                    "backend": backend,
+                    "repo": full_name,
+                    "url": repo.get("html_url"),
+                    "ref": branch,
+                    "actionable": False,
+                    "why": (f"{full_name} branch '{branch}' names this "
+                            "model or architecture"),
+                })
+
+        for needle in sorted(needles, key=len, reverse=True)[:2]:
+            query = f"repo:{upstream} is:pr is:open {needle}"
+            found = _github_json(
+                f"{GITHUB_API}/search/issues?q={urllib.parse.quote(query)}"
+                "&per_page=5")
+            for item in (found or {}).get("items", [])[:5]:
+                leads.append({
+                    "kind": "upstream-pr",
+                    "confidence": "medium",
+                    "backend": backend,
+                    "repo": upstream,
+                    "url": item.get("html_url"),
+                    "ref": f"pull/{item.get('number')}/head",
+                    "actionable": False,
+                    "why": (f"open PR #{item.get('number')}: "
+                            f"{item.get('title')}"),
+                })
+
+    seen, unique = set(), []
+    for lead in leads:
+        identity = (lead["backend"], lead["repo"], lead["ref"])
+        if identity not in seen:
+            seen.add(identity)
+            unique.append(lead)
+    _voice_fork_cache_put(key, unique)
     return unique

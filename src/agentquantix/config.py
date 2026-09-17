@@ -58,6 +58,7 @@ INF_ROOT = WORK_ROOT
 
 UPSTREAM_LLAMA = INF_ROOT / "llama.cpp"
 UPSTREAM_WHISPER = INF_ROOT / "whisper.cpp"
+UPSTREAM_AUDIOCPP = INF_ROOT / "audio.cpp"
 TEMP_DIR = INF_ROOT / "temp"
 VOICE_BACKENDS_DIR = TEMP_DIR / "aqx-voice-backends"
 VOICE_FIXTURES_DIR = Path(os.getenv("AQX_VOICE_FIXTURES")
