@@ -21,6 +21,7 @@ Three ways in, in order of preference:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 import shutil
@@ -150,6 +151,35 @@ def _record_download(kind, gigabytes, seconds):
                            gb=round(gigabytes, 2))
 
 
+def _mtp_conversion_args(source_dir: Path):
+    """Avoid llama.cpp's MTP assertion for Qwen3.5 checkpoints without MTP.
+
+    Some Qwen3.5 configs explicitly declare zero MTP layers. llama.cpp's
+    converter currently treats zero like a missing count and asserts unless
+    --no-mtp is set. Preserve the normal path when the weight index actually
+    contains MTP tensors, even if the config disagrees.
+    """
+    config_path = source_dir / "config.json"
+    if not config_path.is_file():
+        return []
+    model_config = json.loads(config_path.read_text(encoding="utf-8"))
+    architectures = model_config.get("architectures") or []
+    if not any(arch.startswith("Qwen3_5") for arch in architectures):
+        return []
+    text_config = model_config.get("text_config") or model_config
+    if text_config.get("mtp_num_hidden_layers") != 0:
+        return []
+
+    index_path = source_dir / "model.safetensors.index.json"
+    if index_path.is_file():
+        weight_map = json.loads(index_path.read_text(encoding="utf-8")).get(
+            "weight_map", {})
+        if any(name.startswith(("mtp.", "model.mtp."))
+               for name in weight_map):
+            return []
+    return ["--no-mtp"]
+
+
 def ensure_bf16(job, llama_dir: Path, hub_files: set):
     """Put job.bf16_path on disk by whichever route is cheapest. Returns the path."""
     if job.bf16_path.exists():
@@ -218,11 +248,12 @@ def ensure_bf16(job, llama_dir: Path, hub_files: set):
                    if f.is_file()) / GB
         _record_download("safetensors", size, time.time() - started)
 
+    mtp_args = _mtp_conversion_args(job.source_dir)
     print(f"[{job.base_name}] converting to BF16 GGUF...")
     try:
         run_verbose(["python", llama_dir / "convert_hf_to_gguf.py",
                      job.source_dir, "--outtype", "bf16",
-                     "--outfile", job.bf16_path],
+                     "--outfile", job.bf16_path, *mtp_args],
                     label=f"converting {job.repo_id}")
     except RuntimeError as e:
         if hint := remote_code_hint(str(e)):
@@ -237,7 +268,7 @@ def ensure_bf16(job, llama_dir: Path, hub_files: set):
         try:
             run_verbose(["python", llama_dir / "convert_hf_to_gguf.py",
                          job.source_dir, "--mmproj", "--outtype", "f16",
-                         "--outfile", job.mmproj_path],
+                         "--outfile", job.mmproj_path, *mtp_args],
                         label="exporting the vision tower")
         except Exception as e:
             # A missing mmproj costs the image path, not the model. The text

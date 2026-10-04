@@ -9,7 +9,9 @@ None of those are fixable by AgentQuantix. What IS ours is whether the message
 tells you what to do next.
 """
 
+import json
 import subprocess
+from types import SimpleNamespace
 
 from agentquantix.pipeline import build, source
 
@@ -155,3 +157,55 @@ def test_the_package_list_stops_at_the_end_of_the_sentence():
     assert "--with Run" not in hint
     assert "torchvision." not in hint
     assert "--with torchvision" in hint
+
+
+def test_qwen35_without_mtp_uses_no_mtp_for_both_exports(tmp_path, monkeypatch):
+    """Clef declares zero MTP layers; llama.cpp otherwise asserts at startup."""
+    model_dir = tmp_path / "source"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(json.dumps({
+        "architectures": ["Qwen3_5ForConditionalGeneration"],
+        "text_config": {"mtp_num_hidden_layers": 0},
+    }))
+    (model_dir / "model.safetensors.index.json").write_text(json.dumps({
+        "weight_map": {"model.layers.0.self_attn.q_proj.weight": "shard"},
+    }))
+    models_dir = tmp_path / "models"
+    job = SimpleNamespace(
+        bf16_path=models_dir / "clef-BF16.gguf",
+        mmproj_path=models_dir / "mmproj-clef-F16.gguf",
+        models_dir=models_dir, source_dir=model_dir, source_kind="convert",
+        assessment={}, base_name="clef", repo_id="Cloudflare/clef",
+        is_multimodal=True,
+    )
+    commands = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        (job.mmproj_path if "--mmproj" in cmd else job.bf16_path).touch()
+
+    monkeypatch.setattr(source, "converter_missing", lambda: [])
+    monkeypatch.setattr(source, "run_verbose", fake_run)
+
+    assert source.ensure_bf16(job, tmp_path / "llama.cpp", set()) == job.bf16_path
+    assert len(commands) == 2
+    assert all("--no-mtp" in cmd for cmd in commands)
+
+
+def test_qwen35_keeps_mtp_when_weights_have_it(tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({
+        "architectures": ["Qwen3_5ForCausalLM"],
+        "text_config": {"mtp_num_hidden_layers": 0},
+    }))
+    (tmp_path / "model.safetensors.index.json").write_text(json.dumps({
+        "weight_map": {"mtp.layers.0.weight": "shard"},
+    }))
+    assert source._mtp_conversion_args(tmp_path) == []
+
+
+def test_non_qwen35_conversion_keeps_its_normal_flags(tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({
+        "architectures": ["LlamaForCausalLM"],
+        "mtp_num_hidden_layers": 0,
+    }))
+    assert source._mtp_conversion_args(tmp_path) == []
