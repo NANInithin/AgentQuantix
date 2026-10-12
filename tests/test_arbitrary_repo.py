@@ -100,3 +100,30 @@ def test_hub_one_marks_it_as_not_from_the_trending_list():
 
     source = inspect.getsource(hub.one)
     assert "rank=0" in source
+
+
+def test_cmd_run_reaches_the_plan_with_no_report_at_all(monkeypatch):
+    """REGRESSION. `aqx run org/model` on a fresh machine crashed at the
+    free-disk warning: with no research on file `result` is None, and the
+    note dereferenced it. Selection handles a missing report; the rest of
+    the run has to as well, at least as far as the --dry-run plan."""
+    from argparse import Namespace
+
+    monkeypatch.setattr(research, "load_latest", lambda: None)
+    monkeypatch.setattr(
+        research, "assess_one",
+        lambda repo_id, **k: {"repo_id": repo_id, "verdict": "ok",
+                              "warnings": [], "quants": ["Q4_K_M"],
+                              "hours": {"total": 1.0},
+                              "peak_disk_gb": 10.0, "bf16_gb": 5.0,
+                              "upload_gb": 2.5,
+                              "quant_sizes_gb": {"Q4_K_M": 2.5},
+                              "imatrix": {"source": "BF16"},
+                              "peak_convert_gb": 5.0,
+                              "target_repo": "NANI-Nithin/model-GGUF",
+                              "source_kind": "gguf"})
+
+    args = Namespace(model=["org/model"], dry_run=True, yes=True, xet=None,
+                     sequential=False, quantize_workers=1, upload_workers=1,
+                     queue_depth=1, quantize_threads=None, keep_fork=False)
+    assert cli.cmd_run(args) == 0

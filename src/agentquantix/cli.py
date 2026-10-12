@@ -289,7 +289,10 @@ def cmd_run(args):
                f"imatrix on {job.imatrix_source}, "
                f"{peaks[job.base_name]:.0f} GB peak{fork}")
 
-    free = (result.get("system") or {}).get("disk_free_gb") or 0
+    # No research on file when models were named directly - `result` is None,
+    # and the disk warning simply has nothing to compare against. The
+    # assessment itself still blocks on live free disk, so nothing is lost.
+    free = ((result or {}).get("system") or {}).get("disk_free_gb") or 0
     if free and peak > free * 0.9:
         _print(f"\n  WARNING: peak needs {peak:.0f} GB but only {free:.0f} GB "
                "was free at research time."
