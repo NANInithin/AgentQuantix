@@ -33,6 +33,7 @@ import threading
 import time
 
 from huggingface_hub import HfApi
+from huggingface_hub.errors import RepositoryNotFoundError
 
 from .. import config, feasibility, transfer
 from . import (build as build_mod, imatrix as imatrix_mod, sanity,
@@ -96,8 +97,8 @@ class RunOptions:
 def _hub_files(api, repo_id):
     try:
         return set(api.list_repo_files(repo_id=repo_id, repo_type="model"))
-    except Exception:
-        return set()          # repo does not exist yet (first run)
+    except RepositoryNotFoundError:
+        return set()
 
 
 def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
@@ -116,6 +117,8 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
     # Guards status.json and hub_files, both touched by the upload thread.
     state_lock = threading.Lock()
     status = Status(job.status_file, lock=state_lock)
+    stop_uploads = threading.Event()
+    slots = threading.BoundedSemaphore(options.concurrent_quants)
 
     api = HfApi(token=config.TOKEN)
     hub_files = _hub_files(api, job.target_repo)
@@ -167,22 +170,22 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
     # imatrix step, which only needs to know whether its source quant is
     # published so it can fetch it back rather than re-cut it.
     repo_created = False
+    repo_lock = threading.Lock()
 
     def ensure_repo():
         nonlocal repo_created
-        if repo_created:
-            return
-        api.create_repo(repo_id=job.target_repo, repo_type="model",
-                        exist_ok=True)
-        with state_lock:
-            hub_files.update(_hub_files(api, job.target_repo))
-        repo_created = True
+        with repo_lock:
+            if repo_created:
+                return
+            api.create_repo(repo_id=job.target_repo, repo_type="model",
+                            exist_ok=True)
+            with state_lock:
+                hub_files.update(_hub_files(api, job.target_repo))
+            repo_created = True
 
     def already_up(name):
         with state_lock:
-            if name in hub_files:
-                return True
-        return name in status.load()["uploaded"]
+            return name in hub_files
 
     def upload(path, keep=False):
         """Upload once, with retries. Returns True if the file is on the Hub.
@@ -245,8 +248,12 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
 
     def note_failure(path, why):
         upload_failures.append((path.stem.split("-")[-1], why))
+        stop_uploads.set()
 
-    if not options.sequential:
+    def start_uploaders():
+        nonlocal upload_queue
+        if options.sequential:
+            return
         upload_queue = queue.Queue(maxsize=max(1, options.queue_depth))
 
         def upload_worker():
@@ -255,6 +262,8 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
                 try:
                     if not upload(path, keep):
                         note_failure(path, "upload failed")
+                    elif not keep:
+                        slots.release()
                 except Exception as e:              # never let the thread die
                     note_failure(path, f"upload: {type(e).__name__}: {e}")
                 finally:
@@ -272,6 +281,8 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
             try:
                 if not upload(path, keep):
                     note_failure(path, "upload failed")
+                elif not keep:
+                    slots.release()
             except Exception as e:
                 note_failure(path, f"upload: {type(e).__name__}: {e}")
         else:
@@ -301,13 +312,11 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
         parked on get(). No other transfer can be in flight to have the
         global setting changed underneath it.
         """
-        want, why = transfer.for_upload(size_bytes=path.stat().st_size)
-        if want and not transfer.enabled():
-            with transfer.applied(want, why):
-                if not upload(path, keep=True):
-                    note_failure(path, "upload failed")
-            return
-        send(path, keep=True)
+        # Sources run inline before uploader threads exist. A process-global
+        # transfer policy must never change while a second source is uploading.
+        with transfer.applied(*transfer.for_upload(size_bytes=path.stat().st_size)):
+            if not upload(path, keep=True):
+                note_failure(path, "upload failed")
 
     # ---------- imatrix ----------
     # BEFORE the BF16 is published, and that ordering is the point.
@@ -330,19 +339,39 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
 
     # The local BF16 is KEPT — every quant below is cut from it.
     send_source(job.bf16_path)
-    if job.mmproj_path.exists():
+    if not stop_uploads.is_set() and job.mmproj_path.exists():
         send_source(job.mmproj_path)
+    start_uploaders()
 
     # ---------- quants ----------
     def build_one(quant):
         """Cut one quant and hand it to the uploader. Never raises."""
         out = job.quant_path(quant)
-        if out.name in hub_files or out.name in status.load()["uploaded"]:
+        if already_up(out.name):
             return
+        while not stop_uploads.is_set():
+            if slots.acquire(timeout=0.1):
+                break
+        else:
+            failures.append((quant, "deferred: upload outage; re-run to resume"))
+            return
+        if stop_uploads.is_set():
+            slots.release()
+            failures.append((quant, "deferred: upload outage; re-run to resume"))
+            return
+
+        try:
+            build_reserved(quant, out)
+        except BaseException:
+            slots.release()
+            raise
+
+    def build_reserved(quant, out):
 
         if not imatrix_ok and quant in config.IMATRIX_REQUIRED:
             print(f"[{job.base_name}] skipping {quant} - needs an imatrix.")
             failures.append((quant, "skipped: no imatrix"))
+            slots.release()
             return
 
         if not out.exists():
@@ -364,13 +393,19 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
             # partial is removed on every failure. The usual cause is transient
             # memory pressure rather than a bad quant type.
             began = time.time()
+            partial = out.with_name(out.name + ".partial")
             for attempt in range(1, 4):
                 try:
                     build_mod.run([llama_quantize, *extra, job.bf16_path,
-                                   out, quant, *trailing])
+                                   partial, quant, *trailing])
+                    if not partial.is_file() or not partial.stat().st_size:
+                        raise RuntimeError("quantizer produced an empty output")
+                    partial.replace(out)
                     break
-                except Exception as e:
-                    out.unlink(missing_ok=True)
+                except BaseException as e:
+                    partial.unlink(missing_ok=True)
+                    if not isinstance(e, Exception):
+                        raise
                     if attempt == 3:
                         # Do NOT abort the batch. One quant type this build
                         # cannot produce (an aggressive IQ1_* on an unlucky
@@ -384,6 +419,7 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
             # Every path above breaks; a missing file here means we gave up on
             # this quant and already recorded why.
             if not out.exists():
+                slots.release()
                 return
             elapsed = time.time() - began
             if elapsed > 1:
@@ -400,15 +436,8 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
         # the upload queue is full, which is exactly the disk bound working.
         send(out, keep=False)
 
-    workers = 1 if options.sequential else max(1, options.quantize_workers)
-    if workers == 1:
-        for quant in job.quants:
-            build_one(quant)
-    else:
-        # A shared work queue rather than a slice per thread: quant types
-        # differ enormously in cost (an IQ1_S is several times an equivalent
-        # K-quant), so static partitioning would leave threads idle while one
-        # ground through the expensive half.
+    def run_quants():
+        workers = 1 if options.sequential else max(1, options.quantize_workers)
         pending: queue.Queue = queue.Queue()
         for quant in job.quants:
             pending.put(quant)
@@ -424,6 +453,9 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
                 except Exception as e:              # never let the thread die
                     failures.append((quant, f"quantize: {type(e).__name__}: {e}"))
 
+        if workers == 1:
+            quantize_worker()
+            return
         threads = [threading.Thread(target=quantize_worker, daemon=True)
                    for _ in range(workers)]
         for thread in threads:
@@ -433,7 +465,11 @@ def process(job: Job, llama_dir, llama_quantize, llama_imatrix,
 
     # Wait for the uploaders to drain BEFORE deleting anything — the BF16 and
     # the last quant may still be in flight.
-    finish_uploads()
+    try:
+        run_quants()
+    finally:
+        stop_uploads.set()
+        finish_uploads()
     failures += upload_failures
 
     # ---------- cleanup ----------

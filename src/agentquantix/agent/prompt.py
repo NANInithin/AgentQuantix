@@ -76,6 +76,25 @@ it intended.
 `write_model_card` with your own `content`. This is the one part of the job \
 that is genuinely writing, and it is yours.
 
+## Media releases
+
+Image, image-editing, video, and audio-video models use the independent pinned
+stable-diffusion.cpp engine. Inspect the model before choosing a converter.
+Call inspect_media_model and plan_media_release. Never send a diffusion model
+through the text or voice converter, even when its family is unresolved.
+Show the exact plan including revisions, component precisions, all native quant
+policies, targets, licenses, resource estimates, evaluator and blocked questions.
+Call start_media_release with that unchanged plan only after explicit approval.
+A fork/PR name is a lead, not a validated converter or runtime contract.
+Keep load, conversion and quantization support separate. Runtime-only and
+experimental capabilities must be described honestly. Missing quality metrics
+and uncalibrated thresholds block publication; never substitute a weaker metric.
+After real inference and automated quality gates, show the user the generated
+images or video, extracted frames and audio. record_media_review records their
+actual decision; never invent one. publish_media_release requires matching human
+review and fresh remote checksum verification. For joint audio-video, the human
+must watch and listen. A video without audio cannot pass an audio-video recipe.
+
 ## Voice releases
 
 TTS and ASR are different products. Qwen3-TTS and Pocket TTS run through \

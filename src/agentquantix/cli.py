@@ -313,6 +313,8 @@ def cmd_run(args):
 
     outcome = run_mod.run_jobs(jobs, options=options,
                                clean_forks=not args.keep_fork)
+    failed = bool(outcome.get("incomplete")) or any(
+        entry.get("failures") for entry in outcome["jobs"].values())
 
     # Step 5 runs automatically: verify what landed, then write the card.
     # Guarded, because the quants are already published by this point — a
@@ -320,8 +322,6 @@ def cmd_run(args):
     # a failed one, nor abandon the remaining models' verification.
     for job in jobs:
         result = outcome["jobs"].get(job.base_name, {})
-        if result.get("skipped"):
-            continue
         # A model that aborted before the pipeline got going never created its
         # repo, so verifying it produces a RepositoryNotFoundError wall of text
         # that buries the actual error above it.
@@ -334,14 +334,18 @@ def cmd_run(args):
             verification = card.verify(job)
             _print(_verification_text(verification))
             if verification.get("error"):
+                failed = True
                 continue
+            if verification.get("missing") or verification.get("suspect"):
+                failed = True
             card.publish(verification, job=job)
             _print(f"model card published to {verification['url']}")
         except Exception as e:
+            failed = True
             _print(f"  the quants are uploaded, but the model card step failed: "
                    f"{type(e).__name__}: {e}")
             _print(f"  retry it on its own with: aqx card {job.base_name}")
-    return 0
+    return 1 if failed else 0
 
 
 # =====================================================
@@ -640,6 +644,8 @@ def build_parser():
     parser = argparse.ArgumentParser(
         prog="aqx",
         description="AgentQuantix - trending Hugging Face models to GGUF quants.")
+    from . import __version__
+    parser.add_argument("--version", action="version", version=f"AgentQuantix {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     probe = sub.add_parser("probe", help="what this machine can do")
@@ -798,6 +804,9 @@ def build_parser():
     voice_verify.add_argument("manifest")
     voice_verify.add_argument("--root")
     voice_verify.set_defaults(func=cmd_voice)
+
+    from . import media_cli
+    media_cli.add_parser(sub)
 
     boot = sub.add_parser(
         "bootstrap",

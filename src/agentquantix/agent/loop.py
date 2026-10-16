@@ -34,7 +34,7 @@ DEFAULT_MODEL = "anthropic/claude-opus-5"
 # Tools that spend hours, write to the Hub or touch the disk in a way the user
 # would want to have agreed to first. The loop confirms these with the human
 # regardless of what the model believes it has been authorised to do.
-CONFIRM_BEFORE = {"start_quantization"}
+CONFIRM_BEFORE = {"start_quantization", "start_voice_release", "start_media_release", "publish_media_release"}
 
 # Shown when `aqx agent` is started with no prompt. Printed locally rather
 # than asked of the model: it is the same every time, it costs nothing, and
@@ -244,8 +244,10 @@ def _diagnose(error: ApiError, model, base_url):
 
 def _confirm(name, arguments):
     """Ask the human before a tool that costs real time and real bandwidth."""
-    models = ", ".join(arguments.get("models") or []) or "(none named)"
-    print(f"\n  The model wants to START QUANTIZATION for: {models}")
+    models = ", ".join(arguments.get("models") or []) or arguments.get("model") or arguments.get("plan", {}).get("repo_id") or arguments.get("run_id") or "(none named)"
+    print(f"\n  The model requests {name} for: {models}")
+    if arguments.get("plan"):
+        print(json.dumps(arguments["plan"], indent=2))
     print("  This runs for hours, uses the disk, and publishes to the Hub.")
     try:
         answer = input("  Allow? [y/N] ").strip().lower()

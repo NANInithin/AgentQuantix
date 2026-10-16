@@ -11,6 +11,7 @@ tells you what to do next.
 
 import json
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 from agentquantix.pipeline import build, source
@@ -182,10 +183,11 @@ def test_qwen35_without_mtp_uses_no_mtp_for_both_exports(tmp_path, monkeypatch):
 
     def fake_run(cmd, **kwargs):
         commands.append(cmd)
-        (job.mmproj_path if "--mmproj" in cmd else job.bf16_path).touch()
+        Path(cmd[cmd.index("--outfile") + 1]).write_bytes(b"converted")
 
     monkeypatch.setattr(source, "converter_missing", lambda: [])
     monkeypatch.setattr(source, "run_verbose", fake_run)
+    monkeypatch.setattr(source, "snapshot_download", lambda **kwargs: None)
 
     assert source.ensure_bf16(job, tmp_path / "llama.cpp", set()) == job.bf16_path
     assert len(commands) == 2

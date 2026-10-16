@@ -292,6 +292,15 @@ def _msvc_present():
     return str(bat) if bat.exists() else None
 
 
+def compute_backends():
+    """Detected build toolchains; runtime availability is verified after build."""
+    return {"cpu": True, "cuda": bool(shutil.which("nvcc")),
+            "hip": bool(shutil.which("hipcc")), "vulkan": bool(shutil.which("glslc")),
+            "metal": sys.platform == "darwin" and bool(shutil.which("xcrun")),
+            "opencl": bool(os.getenv("OCL_ROOT") or os.getenv("OpenCL_ROOT")),
+            "sycl": bool(shutil.which("icpx")), "musa": bool(shutil.which("mcc"))}
+
+
 def _hub_backends():
     """Which large-file transfer backends are importable, and is xet switched off.
 
@@ -338,6 +347,7 @@ def probe(measure_disk=True, force_disk=False):
         "llama": _llama_build(),
         "msvc": _msvc_present(),
         "hub_backends": _hub_backends(),
+        "compute_backends": compute_backends(),
         "hf_token": bool(config.TOKEN),
         "xet_policy": transfer.summary(),
     }

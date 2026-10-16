@@ -1,5 +1,9 @@
 # Using AgentQuantix
 
+For the experimental v0.5.0 image/video workflow, see
+[media usage](docs/MEDIA_USAGE.md). It uses `aqx media` and a separate pinned
+stable-diffusion.cpp engine. Text and voice instructions below remain valid.
+
 Three ways to drive it. The CLI is the ground truth — the Claude Code skill and
 the API-key loop call exactly the same code, so nothing behaves differently
 depending on which one you pick.

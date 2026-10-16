@@ -1,0 +1,35 @@
+{
+  "license": "CC0-1.0",
+  "origin": "original procedural AgentQuantix fixtures",
+  "prompts": [
+    {
+      "id": "shapes",
+      "text": "A red circle to the left of a blue square on a cream background. No people."
+    },
+    {
+      "id": "counting",
+      "text": "Three yellow cubes on a plain blue table. No people."
+    },
+    {
+      "id": "landscape",
+      "text": "A small stone bridge over a clear stream, green trees, soft daylight. No people."
+    },
+    {
+      "id": "multilingual",
+      "text": "Un cercle rouge et deux carrés bleus. 赤い円と青い四角。"
+    }
+  ],
+  "images": [
+    "reference.png",
+    "first.png",
+    "last.png"
+  ],
+  "audio": "reference.wav",
+  "image_size": [
+    64,
+    64
+  ],
+  "audio_sample_rate": 32000,
+  "audio_channels": 2,
+  "audio_duration_seconds": 1
+}

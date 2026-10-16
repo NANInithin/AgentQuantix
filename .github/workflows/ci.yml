@@ -20,6 +20,22 @@ permissions:
   contents: read
 
 jobs:
+  media-catalog:
+    name: pinned media catalog drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Fetch exact media engine source
+        run: |
+          git clone --depth 1 --no-checkout https://github.com/leejet/stable-diffusion.cpp.git "$RUNNER_TEMP/sd-catalog"
+          git -C "$RUNNER_TEMP/sd-catalog" fetch --depth 1 origin 8cd731e7b4667eb8f40a153315b9a7125d09a58d
+          git -C "$RUNNER_TEMP/sd-catalog" checkout --detach 8cd731e7b4667eb8f40a153315b9a7125d09a58d
+      - name: Regeneration must match the reviewed manifest
+        run: python scripts/sync_media_capabilities.py "$RUNNER_TEMP/sd-catalog" --check
+
   test:
     name: ${{ matrix.os }} / py${{ matrix.python }}
     runs-on: ${{ matrix.os }}
@@ -42,7 +58,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,media]"
 
       - name: Test
         # No token and no network access to the Hub. Every test is offline by

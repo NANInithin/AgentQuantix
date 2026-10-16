@@ -234,7 +234,7 @@ def ensure_bf16(job, llama_dir: Path, hub_files: set):
         raise RuntimeError(converter_hint(missing))
 
     job.source_dir.mkdir(parents=True, exist_ok=True)
-    if not any(job.source_dir.iterdir()):
+    if not (job.source_dir / ".aqx-download-complete").is_file():
         print(f"[{job.base_name}] downloading source weights...")
         started = time.time()
         # Safetensors come in shards, each well under the cap, so the size
@@ -244,18 +244,24 @@ def ensure_bf16(job, llama_dir: Path, hub_files: set):
             snapshot_download(repo_id=job.repo_id,
                               local_dir=str(job.source_dir),
                               token=config.TOKEN)
+        (job.source_dir / ".aqx-download-complete").write_text("complete\n")
         size = sum(f.stat().st_size for f in job.source_dir.rglob("*")
                    if f.is_file()) / GB
         _record_download("safetensors", size, time.time() - started)
 
     mtp_args = _mtp_conversion_args(job.source_dir)
     print(f"[{job.base_name}] converting to BF16 GGUF...")
+    partial = job.bf16_path.with_name(job.bf16_path.name + ".partial")
     try:
         run_verbose(["python", llama_dir / "convert_hf_to_gguf.py",
                      job.source_dir, "--outtype", "bf16",
-                     "--outfile", job.bf16_path, *mtp_args],
+                     "--outfile", partial, *mtp_args],
                     label=f"converting {job.repo_id}")
-    except RuntimeError as e:
+        if not partial.is_file() or not partial.stat().st_size:
+            raise RuntimeError("converter produced an empty output")
+        partial.replace(job.bf16_path)
+    except BaseException as e:
+        partial.unlink(missing_ok=True)
         if hint := remote_code_hint(str(e)):
             raise RuntimeError(f"converting {job.repo_id}: {hint}") from e
         raise

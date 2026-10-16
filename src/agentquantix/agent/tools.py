@@ -23,7 +23,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .. import card, config, feasibility, hub, report, research, sysprobe, voice
+from .. import card, config, feasibility, hub, media, report, research, sysprobe, voice
+from . import media_tools
 from ..pipeline import run as run_mod, voice_release
 from ..pipeline.job import Job
 
@@ -335,6 +336,9 @@ TOOLS = [
 # =====================================================
 # DISPATCH
 # =====================================================
+TOOLS.extend(media_tools.TOOLS)
+
+
 def _need_report():
     result = research.load_latest()
     if not result:
@@ -515,6 +519,8 @@ def _assessments_for(models):
 def call(name, arguments=None):
     """Run one tool. Returns JSON-serialisable data, or raises ValueError."""
     arguments = arguments or {}
+    if name in media_tools.NAMES:
+        return media_tools.call(name, arguments)
 
     if name == "probe_system":
         return sysprobe.probe(
@@ -573,6 +579,9 @@ def call(name, arguments=None):
                 "table": report.table(result, limit=top)}
 
     if name == "describe_candidate":
+        if media.looks_like_media(arguments["model"]):
+            return {"media": media.plan_release(arguments["model"]),
+                    "text": "This is a likely media model; use plan_media_release and the separate stable-diffusion.cpp pipeline."}
         if backend := voice.backend_for(arguments["model"]):
             plan = _voice_plan({"model": arguments["model"]})
             return {"text": (f"{arguments['model']} is a supported "
@@ -595,6 +604,8 @@ def call(name, arguments=None):
         return {"text": report.detail(assessment), "assessment": assessment}
 
     if name == "plan_quantization":
+        if any(media.looks_like_media(model) for model in arguments["models"]):
+            raise ValueError("image/video models use plan_media_release, not the llama.cpp text converter")
         voice_models = [model for model in arguments["models"]
                         if voice.backend_for(model)]
         if voice_models:
@@ -648,6 +659,8 @@ def call(name, arguments=None):
         }
 
     if name == "start_quantization":
+        if any(media.looks_like_media(model) for model in arguments["models"]):
+            raise ValueError("image/video models use start_media_release, not the llama.cpp text converter")
         voice_models = [model for model in arguments["models"]
                         if voice.backend_for(model)]
         if voice_models:

@@ -20,6 +20,11 @@ on:
   #   types: [published]
   workflow_dispatch:
     inputs:
+      version:
+        description: "Exact source version to publish (for example 0.4.5)"
+        type: string
+        required: true
+        default: "0.4.5"
       target:
         description: "Where to publish"
         type: choice
@@ -43,6 +48,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+
+      - name: Requested release matches source
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY'
+          import os, runpy
+          version = runpy.run_path("src/agentquantix/__init__.py")["__version__"]
+          assert os.environ["REQUESTED_VERSION"] == version, "Requested version does not match source"
+          assert f"## {version}" in open("CHANGELOG.md", encoding="utf-8").read()
+          PY
 
       - name: Build wheel and sdist
         run: |

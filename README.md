@@ -1,5 +1,15 @@
 # AgentQuantix
 
+Source version **0.4.5** hardens upload recovery, resume, and CLI failure
+reporting. See [CHANGELOG.md](CHANGELOG.md) and
+[release validation](docs/RELEASE_VALIDATION.md).
+
+The **v0.5.0 media track is experimental development**, following
+[the stable-diffusion.cpp release plan](docs/STABLE_DIFFUSION_CPP_RELEASE_PLAN.md).
+It has a separate pinned engine, component bundles, CLI/MCP tools, quality and
+human-review gates. See [media usage](docs/MEDIA_USAGE.md). A loader catalog
+entry is not a claim that native model acceptance has passed.
+
 [![CI](https://github.com/NANInithin/AgentQuantix/actions/workflows/ci.yml/badge.svg)](https://github.com/NANInithin/AgentQuantix/actions/workflows/ci.yml)
 [![Licence](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)

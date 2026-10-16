@@ -141,8 +141,9 @@ class Status:
 
     Two independent sources of truth are consulted at run time: this file, and
     the Hub file listing. The Hub is authoritative — it is what people can
-    actually download — while the file makes the common case fast and survives
-    a Hub outage. Anything in either one is not redone.
+    actually download. Local upload records are historical hints only: a
+    missing remote file must be uploaded again, and a Hub outage must fail
+    closed rather than deleting local files based on stale records.
     """
 
     def __init__(self, path: Path, lock=None):
@@ -178,7 +179,9 @@ class Status:
             status.setdefault(kind, [])
             if name not in status[kind]:
                 status[kind].append(name)
-            self.path.write_text(json.dumps(status, indent=2))
+            temporary = self.path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(status, indent=2), encoding="utf-8")
+            temporary.replace(self.path)
         if self.lock:
             with self.lock:
                 write()
