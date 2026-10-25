@@ -47,7 +47,8 @@ def command(args):
         elif action == "verify":
             result = {"problems": media_release.load_bundle(args.manifest).problems(Path(args.manifest).parent)}
         else:
-            plan = _read(args.plan) if getattr(args, "plan", None) else media.plan_release(
+            def make_plan():
+                return media.plan_release(
                 args.repo, target_repo=args.target, quants=args.quant, family=args.family, task=args.task,
                 components=_components(args.component),
                 compute_backend=args.compute_backend, sequential=args.sequential, hunt_forks=not args.no_fork_hunt,
@@ -57,11 +58,26 @@ def command(args):
                     "ref_image": args.ref_image, "ref_audio": args.ref_audio}.items() if value},
                 settings={key: getattr(args, key) for key in ("width", "height", "steps", "seed", "frames", "fps", "sampler", "scheduler", "cfg_scale")
                           if getattr(args, key) is not None})
+            saved = _read(args.plan) if getattr(args, "plan", None) else None
+            plan = saved if saved is not None else make_plan()
+            if action == "run" and saved is not None:
+                media.validate_plan(plan, check_runtime=False)
+            if action == "run" and not args.dry_run and not plan["blockers"]:
+                from . import runtime_control
+                revision = ({"revision": plan["engine_revision"], "repository": "leejet/stable-diffusion.cpp"}
+                            if saved and not saved.get("runtime_snapshot") else None)
+                handle = runtime_control.ensure_runtime(
+                    "stable-diffusion.cpp", compute_backend=plan["compute_backend"],
+                    frozen=saved.get("runtime_snapshot") if saved else None, revision=revision)
+                if handle and saved is None:
+                    plan = make_plan()
             if getattr(args, "output", None):
                 media.atomic_json(args.output, plan)
             print(json.dumps(plan, indent=2))
             if action == "plan" or args.dry_run:
                 return 1 if plan["blockers"] else 0
+            if plan["blockers"]:
+                raise media.MediaValidationError("media plan is blocked: " + "; ".join(plan["blockers"]))
             if args.repo and args.repo != plan["repo_id"]:
                 raise media.MediaValidationError("repository differs from the saved approved plan")
             if not args.yes and input("Build and validate this exact media plan? [y/N] ").strip().lower() not in ("y", "yes"):

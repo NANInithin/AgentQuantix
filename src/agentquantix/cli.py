@@ -7,9 +7,11 @@ of "research the trending list" or "run this model", so the agent cannot
 behave differently depending on which harness is holding the reins, and the
 whole thing still works with no harness at all.
 
-The two human-in-the-loop moments are the only interactive parts:
+Model-work approval gates:
   * you decide when to trigger  -> `aqx research`
   * you approve the models      -> the prompt in `aqx run`, or `--yes`
+
+Runtime storage and update decisions are separate and are not implied by --yes.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from . import (card, config, feasibility, report, research, sysprobe,
                transfer, voice)
 from .pipeline import build as build_mod, run as run_mod, source as source_mod
 from .pipeline.job import Job
+from .runtimes import RuntimeDecisionRequired, RuntimeErrorBase
 
 
 def _print(*args):
@@ -108,7 +111,7 @@ def cmd_show(args):
 # =====================================================
 # run
 # =====================================================
-def _select_interactively(result, preselected):
+def _select_interactively(result, preselected, *, allow_runtime_setup=False):
     """The approval gate. Returns the assessments the user said yes to."""
     runnable = [a for a in (result or {}).get("assessments", [])
                 if a["verdict"] not in ("blocked", "done")]
@@ -132,6 +135,11 @@ def _select_interactively(result, preselected):
                 _print(f"{name}: not in the last research run. Name it as a "
                        "full repo id (org/model) to assess it directly.")
                 continue
+            if assessment["verdict"] == "blocked" and assessment.get("arch_ok") is False and allow_runtime_setup:
+                from .runtime_control import ensure_runtime
+                previous = Job.from_assessment(assessment)
+                if ensure_runtime("llama.cpp", frozen=previous.runtime_snapshot or None):
+                    assessment = research.assess_one(assessment["repo_id"])
             if assessment["verdict"] == "blocked":
                 _print(f"{assessment['repo_id']}: BLOCKED - "
                        f"{assessment['blockers'][0]}")
@@ -189,7 +197,7 @@ def cmd_run(args):
                "model directly: `aqx run org/model`.")
         return 1
 
-    chosen = _select_interactively(result, args.model)
+    chosen = _select_interactively(result, args.model, allow_runtime_setup=not args.dry_run)
     if not chosen:
         _print("Nothing approved - stopping.")
         return 0
@@ -253,6 +261,35 @@ def cmd_run(args):
     # Smallest first, so a pipeline problem surfaces on the cheapest model
     # rather than eight hours into the largest one.
     jobs.sort(key=lambda j: j.assessment["hours"]["total"])
+
+    if not args.dry_run and any(not job.fork for job in jobs):
+        from . import runtime_control
+        originals = [job for job in jobs if not job.fork]
+        frozen = originals[0].runtime_snapshot or None
+        handle = runtime_control.ensure_runtime("llama.cpp", frozen=frozen)
+        if handle:
+            for job in originals:
+                if job.runtime_snapshot and job.runtime_snapshot["identity"] != handle.identity:
+                    raise ValueError("these jobs require different frozen runtimes; resume them separately")
+                job.runtime_snapshot = handle.snapshot()
+            # Reassess only new jobs against the selected installation before
+            # displaying the final quant list and asking for model approval.
+            if not frozen:
+                refreshed = []
+                for job in jobs:
+                    if job.fork:
+                        refreshed.append(job)
+                        continue
+                    assessment = research.assess_one(job.repo_id)
+                    if assessment["verdict"] == "blocked":
+                        _print(f"{job.repo_id}: blocked after runtime selection: {assessment['blockers']}")
+                        continue
+                    selected = Job.from_assessment(assessment)
+                    selected.runtime_snapshot = handle.snapshot()
+                    refreshed.append(selected)
+                jobs = refreshed
+                if not jobs:
+                    return 1
 
     total_hours = sum(j.assessment["hours"]["total"] for j in jobs)
     upload = sum(j.assessment["upload_gb"] for j in jobs)
@@ -507,6 +544,12 @@ def cmd_voice(args):
 
     plan = _voice_plan(args.repo, args.target, args.quant, args.family,
                        not args.no_fork_hunt)
+    if plan.get("status") == "ready" and not args.dry_run:
+        from . import runtime_control
+        engine = plan["backend"]
+        runtime_control.prepare_voice_runtimes(args.repo, engine, plan["track"])
+        plan = _voice_plan(args.repo, args.target, args.quant, args.family,
+                           not args.no_fork_hunt)
     _print(json.dumps(plan, indent=2))
     if plan.get("status") != "ready":
         return 2
@@ -552,6 +595,14 @@ def cmd_bootstrap(args):
 def cmd_doctor(args):
     info = sysprobe.probe(measure_disk=False)
     problems, notes = [], []
+    from .runtimes import RuntimeManager, selected_source
+    manager = RuntimeManager()
+
+    def installed_binary(engine, fallback, name):
+        installed = manager.inspect(engine, verify=False)
+        if installed and name in installed.binaries:
+            return installed.binaries[name]
+        return build_mod.find_binary(selected_source(engine, fallback), name)
 
     if not info["hf_token"]:
         problems.append("No Hugging Face token. Set HF_TOKEN, or run "
@@ -562,21 +613,21 @@ def cmd_doctor(args):
     elif not info["llama"]["binaries"]:
         notes.append("llama.cpp is present but not built - the first run will "
                      "compile llama-quantize and llama-imatrix.")
-    elif not build_mod.find_binary(config.UPSTREAM_LLAMA, "llama-tts"):
+    elif not installed_binary("llama.cpp", config.UPSTREAM_LLAMA, "llama-tts"):
         notes.append("llama.cpp is built without llama-tts - the first TTS "
                      "release will build that target.")
-    if not config.UPSTREAM_WHISPER.exists():
+    if not selected_source("whisper.cpp", config.UPSTREAM_WHISPER).exists():
         notes.append(f"whisper.cpp is not cached at {config.UPSTREAM_WHISPER} - "
                      "the first ASR or TTS round-trip run will clone and build it.")
-    elif not build_mod.find_binary(config.UPSTREAM_WHISPER, "whisper-cli"):
+    elif not installed_binary("whisper.cpp", config.UPSTREAM_WHISPER, "whisper-cli"):
         notes.append("whisper.cpp is present but whisper-cli is not built - "
                      "the first voice run will build it independently.")
-    if not config.UPSTREAM_AUDIOCPP.exists():
+    if not selected_source("audio.cpp", config.UPSTREAM_AUDIOCPP).exists():
         notes.append(f"audio.cpp is not cached at {config.UPSTREAM_AUDIOCPP} - "
                      "the first catalog-backed audio.cpp release will clone "
                      "and build the full runtime.")
-    elif (not build_mod.find_binary(config.UPSTREAM_AUDIOCPP, "audiocpp_cli")
-          or not build_mod.find_binary(config.UPSTREAM_AUDIOCPP, "audiocpp_gguf")):
+    elif (not installed_binary("audio.cpp", config.UPSTREAM_AUDIOCPP, "audiocpp_cli")
+          or not installed_binary("audio.cpp", config.UPSTREAM_AUDIOCPP, "audiocpp_gguf")):
         notes.append("audio.cpp is present but its CLI/converter is not built - "
                      "the first audio.cpp release will build both tools.")
     if not info["gpus"]:
@@ -805,8 +856,9 @@ def build_parser():
     voice_verify.add_argument("--root")
     voice_verify.set_defaults(func=cmd_voice)
 
-    from . import media_cli
+    from . import media_cli, runtime_cli
     media_cli.add_parser(sub)
+    runtime_cli.add_parser(sub)
 
     boot = sub.add_parser(
         "bootstrap",
@@ -849,7 +901,21 @@ def main(argv=None):
 
     args = build_parser().parse_args(argv)
     try:
-        return args.func(args)
+        from .runtime_control import execution_session
+        with execution_session(interactive=sys.stdin.isatty()) as session:
+            result = args.func(args)
+            if result:
+                session.mark_failed()
+            return result
+    except RuntimeDecisionRequired as error:
+        _print(json.dumps({"runtime_decision": error.details}, indent=2))
+        return 2
+    except RuntimeErrorBase as error:
+        _print(f"runtime: {error}")
+        return 1
+    except (ValueError, OSError) as error:
+        _print(f"aqx: {error}")
+        return 1
     except KeyboardInterrupt:
         _print("\nInterrupted. Nothing is lost - re-run to resume.")
         return 130

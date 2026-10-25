@@ -19,14 +19,20 @@ Finds newly trending Hugging Face models, works out which of them **your
 machine** can turn into llama.cpp GGUF quants, and — once you approve specific
 models — quantizes them, uploads them, and writes their model cards.
 
-Two human gates, and nothing else:
+Two gates control model work:
 
 1. **You decide when to start.** It never researches on its own.
 2. **You decide which models get quantized.** It never starts a run for a model
    you did not name.
 
-Everything between and around those is automatic, including the final
-verification and the model card.
+Runtime setup and updates have separate choices: keep an original engine for
+regular use outside temp, or build it temporarily; when an update is available,
+choose whether to build it. An unavailable update check uses the installed
+revision. Verification and model cards run automatically.
+
+The shared lifecycle is in 0.5.1 development; see
+[runtime lifecycle status](docs/RUNTIME_LIFECYCLE_STATUS.md) and the approved
+[0.5.1–0.6.0 roadmap](docs/RELEASE_0_6_0_PLAN.md).
 
 ```
 $ aqx research

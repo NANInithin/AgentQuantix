@@ -5,6 +5,10 @@ reports/
 __pycache__/
 *.pyc
 .venv/
+.venv-dev/
+.uv-cache/
+.test-*/
+.cache/
 *.egg-info/
 
 # Build artifacts

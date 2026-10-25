@@ -456,9 +456,22 @@ new toolchain, and a 1B model costs minutes rather than hours to find that out.
 
 ## Command reference
 
+Original runtime installation/update management is shared across the existing
+text, voice and media engines. Choose persistent or temporary setup at first
+use; updates require their own approval even when a model run uses `--yes`.
+See [runtime lifecycle status](docs/RUNTIME_LIFECYCLE_STATUS.md) for paths,
+migration, frozen resume and development validation boundaries.
+
 | Command | What it does |
 |---|---|
 | `aqx doctor` | Is this machine ready. Run after any environment change. |
+| `aqx runtime list` | Installed engine revisions, storage and provenance. |
+| `aqx runtime check <engine>` | Check the stable release or default-branch commit without building. |
+| `aqx runtime install <engine> --persistent` | Review and build a regular-use original; `--temporary` selects temporary storage. |
+| `aqx runtime update <engine>` | Review and build an update beside the current installation. |
+| `aqx runtime adopt <engine> <path>` | Verify/register an existing original checkout without modifying it. |
+| `aqx runtime rollback <engine>` | Restore the previous verified installation. |
+| `aqx runtime prune <engine>` | Inventory obsolete builds; `--apply` requests removal. |
 | `aqx probe` | Measure the machine. `--remeasure-disk` to refresh the cached disk rate. |
 | `aqx research` | Steps 1-3. `--limit N`, `--top N`, `--hide-blocked`, `--markdown`, `--json`, `--no-fork-hunt`. |
 | `aqx show <model>...` | Full detail on candidates from the last research run. |

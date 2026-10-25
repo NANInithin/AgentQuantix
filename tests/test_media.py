@@ -46,6 +46,53 @@ def test_catalog_is_pinned_and_covers_all_extracted_loader_families():
         assert capability.load != capability.convert
 
 
+def test_sdxl_standard_repository_plans_without_manual_overrides(source):
+    source["repo_id"] = "stabilityai/stable-diffusion-xl-base-1.0"
+    source["configs"] = {
+        "model_index.json": {"_class_name": "StableDiffusionXLPipeline",
+                             "vae": ["diffusers", "AutoencoderKL"]},
+        "vae/config.json": {"_class_name": "AutoencoderKL"},
+    }
+    names = ["sd_xl_base_1.0.safetensors", "sd_xl_base_1.0_0.9vae.safetensors",
+             "sd_xl_offset_example-lora_1.0.safetensors",
+             "vae/diffusion_pytorch_model.safetensors",
+             "vae/diffusion_pytorch_model.fp16.safetensors",
+             "vae_1_0/diffusion_pytorch_model.safetensors",
+             "unet/diffusion_pytorch_model.safetensors"]
+    source["files"] = dict.fromkeys(names, {"bytes": 8192, "sha256": "b" * 64})
+    result = media.plan_release(source["repo_id"], metadata=source, hunt_forks=False,
+                                target_repo="user/sdxl-GGUF")
+    assert not result["blockers"]
+    assert result["family"] == "sdxl"
+    assert {c["role"]: c["source_path"] for c in result["components"]} == {
+        "unet": "sd_xl_base_1.0.safetensors",
+        "vae": "vae/diffusion_pytorch_model.safetensors"}
+    assert not result["components"][1]["quantizable"]
+    assert result["publication_blockers"]  # Planning does not waive quality gates.
+
+
+@pytest.mark.parametrize("declaration,vae_config", [
+    (["diffusers", "OtherVAE"], {"_class_name": "AutoencoderKL"}),
+    (["diffusers", "AutoencoderKL"], {}),
+])
+def test_vae_resolution_requires_component_metadata(source, declaration, vae_config):
+    source["configs"] = {"model_index.json": {"vae": declaration},
+                         "vae/config.json": vae_config}
+    source["files"]["vae/diffusion_pytorch_model.safetensors"] = {"bytes": 8192}
+    assert media._configured_vae(source) is None
+
+
+def test_blocked_media_run_does_not_prompt_or_build(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from agentquantix import media_cli
+    plan_path = tmp_path / "plan.json"
+    media.atomic_json(plan_path, {"blockers": ["family unresolved"]})
+    monkeypatch.setattr("builtins.input", lambda *args: pytest.fail("blocked plan prompted"))
+    monkeypatch.setattr(media_release, "run_release", lambda *args, **kwargs: pytest.fail("blocked plan ran"))
+    assert media_cli.command(SimpleNamespace(media_command="run", plan=str(plan_path),
+                                             output=None, dry_run=False)) == 1
+
+
 def test_plan_freezes_sources_components_licenses_and_targets(source, contract):
     result = plan(source, contract)
     assert not result["blockers"]

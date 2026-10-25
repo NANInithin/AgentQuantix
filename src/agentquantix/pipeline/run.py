@@ -526,6 +526,11 @@ def run_jobs(jobs, options: RunOptions | None = None, on_event=None,
     for job in jobs:
         job.save()
         try:
+            if not job.fork:
+                from .. import runtime_control
+                if handle := runtime_control.ensure_runtime("llama.cpp", frozen=job.runtime_snapshot or None):
+                    job.runtime_snapshot = handle.snapshot()
+                    job.save()
             # ensure_tools is keyed on the fork, so two models needing the same
             # branch share one checkout and one CUDA compile.
             llama_dir, quantize, imatrix = build_mod.ensure_tools(job.fork)
@@ -562,6 +567,9 @@ def run_jobs(jobs, options: RunOptions | None = None, on_event=None,
     # Only remove a fork once every job that used it finished cleanly —
     # otherwise the resume run would pay for the rebuild.
     incomplete = {k: v for k, v in report.items() if v.get("failures")}
+    if incomplete:
+        from ..runtime_control import mark_failed
+        mark_failed()
     if clean_forks and not incomplete:
         for llama_dir in forks_used.values():
             build_mod.cleanup_fork(llama_dir)

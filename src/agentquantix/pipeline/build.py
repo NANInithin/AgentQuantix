@@ -459,6 +459,10 @@ def ensure_upstream(clone=True):
     ever needs the working tree — nobody bisects llama.cpp from here, and the
     full history is a large download for no benefit.
     """
+    from .. import runtime_control
+    if handle := runtime_control.ensure_runtime("llama.cpp"):
+        quantize, imatrix = runtime_control.require_binaries(handle, "llama-quantize", "llama-imatrix")
+        return handle.source, quantize, imatrix
     llama_dir = config.UPSTREAM_LLAMA
 
     if not llama_dir.exists():

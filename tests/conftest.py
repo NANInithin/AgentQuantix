@@ -42,6 +42,11 @@ def offline(monkeypatch, tmp_path):
     from agentquantix import config
     monkeypatch.setattr(config, "TOKEN", None)
     monkeypatch.setattr(config, "_namespace_cache", None)
+    # Runtime discovery now reads the installation registry during planning.
+    # Tests must never inherit or rewrite the developer's installed runtimes.
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(config, "RUNS_DIR", tmp_path / "state" / "runs")
+    monkeypatch.setattr(config, "REPORTS_DIR", tmp_path / "reports")
     yield
 
 

@@ -231,13 +231,21 @@ def _llama_build():
     turns a two-hour job into a two-hour-plus-compile job, and the report
     should say so before anything is approved.
     """
-    build = {"root": str(config.UPSTREAM_LLAMA),
-             "present": config.UPSTREAM_LLAMA.exists(),
+    from .runtimes import RuntimeManager, current_session, selected_source
+    session = current_session()
+    handle = session.get("llama.cpp") if session else None
+    handle = handle or RuntimeManager().inspect("llama.cpp", verify=False)
+    root = selected_source("llama.cpp", config.UPSTREAM_LLAMA)
+    build_root = handle.build_dir if handle else root / "build"
+    build = {"root": str(root),
+             "present": root.exists(),
              "binaries": {}, "generator": None, "cuda": None, "commit": None}
     if not build["present"]:
         return build
 
-    bindir = config.UPSTREAM_LLAMA / "build" / "bin"
+    if handle:
+        build["binaries"] = {name: str(path) for name, path in handle.binaries.items() if path.is_file()}
+    bindir = build_root / "bin"
     for tool in ("llama-quantize", "llama-imatrix", "llama-cli"):
         for candidate in (bindir / f"{tool}.exe", bindir / "Release" / f"{tool}.exe",
                           bindir / tool, bindir / "Release" / tool):
@@ -245,7 +253,7 @@ def _llama_build():
                 build["binaries"][tool] = str(candidate)
                 break
 
-    cache = config.UPSTREAM_LLAMA / "build" / "CMakeCache.txt"
+    cache = build_root / "CMakeCache.txt"
     if cache.exists():
         text = cache.read_text(encoding="utf-8", errors="replace")
         for line in text.splitlines():
@@ -256,7 +264,7 @@ def _llama_build():
 
     try:
         build["commit"] = subprocess.run(
-            ["git", "-C", str(config.UPSTREAM_LLAMA), "log", "-1", "--format=%h %cs"],
+            ["git", "-C", str(root), "log", "-1", "--format=%h %cs"],
             capture_output=True, text=True, timeout=20, check=True,
         ).stdout.strip()
     except Exception:

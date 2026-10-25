@@ -92,7 +92,9 @@ def handle(message):
 
         failed = False
         try:
-            failed = "error" in json.loads(text) and len(json.loads(text)) == 1
+            payload = json.loads(text)
+            failed = isinstance(payload, dict) and "error" in payload and (
+                len(payload) == 1 or "runtime_decision" in payload)
         except Exception:
             pass
         _result(request_id, {"content": [{"type": "text", "text": text}],

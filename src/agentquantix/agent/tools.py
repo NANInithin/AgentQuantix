@@ -24,9 +24,10 @@ import json
 from pathlib import Path
 
 from .. import card, config, feasibility, hub, media, report, research, sysprobe, voice
-from . import media_tools
+from . import media_tools, runtime_tools
 from ..pipeline import run as run_mod, voice_release
 from ..pipeline.job import Job
+from ..runtimes import RuntimeDecisionRequired
 
 # =====================================================
 # SCHEMAS
@@ -337,6 +338,7 @@ TOOLS = [
 # DISPATCH
 # =====================================================
 TOOLS.extend(media_tools.TOOLS)
+TOOLS.extend(runtime_tools.TOOLS)
 
 
 def _need_report():
@@ -516,7 +518,7 @@ def _assessments_for(models):
     return [found[name] for name in sorted(found, key=order.get)]
 
 
-def call(name, arguments=None):
+def _call(name, arguments=None):
     """Run one tool. Returns JSON-serialisable data, or raises ValueError."""
     arguments = arguments or {}
     if name in media_tools.NAMES:
@@ -680,6 +682,15 @@ def call(name, arguments=None):
                 "nothing to do: every named model is either blocked on this "
                 "machine or already fully published.")
         jobs.sort(key=lambda j: j.assessment["hours"]["total"])
+        originals = [job for job in jobs if not job.fork]
+        if originals:
+            from .. import runtime_control
+            handle = runtime_control.ensure_runtime("llama.cpp", frozen=originals[0].runtime_snapshot or None)
+            if handle:
+                for job in originals:
+                    if job.runtime_snapshot and job.runtime_snapshot["identity"] != handle.identity:
+                        raise ValueError("these jobs require different frozen runtimes; resume them separately")
+                    job.runtime_snapshot = handle.snapshot()
 
         events = []
         outcome = run_mod.run_jobs(jobs, options=_options_from(arguments),
@@ -765,6 +776,10 @@ def call(name, arguments=None):
             raise ValueError(
                 f"voice release is blocked: {plan.get('blocker')}; "
                 f"fork leads: {plan.get('fork_leads', [])}")
+        from .. import runtime_control
+        backend = voice.backend_named(plan["backend"])
+        runtime_control.prepare_voice_runtimes(arguments["model"], backend.backend, backend.track, persist=True)
+        plan = _voice_plan(arguments)
         options = voice_release.VoiceReleaseOptions(
             quants=plan["quants"], language=arguments.get("language"),
             speaker=(Path(arguments["speaker"])
@@ -830,6 +845,25 @@ def call(name, arguments=None):
     raise ValueError(f"unknown tool: {name}")
 
 
+def call(name, arguments=None):
+    if name in runtime_tools.NAMES:
+        return runtime_tools.call(name, arguments or {})
+    if name in ("start_quantization", "start_voice_release", "start_media_release"):
+        from ..runtime_control import execution_session
+        with execution_session() as session:
+            result = _call(name, arguments)
+            voice_failures = any(
+                entry.get("error") or entry.get("reason", "").endswith("failed")
+                or entry.get("quality", {}).get("regression", {}).get("passed") is False
+                for entry in result.get("results", {}).values())
+            media_failures = any(entry.get("rejected") or entry.get("status") == "quality-rejected"
+                                 for entry in result.get("candidates", []))
+            if result.get("failures") or result.get("incomplete") or voice_failures or media_failures:
+                session.mark_failed()
+            return result
+    return _call(name, arguments)
+
+
 def call_json(name, arguments=None):
     """Dispatch and serialise, turning failures into a readable tool result.
 
@@ -839,5 +873,7 @@ def call_json(name, arguments=None):
     """
     try:
         return json.dumps(call(name, arguments), indent=2, default=str)
+    except RuntimeDecisionRequired as e:
+        return json.dumps({"error": str(e), "runtime_decision": e.details}, indent=2, default=str)
     except Exception as e:
         return json.dumps({"error": f"{type(e).__name__}: {e}"}, indent=2)

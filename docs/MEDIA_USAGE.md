@@ -13,6 +13,17 @@ aqx media plan org/model --quant q4_0 --sequential
 aqx media run org/model --quant q4_0 --sequential
 ```
 
+For the standard SDXL base repository, no family or component flags are needed:
+
+```sh
+aqx media run stabilityai/stable-diffusion-xl-base-1.0
+```
+
+Planning recognizes its Diffusers pipeline class, selects the checkpoint named
+in the native example, and uses the default VAE declared in the repository's
+component metadata. Precision variants and alternate VAE directories are not
+selected by filename similarity. Blocked plans exit before the approval prompt.
+
 No quality-profile JSON is needed for a local manual test. With no calibrated
 profile, the run reports `structural-only`, keeps its samples for your inspection,
 and blocks publication. A plan can also report publication-only license blockers

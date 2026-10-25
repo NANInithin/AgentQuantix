@@ -164,9 +164,32 @@ def generate_catalog(checkout: Path, expected_revision=ENGINE_REVISION) -> dict:
             "source_types": types, "type_codes": codes, "evidence_sha256": evidence, "capabilities": capabilities}
 
 
-def load_catalog(path=CATALOG_PATH):
-    catalog = json.loads(Path(path).read_text(encoding="utf-8"))
-    if catalog.get("revision") != ENGINE_REVISION or catalog.get("schema_version") != 1:
+def catalog_runtime():
+    from .runtimes import RuntimeManager, current_session
+    session = current_session()
+    handle = session.get("stable-diffusion.cpp") if session else None
+    if handle is None:
+        manager = session.manager if session else RuntimeManager()
+        handle = manager.inspect("stable-diffusion.cpp", verify=False)
+    return handle
+
+
+def selected_catalog_path():
+    handle = catalog_runtime()
+    resource = handle.manifest.get("resources", {}).get("capability_catalog") if handle else None
+    if resource:
+        from .runtimes.spec import file_hash
+        if file_hash(resource["path"]) != resource["sha256"]:
+            raise ValueError("installed media capability catalog changed since runtime validation")
+    return Path(resource["path"]) if resource else CATALOG_PATH
+
+
+def load_catalog(path=None):
+    path = Path(path) if path is not None else selected_catalog_path()
+    catalog = json.loads(path.read_text(encoding="utf-8"))
+    handle = catalog_runtime()
+    expected = handle.revision if handle and path == selected_catalog_path() else ENGINE_REVISION
+    if catalog.get("revision") != expected or catalog.get("schema_version") != 1:
         raise ValueError("media capability catalog does not match the pinned engine")
     return catalog
 

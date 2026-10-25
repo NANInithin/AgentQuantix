@@ -45,6 +45,7 @@ class Job:
 
     is_multimodal: bool = False
     fork: dict | None = None         # {"repo": ..., "ref": ...} or None
+    runtime_snapshot: dict = field(default_factory=dict)
 
     assessment: dict = field(default_factory=dict)
     created_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M:%S"))
@@ -110,7 +111,7 @@ class Job:
             best = assessment["fork_leads"][0]
             fork = {"repo": best["repo"], "ref": best["ref"],
                     "why": best.get("why"), "confidence": best.get("confidence")}
-        return cls(
+        job = cls(
             repo_id=assessment["repo_id"],
             base_name=assessment["repo_id"].split("/")[-1],
             target_repo=assessment["target_repo"],
@@ -131,6 +132,13 @@ class Job:
             fork=fork,
             assessment=assessment,
         )
+        # Re-running an interrupted model retains its original runtime even
+        # after another invocation has activated a newer installation.
+        if job.record_file.is_file() and job.status_file.is_file():
+            previous = cls.load(job.record_file)
+            if previous.repo_id == job.repo_id and previous.target_repo == job.target_repo:
+                job.runtime_snapshot = previous.runtime_snapshot
+        return job
 
 
 # =====================================================

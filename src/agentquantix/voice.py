@@ -9,6 +9,7 @@ model format.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from array import array
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -259,9 +260,9 @@ def _audio_cpp_aliases(spec: dict) -> tuple[str, ...]:
     return tuple(value for value in dict.fromkeys(aliases) if value)
 
 
-def _audio_cpp_backends() -> tuple[VoiceBackend, ...]:
+def _audio_cpp_backends(specs=None) -> tuple[VoiceBackend, ...]:
     backends = []
-    for spec in AUDIOCPP_SPECS:
+    for spec in AUDIOCPP_SPECS if specs is None else specs:
         tasks = tuple(str(task) for task in spec.get("tasks", []))
         tracks = []
         if "tts" in tasks and spec.get("category") == "tts":
@@ -316,6 +317,78 @@ TTS_REVIEW_QUANTS = tuple(dict.fromkeys(
                     for quant in backend.supported_quants))))
 
 
+_AUDIOCPP_CATALOG_CACHE = {}
+
+
+def audio_cpp_catalog() -> dict:
+    """The selected runtime's immutable model specs, or the offline baseline.
+
+    Runtime updates cannot keep planning against a different bundled catalog.
+    Verify selected files against the frozen resource hashes before using the
+    parsed cache; no global registry is replaced, so concurrent sessions remain
+    independent and a read-only session keeps its shipped baseline.
+    """
+    from .runtimes import current_session
+    session = current_session()
+    handle = session.get("audio.cpp") if session else None
+    if handle is None:
+        from .runtimes import RuntimeManager
+        handle = RuntimeManager().inspect("audio.cpp", verify=False)
+    if handle is None:
+        return {"specs": AUDIOCPP_SPECS, "registry": AUDIOCPP_SPEC_REGISTRY,
+                "backends": AUDIOCPP_BACKENDS, "package_repos": AUDIOCPP_PACKAGE_REPOS,
+                "revision": None, "runtime_identity": None}
+    root = handle.source / "model_specs"
+    paths = sorted(root.glob("*.json"))
+    if not paths:
+        raise VoiceValidationError("selected audio.cpp runtime has no model_specs catalog")
+    resources = handle.manifest.get("resources", {})
+    expected = {name: entry for name, entry in resources.items()
+                if name.startswith("model_specs/") and name.endswith(".json")}
+    actual = {path.relative_to(handle.source).as_posix(): path for path in paths}
+    if set(actual) != set(expected):
+        raise VoiceValidationError("selected audio.cpp model_specs differ from the frozen runtime resources")
+    signatures = []
+    for name, path in actual.items():
+        recorded = expected[name]
+        if (not isinstance(recorded, dict)
+                or Path(recorded.get("path", "")).resolve() != path.resolve()
+                or sha256(path) != recorded.get("sha256")):
+            raise VoiceValidationError(f"selected audio.cpp model spec changed: {name}")
+        signatures.append((name, recorded["sha256"]))
+    cache_key = (handle.identity, tuple(signatures))
+    if cache_key not in _AUDIOCPP_CATALOG_CACHE:
+        specs = []
+        families = set()
+        for name, path in actual.items():
+            try:
+                spec = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as error:
+                raise VoiceValidationError(f"selected audio.cpp model spec is unreadable: {name}: {error}") from error
+            if (not isinstance(spec, dict) or not isinstance(spec.get("family"), str)
+                    or not spec["family"] or spec["family"] in families
+                    or not isinstance(spec.get("tasks", []), list)
+                    or not isinstance(spec.get("packages", []), list)
+                    or not all(isinstance(item, dict) for item in spec.get("packages", []))
+                    or not isinstance(spec.get("sources", []), list)
+                    or not all(isinstance(item, dict) for item in spec.get("sources", []))):
+                raise VoiceValidationError(f"selected audio.cpp model spec has an invalid family/task/source contract: {name}")
+            specs.append(spec)
+            families.add(spec["family"])
+        specs = tuple(specs)
+        _AUDIOCPP_CATALOG_CACHE[cache_key] = {
+            "specs": specs, "registry": {spec["family"]: spec for spec in specs},
+            "backends": _audio_cpp_backends(specs),
+            "package_repos": {spec["family"]: _audio_cpp_package_repos(spec) for spec in specs},
+            "revision": handle.revision, "runtime_identity": handle.identity}
+        # Keep the cache bounded; manifests and files remain the source of truth.
+        while len(_AUDIOCPP_CATALOG_CACHE) > 16:
+            _AUDIOCPP_CATALOG_CACHE.pop(next(iter(_AUDIOCPP_CATALOG_CACHE)))
+    # Callers may prepare a modified package plan. Never let those edits alter
+    # the catalog another invocation obtains from this immutable runtime.
+    return deepcopy(_AUDIOCPP_CATALOG_CACHE[cache_key])
+
+
 _GENERIC_MODEL_TOKENS = {
     "audio", "voice", "speech", "model", "base", "small", "large", "hf",
     "gguf", "tts", "asr", "stt", "v1", "v2", "v3",
@@ -345,7 +418,8 @@ def _compact_name(value: str) -> str:
 
 def _audio_cpp_backend_for(repo_id: str, track: str | None = None,
                            family: str | None = None) -> VoiceBackend | None:
-    candidates = [backend for backend in AUDIOCPP_BACKENDS
+    catalog = audio_cpp_catalog()
+    candidates = [backend for backend in catalog["backends"]
                   if track is None or backend.track == track]
     if family:
         exact = [backend for backend in candidates
@@ -364,7 +438,7 @@ def _audio_cpp_backend_for(repo_id: str, track: str | None = None,
     package_repo_matches = [
         backend for backend in candidates
         if any(value == repo.casefold()
-               for repo in AUDIOCPP_PACKAGE_REPOS.get(backend.family, ()))
+               for repo in catalog["package_repos"].get(backend.family, ()))
     ]
     if len(package_repo_matches) == 1:
         return package_repo_matches[0]
@@ -414,8 +488,9 @@ def backend_for(repo_id: str, track: str | None = None,
 
 
 def backend_named(name: str) -> VoiceBackend:
+    registry = {backend.id: backend for backend in (*CORE_BACKENDS, *audio_cpp_catalog()["backends"])}
     try:
-        return BACKEND_REGISTRY[name]
+        return registry[name]
     except KeyError as error:
         raise VoiceValidationError(f"unknown voice backend: {name}") from error
 
@@ -441,13 +516,16 @@ def available_quants(repo_id: str, backend: VoiceBackend,
     if backend.backend == "whisper.cpp":
         return WHISPER_QUANTS
     if backend.backend == "audio.cpp":
-        spec = AUDIOCPP_SPEC_REGISTRY.get(backend.family, {})
+        catalog = audio_cpp_catalog()
+        spec = catalog["registry"].get(backend.family, {})
+        if not spec:
+            raise VoiceValidationError(f"selected audio.cpp runtime does not declare family {backend.family}")
         package = next((item for item in spec.get("packages", [])
                         if str(item.get("id", "")).casefold() ==
                         repo_id.casefold()), None)
         if package is not None and package.get("precision"):
             return (_audio_cpp_quant(package["precision"]),)
-        package_repos = AUDIOCPP_PACKAGE_REPOS.get(backend.family, ())
+        package_repos = catalog["package_repos"].get(backend.family, ())
         is_package_reference = (
             repo_id.casefold() == f"audio.cpp:{backend.family}".casefold()
             or any(repo_id.casefold() == value.casefold()
@@ -489,14 +567,16 @@ def execution_gate(repo_id: str, track: str | None = None,
 
 
 def advisory_catalog() -> dict:
+    catalog = audio_cpp_catalog()
     return {
         "tracks": [TTS, ASR],
         "audio_cpp_catalog": {
-            "spec_families": len(AUDIOCPP_SPECS),
-            "release_routes": len(AUDIOCPP_BACKENDS),
-            "revision_source": "bundled model_specs from pinned audio.cpp",
+            "spec_families": len(catalog["specs"]),
+            "release_routes": len(catalog["backends"]),
+            "revision_source": (catalog["revision"] or "bundled model_specs from pinned audio.cpp"),
+            "runtime_identity": catalog["runtime_identity"],
             "categories": sorted({str(spec.get("category", "unknown"))
-                                  for spec in AUDIOCPP_SPECS}),
+                                  for spec in catalog["specs"]}),
         },
         "candidates": [{
             "backend": backend.id,
@@ -514,7 +594,7 @@ def advisory_catalog() -> dict:
             "repo_id": backend.catalog_repo,
             "supported_repos": list(backend.repo_ids),
             "package_ids": list(backend.package_ids),
-        } for backend in BACKENDS],
+        } for backend in (*CORE_BACKENDS, *catalog["backends"])],
     }
 
 
@@ -635,8 +715,9 @@ def load_manifest(path: Path | str) -> dict:
     except (OSError, json.JSONDecodeError) as error:
         raise VoiceValidationError(f"could not read voice manifest {path}: {error}") \
             from error
+    known_backends = {*BACKEND_REGISTRY, *(backend.id for backend in audio_cpp_catalog()["backends"])}
     if (not isinstance(data, dict) or data.get("format") != 2
-            or data.get("backend") not in BACKEND_REGISTRY
+            or data.get("backend") not in known_backends
             or not isinstance(data.get("members"), list) or not data["members"]):
         raise VoiceValidationError(f"invalid voice manifest: {path}")
     return data

@@ -115,7 +115,8 @@ def _parse_registrations(llama_dir: Path):
 
 def converter_status(llama_dir: Path | None = None):
     """How the architecture list was obtained, and why. For doctor/bootstrap."""
-    llama_dir = Path(llama_dir or config.UPSTREAM_LLAMA)
+    from .runtimes import selected_source
+    llama_dir = Path(llama_dir or selected_source("llama.cpp", config.UPSTREAM_LLAMA))
     found, error = _ask_converter(llama_dir)
     if found:
         return {"ok": True, "source": "converter", "count": len(found),
@@ -134,7 +135,8 @@ def supported_architectures(llama_dir: Path | None = None):
     ever downloaded publisher GGUFs, and was previously reported as "could not
     read the supported-architecture list" against every single candidate.
     """
-    llama_dir = Path(llama_dir or config.UPSTREAM_LLAMA)
+    from .runtimes import selected_source
+    llama_dir = Path(llama_dir or selected_source("llama.cpp", config.UPSTREAM_LLAMA))
     found, _ = _ask_converter(llama_dir)
     return found or _parse_registrations(llama_dir)
 
@@ -145,7 +147,8 @@ def supported_quants(llama_dir: Path | None = None):
     A fork on its own branch can lag or lead upstream's quant table, and
     dropping an unknown type up front beats failing three hours into a sweep.
     """
-    llama_dir = Path(llama_dir or config.UPSTREAM_LLAMA)
+    from .runtimes import selected_source
+    llama_dir = Path(llama_dir or selected_source("llama.cpp", config.UPSTREAM_LLAMA))
     source = llama_dir / "tools" / "quantize" / "quantize.cpp"
     if not source.exists():                     # older layout
         source = llama_dir / "examples" / "quantize" / "quantize.cpp"

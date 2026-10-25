@@ -30,7 +30,8 @@ def test_only_explicit_start_tools_can_spend_hours():
     """Everything except the text and voice start tools is speculative-safe."""
     destructive = [t["name"] for t in tools_mod.TOOLS
                    if "user_approved" in t["input_schema"].get("required", [])]
-    assert destructive == ["start_quantization", "start_voice_release", "start_media_release", "publish_media_release"]
+    assert destructive == ["start_quantization", "start_voice_release", "start_media_release", "publish_media_release",
+                           "prepare_runtime", "adopt_runtime", "rollback_runtime"]
 
 
 def test_unknown_tools_are_rejected():

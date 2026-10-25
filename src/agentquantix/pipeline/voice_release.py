@@ -69,6 +69,10 @@ def _git_revision(directory: Path) -> str | None:
 
 def ensure_llama_tts() -> tuple[Path, Path, Path]:
     """Return the llama.cpp checkout, llama-tts, and llama-quantize."""
+    from .. import runtime_control
+    if handle := runtime_control.ensure_runtime("llama.cpp", required_targets=("llama-tts",)):
+        runtime, quantizer = runtime_control.require_binaries(handle, "llama-tts", "llama-quantize")
+        return handle.source, runtime, quantizer
     llama_dir, quantize, _ = build_mod.ensure_tools()
     runtime = build_mod.find_binary(llama_dir, "llama-tts")
     if runtime is None:
@@ -98,6 +102,10 @@ def _audio_cpp_defines() -> list[str]:
 
 def ensure_audiocpp_tools() -> tuple[Path, Path, Path]:
     """Build/cache the pinned audio.cpp CLI and standalone GGUF converter."""
+    from .. import runtime_control
+    if handle := runtime_control.ensure_runtime("audio.cpp"):
+        runtime, converter = runtime_control.require_binaries(handle, "audiocpp_cli", "audiocpp_gguf")
+        return handle.source, runtime, converter
     directory = config.UPSTREAM_AUDIOCPP
     if not directory.exists():
         directory.parent.mkdir(parents=True, exist_ok=True)
@@ -140,6 +148,10 @@ def _cmake_build(directory: Path, targets: tuple[str, ...]) -> None:
 
 def ensure_whisper_runtime() -> tuple[Path, Path]:
     """Build/cache only whisper-cli, which is all TTS scoring requires."""
+    from .. import runtime_control
+    if handle := runtime_control.ensure_runtime("whisper.cpp"):
+        runtime, = runtime_control.require_binaries(handle, "whisper-cli")
+        return handle.source, runtime
     directory = config.UPSTREAM_WHISPER
     if not directory.exists():
         directory.parent.mkdir(parents=True, exist_ok=True)
@@ -173,6 +185,10 @@ def _find_whisper_quantizer(directory: Path) -> Path | None:
 
 def ensure_whisper_tools() -> tuple[Path, Path, Path]:
     """Return whisper-cli plus the version-appropriate ASR quantizer."""
+    from .. import runtime_control
+    if handle := runtime_control.ensure_runtime("whisper.cpp"):
+        runtime, quantizer = runtime_control.require_binaries(handle, "whisper-cli", "whisper-quantize")
+        return handle.source, runtime, quantizer
     directory, runtime = ensure_whisper_runtime()
     quantize = _find_whisper_quantizer(directory)
     if quantize is None:
@@ -254,7 +270,7 @@ def audiocpp_source_plan(repo_id: str, backend: voice.VoiceBackend,
     if backend.backend != "audio.cpp" or _audiocpp_package_reference(
             repo_id, backend):
         return []
-    spec = voice.AUDIOCPP_SPEC_REGISTRY.get(backend.family, {})
+    spec = voice.audio_cpp_catalog()["registry"].get(backend.family, {})
     contract = next((item for item in spec.get("sources", [])
                      if item.get("format") == "safetensors"), None)
     if contract is None:
@@ -374,7 +390,9 @@ def _tts_imatrix(base: Path, llama_dir: Path) -> tuple[Path, list[str]]:
     """Build an importance matrix from the licensed multilingual TTS prompts."""
     from . import imatrix as imatrix_mod
 
-    executable = build_mod.find_binary(llama_dir, "llama-imatrix")
+    from ..runtime_control import handle_for
+    handle = handle_for("llama.cpp")
+    executable = handle.binaries.get("llama-imatrix") if handle else build_mod.find_binary(llama_dir, "llama-imatrix")
     if executable is None:
         raise voice.VoiceValidationError(
             "llama.cpp build has no llama-imatrix for low-bit TTS quants")
@@ -566,7 +584,7 @@ def _audiocpp_package_reference(repo_id: str,
             or any(repo_id.casefold() == package.casefold()
                    for package in backend.package_ids)):
         return True
-    spec = voice.AUDIOCPP_SPEC_REGISTRY.get(backend.family, {})
+    spec = voice.audio_cpp_catalog()["registry"].get(backend.family, {})
     defaults = spec.get("package_defaults", {}).get("download", {})
     for package in spec.get("packages", []):
         if package.get("format") != "gguf":
@@ -620,7 +638,7 @@ def _audio_cpp_precision(package: dict) -> str:
 def _audiocpp_package_provenance(backend: voice.VoiceBackend,
                                  package_id: str) -> tuple[str | None,
                                                            str | None]:
-    spec = voice.AUDIOCPP_SPEC_REGISTRY.get(backend.family, {})
+    spec = voice.audio_cpp_catalog()["registry"].get(backend.family, {})
     package = next((item for item in spec.get("packages", [])
                     if item.get("id") == package_id), {})
     download = {**spec.get("package_defaults", {}).get("download", {}),
@@ -680,6 +698,11 @@ def _standard_whisper_name(repo_id: str) -> str | None:
 
 def _ensure_openai_whisper_assets() -> Path:
     directory = config.VOICE_BACKENDS_DIR / "openai-whisper"
+    from ..runtime_control import handle_for
+    if handle := handle_for("whisper.cpp"):
+        base = (config.WORK_ROOT / ".aqx-runtime-assets" if handle.manifest["storage_policy"] == "persistent"
+                else config.TEMP_DIR / "aqx-runtime-assets")
+        directory = base / "whisper.cpp" / handle.revision / "openai-whisper"
     if not directory.exists():
         directory.parent.mkdir(parents=True, exist_ok=True)
         build_mod.run(["git", "clone", "https://github.com/openai/whisper.git",
@@ -1132,6 +1155,8 @@ def _aggregate_bundles(bundles: list[voice.VoiceBundle]) -> voice.VoiceBundle:
 def run_audiocpp_tts_release(repo_id: str, target_repo: str,
                              options: VoiceReleaseOptions) -> dict:
     """Convert, validate, review, and publish an audio.cpp TTS source."""
+    from ..runtime_control import prepare_voice_runtimes
+    prepare_voice_runtimes(repo_id, "audio.cpp", voice.TTS, persist=True)
     backend = voice.backend_for(repo_id, track=voice.TTS, family=options.family)
     assert backend is not None
     package_mode = _audiocpp_package_reference(repo_id, backend)
@@ -1230,6 +1255,8 @@ def run_tts_release(repo_id: str, target_repo: str,
         repo_id, options or VoiceReleaseOptions())
     selected = voice.backend_for(
         repo_id, track=voice.TTS, family=options.family)
+    from ..runtime_control import prepare_voice_runtimes
+    prepare_voice_runtimes(repo_id, selected.backend if selected else "llama.cpp", voice.TTS, persist=True)
     if selected is not None and selected.backend == "audio.cpp":
         return run_audiocpp_tts_release(repo_id, target_repo, options)
     backend, base, mmproj, revision, runtime, quantizer, llama_dir = \
@@ -1301,6 +1328,8 @@ def run_asr_release(repo_id: str, target_repo: str,
     options = options or VoiceReleaseOptions()
     selected = voice.backend_for(
         repo_id, track=voice.ASR, family=options.family)
+    from ..runtime_control import prepare_voice_runtimes
+    prepare_voice_runtimes(repo_id, selected.backend if selected else "whisper.cpp", voice.ASR, persist=True)
     if selected is not None and selected.backend == "audio.cpp":
         return run_audiocpp_asr_release(repo_id, target_repo, options)
     backend, base, revision, runtime, quantizer, whisper_dir = \
@@ -1342,6 +1371,8 @@ def run_asr_release(repo_id: str, target_repo: str,
 def run_audiocpp_asr_release(repo_id: str, target_repo: str,
                              options: VoiceReleaseOptions) -> dict:
     """Convert and quality-gate any ASR family in audio.cpp's catalog."""
+    from ..runtime_control import prepare_voice_runtimes
+    prepare_voice_runtimes(repo_id, "audio.cpp", voice.ASR, persist=True)
     backend = voice.backend_for(repo_id, track=voice.ASR, family=options.family)
     assert backend is not None
     package_mode = _audiocpp_package_reference(repo_id, backend)

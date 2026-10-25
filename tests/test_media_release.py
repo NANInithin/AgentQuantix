@@ -12,6 +12,34 @@ from agentquantix import config, media, media_quality
 from agentquantix.pipeline import media_release
 
 
+@pytest.mark.parametrize("diagnostic", [
+    r"Cloning into 'C:/Users/NANI_Nithin/Documents/INF/temp/source/ggml'...",
+    r"Cloning into 'C:\Users\NANI_Nithin\Documents\INF\temp\source\ggml'...",
+    "Loaded /models/nan/model.safetensors",
+])
+def test_execute_accepts_successful_commands_with_nonfinite_directory_names(tmp_path, monkeypatch, diagnostic):
+    monkeypatch.setattr(media_release.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(returncode=0, stdout="", stderr=diagnostic))
+    log = tmp_path / "submodules.json"
+    result = media_release.execute(["git", "submodule", "update"], log)
+    assert result["returncode"] == 0
+    assert json.loads(log.read_text(encoding="utf-8"))["stderr"] == diagnostic
+
+
+@pytest.mark.parametrize("diagnostic,returncode", [
+    ("loss = NaN", 0), ("value: inf", 0), ("value: -inf", 0),
+    ("value: +infinity", 0), ("assertion failed: tensor", 0),
+    ("assert failed: tensor", 0), ("fatal: checkout failed", 1),
+])
+def test_execute_rejects_native_failures_and_preserves_log(tmp_path, monkeypatch, diagnostic, returncode):
+    monkeypatch.setattr(media_release.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(returncode=returncode, stdout=diagnostic, stderr=""))
+    log = tmp_path / "native.json"
+    with pytest.raises(media.MediaValidationError, match="failed validation"):
+        media_release.execute(["sd-cli"], log)
+    assert json.loads(log.read_text(encoding="utf-8"))["stdout"] == diagnostic
+
+
 def safetensors(path):
     header = json.dumps({"model.weight": {"dtype": "F32", "shape": [256, 256],
                         "data_offsets": [0, 256 * 256 * 4]}}).encode()

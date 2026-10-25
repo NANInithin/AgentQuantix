@@ -27,7 +27,7 @@ def execute(command, log_path, *, cwd=None, timeout=3600):
     command = [str(arg) for arg in command]
     started = time.monotonic()
     record = {"argv": command, "cwd": str(cwd) if cwd else None,
-              "engine_revision": ENGINE_REVISION}
+              "engine_revision": load_catalog()["revision"]}
     try:
         result = subprocess.run(command, cwd=cwd, env=build_mod.build_env(),
                                 capture_output=True, text=True, errors="replace", timeout=timeout)
@@ -40,7 +40,12 @@ def execute(command, log_path, *, cwd=None, timeout=3600):
         record["duration_seconds"] = time.monotonic() - started
         media.atomic_json(log_path, record)
     diagnostics = record["stdout"] + "\n" + record["stderr"]
-    if result.returncode or re.search(r"\b(?:nan|inf|assertion failed|assert failed)\b", diagnostics, re.I):
+    # Word boundaries also match directory names such as Documents/INF/temp.
+    # A non-finite value must be a standalone token, not part of a file path.
+    if result.returncode or re.search(
+        r"(?<![\w/\\.\-])(?:nan|[+-]?inf(?:inity)?)(?![\w/\\.\-])"
+        r"|\b(?:assertion failed|assert failed)\b", diagnostics, re.I
+    ):
         raise media.MediaValidationError(f"native command failed validation; log: {log_path}")
     return record
 
@@ -79,6 +84,12 @@ def cmake_flags(compute_backend):
 
 
 def ensure_backend(compute_backend="auto"):
+    from .. import runtime_control
+    if handle := runtime_control.ensure_runtime("stable-diffusion.cpp", compute_backend=compute_backend):
+        binary, = runtime_control.require_binaries(handle, "sd-cli")
+        return binary, {**handle.manifest.get("provenance", {}), "engine_revision": handle.revision,
+                        "compute_backend": handle.manifest.get("build_fingerprint", {}).get("compute_backend", "unknown"),
+                        "runtime_snapshot": handle.snapshot()}
     key, provenance = build_identity(compute_backend)
     root = config.TEMP_DIR / "aqx-media-backends" / key
     source, build = root / "source", root / "build"
@@ -117,14 +128,15 @@ def ensure_backend(compute_backend="auto"):
 
 def converter_types(*, build=False, binary=None, compute_backend="auto"):
     """Probe conversion on a tiny real tensor; help examples are not a type table."""
+    revision = load_catalog()["revision"]
     fallback = {"types": load_catalog()["source_types"], "probed": False,
                 "basis": "pinned native type enum; each type still requires an executable probe",
-                "engine_revision": ENGINE_REVISION}
+                "engine_revision": revision}
     if binary is None and not build:
         pointer = config.STATE_DIR / "media-converter-types.json"
         try:
             cached = json.loads(pointer.read_text(encoding="utf-8"))
-            if (cached.get("probe_version") == 2 and cached["engine_revision"] == ENGINE_REVISION and Path(cached["binary"]).is_file()
+            if (cached.get("probe_version") == 2 and cached["engine_revision"] == revision and Path(cached["binary"]).is_file()
                     and media.file_hash(cached["binary"]) == cached["binary_sha256"]):
                 return cached
         except (OSError, KeyError, ValueError):
@@ -133,11 +145,14 @@ def converter_types(*, build=False, binary=None, compute_backend="auto"):
     provenance = {}
     if binary is None:
         binary, provenance = ensure_backend(compute_backend)
+        revision = load_catalog()["revision"]
+        fallback["types"] = load_catalog()["source_types"]
+        fallback["engine_revision"] = revision
     root = config.TEMP_DIR / "aqx-media-probes" / media.file_hash(binary)
     cached = root / "types.json"
     if cached.exists():
         previous = json.loads(cached.read_text(encoding="utf-8"))
-        if previous.get("probe_version") == 2:
+        if previous.get("probe_version") == 2 and previous.get("engine_revision") == revision:
             return previous
     root.mkdir(parents=True, exist_ok=True)
     import struct
@@ -159,7 +174,7 @@ def converter_types(*, build=False, binary=None, compute_backend="auto"):
             output.unlink(missing_ok=True)
     result = {"types": accepted, "rejected": rejected, "probed": True,
               "probe_version": 2,
-              "basis": "native conversion of 256x256 F32 tensor", "engine_revision": ENGINE_REVISION,
+              "basis": "native conversion of 256x256 F32 tensor", "engine_revision": revision,
               "binary": str(binary), "binary_sha256": media.file_hash(binary), "build_provenance": provenance}
     media.atomic_json(cached, result)
     media.atomic_json(config.STATE_DIR / "media-converter-types.json", result)
@@ -247,11 +262,12 @@ def materialize_component(data, root, binary, journal, *, preserve_failed=False,
     if data.get("precision") in ("f16", "bf16", "f32") and data.get("baseline_source"):
         data = {**data, **data["baseline_source"]}
     component = _component_dict(data, data.get("precision"))
+    component.converter_revision = load_catalog()["revision"]
     output = root / media.relative_path(component.output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     signature = media.canonical_hash({"source_revision": component.source_revision,
         "source_sha256": component.source_sha256, "source_path": component.source_path,
-        "engine_revision": ENGINE_REVISION, "binary_sha256": media.file_hash(binary),
+        "engine_revision": component.converter_revision, "binary_sha256": media.file_hash(binary),
         "precision": component.precision, "tensor_rules": component.tensor_rules,
         "output": component.output_path})
     previous = journal.get(component.output_path, {})
@@ -305,7 +321,7 @@ def materialize_component(data, root, binary, journal, *, preserve_failed=False,
                                           "sha256": component.sha256, "source_sha256": before,
                                           "tensor_precisions": component.tensor_precisions,
                                           "precision": component.precision,
-                                          "command": [str(c) for c in command], "engine_revision": ENGINE_REVISION}
+                                          "command": [str(c) for c in command], "engine_revision": component.converter_revision}
         media.atomic_json(root / "journal.json", journal)
         if not retain_source:
             source.unlink()
@@ -526,7 +542,7 @@ def validate_candidate(bundle, binary, candidate_root, fixtures, baselines, prof
                "passed": all(r["passed"] for r in results), "structural_passed": all(r["structural_passed"] for r in results),
                "native_inference_verified": True, "runtime_seconds": duration,
                "runtime_command": results[0]["runtime_command"], "settings": bundle.runtime_recipe["settings"],
-               "engine_revision": ENGINE_REVISION,
+               "engine_revision": bundle.engine_revision,
                "compute_backend": bundle.build_provenance["compute_backend"],
                "unavailable_metrics": sorted({m for r in results for m in r["unavailable_metrics"]})}
     quality["rejected_metrics"] = [dict(metric, fixture_id=r["fixture_id"]) for r in results for metric in r["rejected_metrics"]]
@@ -547,6 +563,12 @@ def validate_candidate(bundle, binary, candidate_root, fixtures, baselines, prof
 def run_release(plan, *, user_approved=False, publish=False, preserve_failed=False):
     if user_approved is not True:
         raise media.MediaValidationError("start_media_release requires approval of the exact plan")
+    media.validate_plan(plan, check_runtime=False)
+    from .. import runtime_control
+    runtime_control.ensure_runtime(
+        "stable-diffusion.cpp", compute_backend=plan["compute_backend"],
+        frozen=plan.get("runtime_snapshot"),
+        revision={"revision": plan["engine_revision"], "repository": ENGINE_REPO})
     media.validate_plan(plan)
     root = run_dir(plan["plan_id"])
     root.mkdir(parents=True, exist_ok=True)
@@ -614,7 +636,8 @@ def run_release(plan, *, user_approved=False, publish=False, preserve_failed=Fal
                   "components": {c.role: c.output_path for c in components if ROLE_FLAGS.get(c.role)},
                   "conditioning": plan["conditioning"]}
         bundle = media.MediaBundle(plan["family"], plan["task"], quant, components, recipe,
-                                   build_provenance=provenance, plan_id=plan["plan_id"], required_roles=plan["required_roles"])
+                                   engine_revision=plan["engine_revision"], build_provenance=provenance,
+                                   plan_id=plan["plan_id"], required_roles=plan["required_roles"])
         try:
             if problems := bundle.problems(candidate_root):
                 raise media.MediaValidationError("; ".join(problems))

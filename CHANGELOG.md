@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.1 — unreleased development
+
+- Add shared original-runtime installation/update management for llama.cpp,
+  audio.cpp, whisper.cpp and stable-diffusion.cpp, with persistent/temporary
+  storage choices, immutable revision/build manifests and explicit update approval.
+- Add runtime CLI/MCP maintenance, offline installed-version use, local-source
+  setup, adoption/migration, side-by-side builds, rollback and lease-safe cleanup.
+- Bind interrupted text/voice/media work to recorded runtimes and use selected
+  audio/media capability catalogs after updates.
+- Preserve the current package version and outstanding 0.5.0 native acceptance
+  requirements. See docs/RUNTIME_LIFECYCLE_STATUS.md for implementation boundaries.
+
 ## 0.4.5
 
 - Stop text quantization after exhausted upload retries. Reservations include

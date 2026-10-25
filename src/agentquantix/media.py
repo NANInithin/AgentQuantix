@@ -12,8 +12,7 @@ import struct
 import urllib.request
 
 from . import config
-from .media_catalog import (CATALOG_PATH, ENGINE_REVISION,
-                            ROLE_FLAGS, load_catalog)
+from .media_catalog import (ENGINE_REVISION, ROLE_FLAGS, catalog_runtime, load_catalog, selected_catalog_path)
 
 FIXTURES = Path(__file__).parent / "fixtures/media"
 MEDIA_TASKS = {"text-to-image", "image-to-image", "image-editing", "text-to-video",
@@ -168,7 +167,9 @@ class MediaBundle:
                 problems.append("component graph has a dependency cycle")
                 break
             dependencies = {r: ds - ready for r, ds in dependencies.items() if r not in ready}
-        if self.engine_revision != ENGINE_REVISION:
+        expected_revision = self.build_provenance.get("revision", self.build_provenance.get("engine_revision"))
+        if (not re.fullmatch(r"[0-9a-f]{40,64}", self.engine_revision)
+                or (expected_revision and self.engine_revision != expected_revision)):
             problems.append("engine revision mismatch")
         if self.task not in MEDIA_TASKS:
             problems.append(f"unsupported media task: {self.task}")
@@ -343,6 +344,26 @@ def _matches(pattern, value):
     return fnmatch.fnmatchcase(value.casefold(), pattern.casefold())
 
 
+def _pipeline_family(metadata):
+    # Diffusers class names are not abbreviations of the native loader enum.
+    pipeline = metadata.get("configs", {}).get("model_index.json", {}).get("_class_name")
+    return {"StableDiffusionXLPipeline": "sdxl",
+            "StableDiffusionXLInpaintPipeline": "sdxl_inpaint",
+            "StableDiffusionXLInstructPix2PixPipeline": "sdxl_pix2pix"}.get(pipeline)
+
+
+def _configured_vae(metadata):
+    """Use the pipeline's declared VAE, preserving its default source weights."""
+    configs = metadata.get("configs", {})
+    declaration = configs.get("model_index.json", {}).get("vae")
+    if declaration != ["diffusers", "AutoencoderKL"]:
+        return None
+    if configs.get("vae/config.json", {}).get("_class_name") != "AutoencoderKL":
+        return None
+    path = "vae/diffusion_pytorch_model.safetensors"
+    return path if path in metadata["files"] else None
+
+
 def derive_source_contract(capability, metadata, task=None, api=None):
     """Resolve only unambiguous native-example components after family evidence.
 
@@ -363,6 +384,11 @@ def derive_source_contract(capability, metadata, task=None, api=None):
             if not candidates:
                 candidates = [name for name in metadata["files"] if name.lower().endswith((".safetensors", ".gguf", ".ckpt", ".sft"))
                               and Path(name).stem.casefold() == stem.casefold()]
+            # Native examples may use an optional replacement VAE. A declared
+            # Diffusers VAE is a supported source too; do not choose vae_1_0,
+            # fp16 variants, or other similarly named directories by guessing.
+            if not candidates and role == "vae" and (vae := _configured_vae(metadata)):
+                candidates = [vae]
             if len(candidates) != 1:
                 alternatives = []
                 for option in spec.get("source_options", []):
@@ -404,12 +430,14 @@ def plan_release(repo_id, *, target_repo=None, quants=None, family=None,
     metadata = metadata or inspect_repository(repo_id, api)
     source_contract = contract or metadata.get("configs", {}).get("aqx-media-source.json", {})
     architecture_text = re.sub(r"[^a-z0-9]", "", json.dumps(metadata.get("configs", {})).lower())
+    pipeline_family = _pipeline_family(metadata)
     matches = []
     for capability in load_catalog()["capabilities"]:
         if family and capability["family"] != family:
             continue
         matched = (any(_matches(p, repo_id) for p in capability["source_matchers"])
-                   or any(a.casefold() in architecture_text for a in capability["architecture_matchers"]))
+                   or any(a.casefold() in architecture_text for a in capability["architecture_matchers"])
+                   or capability["family"] == pipeline_family)
         if matched or (family and looks_like_media(repo_id, metadata)):
             matches.append(capability)
     if len(matches) > 1:
@@ -584,8 +612,8 @@ def plan_release(repo_id, *, target_repo=None, quants=None, family=None,
     if not resolved and capability and capability["load"]:
         state = "runtime-only"
     plan = {"schema_version": 1, "repo_id": repo_id, "target_repo": target_repo or f"{config.namespace()}/{repo_id.split('/')[-1]}-GGUF",
-            "engine": "stable-diffusion.cpp", "engine_revision": ENGINE_REVISION,
-            "capability_manifest_sha256": file_hash(CATALOG_PATH),
+            "engine": "stable-diffusion.cpp", "engine_revision": load_catalog()["revision"],
+            "capability_manifest_sha256": file_hash(selected_catalog_path()),
             "fixture_sha256": fixture_hashes(),
             "family": capability["family"] if capability else None,
             "selection_evidence": capability["evidence"] if capability else [],
@@ -610,19 +638,26 @@ def plan_release(repo_id, *, target_repo=None, quants=None, family=None,
     plan["target_repositories"] = {q: f"{plan['target_repo']}-{q.upper()}" for q in selected}
     if blockers and hunt_forks:
         plan["fork_leads"] = media_release.find_forks(repo_id, metadata)
+    from .runtime_control import frozen_runtime
+    snapshot = frozen_runtime("stable-diffusion.cpp")
+    if not snapshot and (installed := catalog_runtime()):
+        snapshot = installed.snapshot()
+    if snapshot:
+        plan["runtime_snapshot"] = snapshot
     plan["plan_id"] = canonical_hash(plan)
     return plan
 
 
-def validate_plan(plan):
+def validate_plan(plan, *, check_runtime=True):
     original = dict(plan)
     plan_id = original.pop("plan_id", None)
     if not plan_id or canonical_hash(original) != plan_id:
         raise MediaValidationError("approved media plan was modified; inspect and approve a fresh plan")
-    if plan.get("engine_revision") != ENGINE_REVISION or plan.get("capability_manifest_sha256") != file_hash(CATALOG_PATH):
-        raise MediaValidationError("engine/catalog changed since approval")
     if plan.get("fixture_sha256") != fixture_hashes():
         raise MediaValidationError("media fixtures changed since approval")
     if plan.get("blockers") or plan.get("state") not in ("convertible", "prebuilt"):
         raise MediaValidationError("media plan is blocked: " + "; ".join(plan.get("blockers", [])))
+    if check_runtime and (plan.get("engine_revision") != load_catalog()["revision"]
+                          or plan.get("capability_manifest_sha256") != file_hash(selected_catalog_path())):
+        raise MediaValidationError("engine/catalog changed since approval")
     return plan

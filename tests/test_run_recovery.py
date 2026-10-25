@@ -105,7 +105,7 @@ def test_cli_exit_status_covers_pipeline_verification_and_card_failures(harness,
                       "hours": {"total": 0.1}, "quant_sizes_gb": {"Q4_0": 1},
                       "peak_convert_gb": 2}
     monkeypatch.setattr(cli.research, "load_latest", lambda: None)
-    monkeypatch.setattr(cli, "_select_interactively", lambda *args: [job.assessment])
+    monkeypatch.setattr(cli, "_select_interactively", lambda *args, **kwargs: [job.assessment])
     monkeypatch.setattr(cli.Job, "from_assessment", lambda *args: job)
     monkeypatch.setattr(cli.source_mod, "converter_missing", lambda: [])
     monkeypatch.setattr(cli.run_mod, "run_jobs", lambda *args, **kwargs: {
