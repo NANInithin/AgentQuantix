@@ -58,8 +58,9 @@ def write_agents():
         + prompt_mod.markdown(include_claude_notes=False)
         + "\n## Tools\n\n"
         "These come from the `agentquantix` MCP server. Without it, the CLI "
-        "drives identical code: `aqx research`, `aqx show <model>`, "
-        "`aqx run <model>`, `aqx verify <repo>`, `aqx card <repo>`.\n",
+        "drives identical code: `aqx research`, `aqx inspect <model>`, "
+        "`aqx plan <model>`, `aqx run <model>`, `aqx review <run_id>`, "
+        "`aqx publish <run_id>`, `aqx verify <target>`, `aqx card <repo>`.\n",
         encoding="utf-8")
     return AGENTS
 

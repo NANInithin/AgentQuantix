@@ -6,12 +6,17 @@ behind harness portability: the harness supplies a model and a conversation
 loop, and nothing else, so swapping Claude Code for Codex for a raw
 OpenRouter key changes who is thinking, never what the agent can do.
 
+The model-work tools are the same shared actions the CLI runs
+(`agentquantix.actions`): inspect, plan, start, review, publish, verify. Each
+routes the model by metadata to its task pipeline, so there is no separate
+text, voice or media tool for a model to pick wrongly.
+
 Two rules the tool boundary enforces, regardless of harness:
 
   * Nothing here downloads weights, builds anything or writes to the Hub
-    except `start_quantization`, and that one requires an explicit list of
-    models the user named. There is no tool an over-eager model can call that
-    silently starts a six-hour job.
+    except `start_release` and `publish_release`, and both require explicit
+    user approval of the exact plan or candidate. There is no tool an
+    over-eager model can call that silently starts a six-hour job.
 
   * Every tool returns JSON-serialisable data with the numbers already
     computed. The model's job is to explain and to ask, not to do arithmetic
@@ -21,13 +26,44 @@ Two rules the tool boundary enforces, regardless of harness:
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
-from .. import card, config, feasibility, hub, media, report, research, sysprobe, voice
-from . import media_tools, runtime_tools
-from ..pipeline import run as run_mod, voice_release
+from .. import actions, card, config, hub, report, research, sysprobe, voice
+from . import runtime_tools
 from ..pipeline.job import Job
 from ..runtimes import RuntimeDecisionRequired
+from ..tasks import MEDIA, TASKS, TEXT, VOICE
+
+STRING = {"type": "string"}
+STRINGS = {"type": "array", "items": STRING}
+ROUTING = {
+    "task": {"type": "string", "enum": sorted(TASKS),
+             "description": "Only to settle an ambiguity the route reported."},
+    "engine": {"type": "string",
+               "description": "Only to settle an ambiguity the route reported."},
+    "family": {"type": "string",
+               "description": "Engine catalog family for a custom or renamed repository."},
+    "hunt_forks": {"type": "boolean", "default": True,
+                   "description": "Search engine forks and open PRs when a source is unresolved."},
+}
+TEXT_OPTIONS = {
+    "sequential": {"type": "boolean", "default": False,
+                   "description": "Text: quantize, upload, delete one at a time - one quant on "
+                                  "disk instead of three, uploads no longer overlap. Media: price "
+                                  "components sequentially."},
+    "upload_workers": {"type": "integer",
+                       "description": "Text: concurrent uploads; each costs one more quant of peak disk."},
+}
+BUNDLE_OPTIONS = {
+    "target_repo": STRING,
+    "quants": {**STRINGS, "description": "Voice/media: quant policies. Defaults to every native type."},
+    "language": STRING,
+    "speaker": {"type": "string", "description": "Voice: consented speaker WAV when required."},
+}
+MEDIA_OPTIONS = {
+    "compute_backend": STRING, "contract": {"type": "object"},
+    "quality_profile": {"type": "object"}, "conditioning": {"type": "object"},
+    "settings": {"type": "object"}, "components": {"type": "array", "items": {"type": "object"}},
+}
 
 # =====================================================
 # SCHEMAS
@@ -61,8 +97,8 @@ TOOLS = [
             "architecture, check it against llama.cpp's supported list "
             "(hunting for a fork when it is not supported), and estimate "
             "disk, transfer and wall-clock time for a full quant sweep on "
-            "THIS machine. Read-only: downloads nothing, creates nothing. "
-            "Takes a minute or two for 100 models."),
+            "THIS machine. Also returns the voice backend catalog. Read-only: "
+            "downloads nothing, creates nothing. Takes a minute or two."),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -99,182 +135,132 @@ TOOLS = [
         },
     },
     {
-        "name": "describe_candidate",
+        "name": "inspect_model",
         "description": (
-            "Everything known about ONE model: the quant list, the imatrix "
-            "strategy and why, the disk and time breakdown, fork leads, "
-            "blockers and warnings. Works for any repo id on the Hub, whether "
-            "or not it is trending and whether or not research has been run - "
-            "an off-list model is assessed on the spot. This is the right "
-            "tool when the user names a specific model; do NOT run "
-            "research_trending to go looking for it, because the trending "
-            "list is not where it will be found."),
+            "Read-only. Route ONE model to its task, pipeline and native engine "
+            "from Hub metadata and the installed engine catalogs, then return "
+            "everything known about it: the text quant list, imatrix strategy, "
+            "disk/time breakdown and fork leads; or the voice backend, companions "
+            "and native quant set; or the media metadata and loader catalog. "
+            "Works for any repo id, trending or not - this is the right tool when "
+            "the user names a model; do NOT run research_trending to look for it. "
+            "A route with `choices` is a question for the user; a route with a "
+            "`blocker` names what is missing."),
         "input_schema": {
             "type": "object",
-            "properties": {
-                "model": {"type": "string",
-                          "description": "Any Hub repo id, or an unambiguous "
-                                         "part of one from the last report."},
-            },
+            "properties": {"model": {"type": "string",
+                                     "description": "Any Hub repo id, an audio.cpp package id, "
+                                                    "or an unambiguous name from the last report."},
+                           **ROUTING},
             "required": ["model"],
         },
     },
     {
-        "name": "plan_quantization",
+        "name": "plan_release",
         "description": (
-            "Show exactly what would happen for the named models — target "
-            "repos, quant lists, imatrix sources, fork builds, totals — "
-            "WITHOUT starting anything. This is what you show the user at the "
-            "approval gate. Always call this before start_quantization."),
+            "Read-only. The exact plan for the named models, routed by task: "
+            "text sweeps (targets, quants, imatrix sources, fork builds, totals, "
+            "repriced for the requested concurrency), voice bundles (backend, "
+            "companions, quants, quality gate) and media plans (revisions, "
+            "components, policies, licenses, estimates, evaluator, blockers). "
+            "This is what you show the user at the approval gate. Always call it "
+            "before start_release. Per-model options apply to one model at a time."),
         "input_schema": {
             "type": "object",
-            "properties": {
-                "models": {"type": "array", "items": {"type": "string"}},
-                "sequential": {
-                    "type": "boolean",
-                    "description": "Price the plan for a sequential sweep "
-                                   "(one quant on disk at a time) instead of "
-                                   "the default overlapped one (three). Use "
-                                   "this to show the user whether a model "
-                                   "blocked on disk would fit.",
-                    "default": False,
-                },
-                "upload_workers": {
-                    "type": "integer",
-                    "description": "Concurrent uploads to price for. Each one "
-                                   "costs a further quant of peak disk.",
-                },
-            },
+            "properties": {"models": STRINGS, **ROUTING, **TEXT_OPTIONS,
+                           **BUNDLE_OPTIONS, **MEDIA_OPTIONS},
             "required": ["models"],
         },
     },
     {
-        "name": "start_quantization",
+        "name": "start_release",
         "description": (
-            "Step 4. Quantize and upload the named models. This is the only "
-            "tool that spends hours, writes to the Hub and uses the disk. It "
-            "requires that the user has explicitly approved these specific "
-            "models in the conversation — never call it to 'save time' or "
-            "because a model looks like a good idea. Runs models "
-            "smallest-first, is resumable, and deletes each quant as soon as "
-            "it is uploaded."),
+            "Step 4. Build, validate and publish what the user explicitly "
+            "approved. Text: quantize and upload the named models smallest-first, "
+            "deleting each quant once uploaded. Voice: convert, quantize, run the "
+            "real runtime and quality gates; TTS publication also needs a recorded "
+            "listening review. Media: pass the exact `plan` from plan_release, "
+            "unchanged. This spends hours, uses the disk and writes to the Hub; it "
+            "requires that the user named these models (or saw this exact plan) and "
+            "said to proceed. One pipeline per call. Results carry `run_id`."),
         "input_schema": {
             "type": "object",
             "properties": {
-                "models": {"type": "array", "items": {"type": "string"}},
+                "models": STRINGS,
+                "plan": {"type": "object",
+                         "description": "Media: the unchanged plan the user approved."},
                 "user_approved": {
                     "type": "boolean",
-                    "description": "True only when the user has named these "
-                                   "models and said to proceed.",
+                    "description": "True only when the user has approved these "
+                                   "models or this exact plan and said to proceed.",
                 },
-                "sequential": {
-                    "type": "boolean",
-                    "description": "Quantize, upload, delete, one at a time. "
-                                   "Holds one quant on disk instead of three, "
-                                   "at the cost of uploads no longer "
-                                   "overlapping quantization. Use when disk is "
-                                   "the binding constraint.",
-                    "default": False,
-                },
-                "upload_workers": {
-                    "type": "integer",
-                    "description": "Concurrent uploads. Raising this helps an "
-                                   "upload-bound run and costs one more quant "
-                                   "of peak disk per stream.",
-                },
+                **ROUTING, **TEXT_OPTIONS,
                 "quantize_threads": {
                     "type": "integer",
-                    "description": "Threads per llama-quantize. Omit to use "
-                                   "every core; set it to leave the machine "
-                                   "usable during a long sweep.",
+                    "description": "Text: threads per llama-quantize. Omit to use every core.",
                 },
+                **BUNDLE_OPTIONS,
+                "publish": {"type": "boolean",
+                            "description": "Voice defaults to true (reviewed TTS quants only); "
+                                           "media defaults to false (reviewed candidates only)."},
             },
-            "required": ["models", "user_approved"],
+            "required": ["user_approved"],
         },
     },
     {
-        "name": "plan_voice_release",
+        "name": "record_review",
         "description": (
-            "Plan a TTS or ASR release through the registered backend without "
-            "downloading, building, or publishing anything. Voice models must "
-            "use this tool instead of plan_quantization."),
+            "Record the USER's explicit human review of exact candidate artifacts "
+            "in a run (voice TTS listening, image inspection, video playback and "
+            "frames, audio-video watching and listening). Never invent a review: "
+            "call this only with a decision the user stated after experiencing the "
+            "artifacts. TTS requires listened_audio; video requires watched_video."),
         "input_schema": {
             "type": "object",
             "properties": {
-                "model": {"type": "string"},
-                "family": {"type": "string",
-                           "description": "Optional audio.cpp catalog family "
-                                          "when the repo name is ambiguous."},
-                "hunt_forks": {"type": "boolean", "default": True,
-                               "description": "Search voice-runtime forks and "
-                                              "upstream PRs when unresolved."},
-                "target_repo": {"type": "string"},
-                "quants": {"type": "array", "items": {"type": "string"}},
-                "language": {"type": "string"},
-                "speaker": {"type": "string"},
+                "run_id": {"type": "string",
+                           "description": "From start_release or list_runs; a source "
+                                          "repo id also resolves when unambiguous."},
+                "quant": STRING, "accepted": {"type": "boolean"}, "reviewer": STRING,
+                "notes": STRING, "watched_video": {"type": "boolean"},
+                "listened_audio": {"type": "boolean"},
             },
-            "required": ["model"],
+            "required": ["run_id", "quant", "accepted", "reviewer"],
         },
     },
     {
-        "name": "start_voice_release",
+        "name": "publish_release",
         "description": (
-            "Convert, quantize, validate and publish an explicitly approved "
-            "voice model. TTS publication is held until automated gates pass "
-            "and a human listening-review JSON accepts the candidate quant. "
-            "Reviews recorded with record_voice_review are auto-discovered; "
-            "resume reuses cached scores or reviewed fixture artifacts. "
-            "ASR uses its fixed corpus and WER/CER regression gate."),
+            "Publish a natively validated, human-reviewed voice or media candidate "
+            "under its saved release policy, then verify remote sizes and hashes. "
+            "Text quants publish during start_release and need no separate step. "
+            "Requires user_approved=true after the review."),
         "input_schema": {
             "type": "object",
-            "properties": {
-                "model": {"type": "string"},
-                "family": {"type": "string",
-                           "description": "Optional audio.cpp catalog family "
-                                          "when the repo name is ambiguous."},
-                "hunt_forks": {"type": "boolean", "default": True},
-                "target_repo": {"type": "string"},
-                "quants": {"type": "array", "items": {"type": "string"}},
-                "language": {"type": "string"},
-                "speaker": {"type": "string"},
-                "human_review": {"type": "string"},
-                "publish": {"type": "boolean", "default": True},
-                "user_approved": {"type": "boolean"},
-            },
-            "required": ["model", "user_approved"],
+            "properties": {"run_id": STRING, "quant": STRING,
+                           "user_approved": {"type": "boolean"}},
+            "required": ["run_id", "quant", "user_approved"],
         },
     },
     {
-        "name": "record_voice_review",
-        "description": (
-            "Record a user's explicit human listening decision for one TTS "
-            "quant after they have listened to the generated fixture WAVs."),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "model": {"type": "string"},
-                "quant": {"type": "string",
-                          "enum": list(voice.TTS_REVIEW_QUANTS)},
-                "accepted": {"type": "boolean"},
-                "reviewer": {"type": "string"},
-                "notes": {"type": "string"},
-            },
-            "required": ["model", "quant", "accepted", "reviewer"],
-        },
+        "name": "list_runs",
+        "description": "Recorded text, voice and media runs with their ids, tasks and reviews.",
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
-        "name": "verify_published",
+        "name": "verify_release",
         "description": (
-            "Step 5. List what is actually on the Hub for a published quant "
-            "repo, with real sizes, flagging anything missing from the "
-            "intended sweep or suspiciously small."),
+            "Step 5. Check what actually exists: a published repo (GGUF listing "
+            "with real sizes, or a voice/media bundle against its manifest), a "
+            "recorded run's built bundles, or a local manifest path. Flags missing "
+            "or suspiciously small files and checksum mismatches."),
         "input_schema": {
             "type": "object",
             "properties": {
-                "repo": {"type": "string",
-                         "description": "Repo id, or just the model name."},
+                "target": {"type": "string",
+                           "description": "Repo id, model name, run id or manifest path."},
             },
-            "required": ["repo"],
+            "required": ["target"],
         },
     },
     {
@@ -304,7 +290,9 @@ TOOLS = [
     {
         "name": "write_model_card",
         "description": (
-            "Step 5. Publish the README.md for a quant repo.\n\n"
+            "Step 5. Publish the README.md for a text quant repo. (Voice and "
+            "media bundle cards are generated from the verified manifest and "
+            "published with the bundle.)\n\n"
             "Pass `content` with a card you composed from get_card_facts - "
             "that is the intended path, and you own the whole document: "
             "structure, table layout, prose, extra sections, extra tags. "
@@ -332,15 +320,13 @@ TOOLS = [
         },
     },
 ]
+TOOLS.extend(runtime_tools.TOOLS)
+EXECUTION_TOOLS = {"start_release", "publish_release"}
 
 
 # =====================================================
 # DISPATCH
 # =====================================================
-TOOLS.extend(media_tools.TOOLS)
-TOOLS.extend(runtime_tools.TOOLS)
-
-
 def _need_report():
     result = research.load_latest()
     if not result:
@@ -388,141 +374,65 @@ def _source_candidate(verification, job=None):
         return None
 
 
-def _options_from(arguments):
-    """RunOptions from tool arguments, falling back to the configured defaults.
-
-    Only the two knobs worth a model's attention are exposed — sequential mode
-    and upload concurrency — plus the thread cap. Quantize-worker count is left
-    to the CLI, because getting it wrong costs disk and buys nothing.
-    """
-    options = run_mod.RunOptions.from_config()
-    if arguments.get("sequential"):
-        options.sequential = True
-    if arguments.get("upload_workers"):
-        options.upload_workers = int(arguments["upload_workers"])
-    if arguments.get("quantize_threads"):
-        options.quantize_threads = int(arguments["quantize_threads"])
-    return options
+def _routing(arguments):
+    return {key: arguments.get(key) for key in ("task", "engine", "family")}
 
 
-def _voice_plan(arguments):
-    repo_id = arguments["model"]
-    family = arguments.get("family")
-    allowed, reason, backend = voice.execution_gate(repo_id, family=family)
-    if not allowed:
-        leads = (voice_release.find_backend_forks(repo_id)
-                 if arguments.get("hunt_forks", True) else [])
-        return {
-            "model": repo_id,
-            "status": "blocked",
-            "blocker": reason,
-            "fork_hunt": ("searched" if arguments.get("hunt_forks", True)
-                          else "disabled"),
-            "fork_leads": leads,
-            "next": ("A lead must still prove its converter, model spec, "
-                     "bundle contract, and smoke inference before execution."
-                     if leads else
-                     "No installed backend or current fork/PR lead was found."),
-        }
-    available = voice.available_quants(repo_id, backend)
-    quants = [voice.normalize_quant(backend, quant) for quant in
-              (arguments.get("quants") or available)]
-    unsupported = [quant for quant in quants
-                   if quant not in available]
-    if unsupported:
+def _media_args(arguments):
+    keys = ("target_repo", "quants", "compute_backend", "contract", "quality_profile",
+            "conditioning", "settings", "components", "sequential")
+    return {key: arguments[key] for key in keys if arguments.get(key) is not None}
+
+
+def _voice_args(arguments):
+    keys = ("target_repo", "quants", "language", "speaker")
+    return {key: arguments[key] for key in keys if arguments.get(key) is not None}
+
+
+def _start(arguments):
+    if arguments.get("user_approved") is not True:
         raise ValueError(
-            f"{backend.id} does not support {unsupported}; choose from "
-            f"{list(available)}")
-    source = voice_release.source_metadata(repo_id, family=family)
-    source_inputs = voice_release.audiocpp_source_plan(
-        repo_id, backend, source.get("source_files"))
-    missing_inputs = [item for item in source_inputs
-                      if item["status"] == "missing"]
-    suffix = "GGUF" if backend.model_format.endswith("gguf") else "GGML"
-    source_name = repo_id.split("/")[-1].replace(":", "-")
-    result = {
-        "model": repo_id,
-        "status": "blocked" if missing_inputs else "ready",
-        "target_repo": arguments.get("target_repo") or
-                       f"{config.HF_NAMESPACE}/{source_name}-{suffix}",
-        "track": backend.track,
-        "backend": backend.id,
-        "family": backend.family,
-        "backend_status": backend.status,
-        "runtime": backend.runtime,
-        "converter": backend.converter,
-        "model_format": backend.model_format,
-        "quants": quants,
-        "available_quants": list(available),
-        "quant_source": ("native converter/quantizer capability; package "
-                         "references are narrowed to published precisions"),
-        "fork_leads": [],
-        "required_companions": list(backend.required_companions),
-        "required_source_inputs": source_inputs,
-        "speaker_reference": backend.speaker_reference,
-        "language": arguments.get("language"),
-        "speaker": arguments.get("speaker"),
-        "source_revision": source["revision"],
-        "source_bytes": source["source_bytes"],
-        "source_gated": source["gated"],
-        "quality_gate": ("audio integrity, silence/clipping, ASR round-trip "
-                         "WER/CER, then human listening review"
-                         if backend.track == voice.TTS else
-                         "fixed-corpus WER/CER regression versus base precision"),
-    }
-    if missing_inputs:
-        result["blocker"] = (
-            "source repository is missing backend-declared tensor inputs: "
-            + ", ".join(item["required_path"] for item in missing_inputs))
-    return result
-
-
-def _assessments_for(models):
-    """Assessments for named models, whether or not they were ever researched.
-
-    This used to require every model to be in the last research run, and
-    raised "not in the last research run: X" otherwise. That error sent the
-    agent into a loop: the only remedy it suggests is to research again, and
-    researching again cannot help, because the trending list is not where the
-    model was going to come from. A user asking for `ibm-granite/granite-4.2-3b`
-    — a real model, simply not trending today — produced research at limit=1,
-    then 100, then 300, and never an answer.
-
-    `research.assess_one()` has always been able to assess an arbitrary repo;
-    it is what `aqx run <any-repo-id>` uses. It was just never reachable from
-    the agent. Naming a model IS the judgement the trending filter stands in
-    for, so an off-list model is a normal request, not an error.
-    """
-    result = research.load_latest()
-    order = {name: index for index, name in enumerate(models)}
-    found, off_list = {}, []
-
-    for name in models:
-        # find() raises when a short name is ambiguous, which is a genuine
-        # question for the user and must not be swallowed into a Hub lookup.
-        assessment = research.find(result, name) if result else None
-        if assessment:
-            found[name] = assessment
-        else:
-            off_list.append(name)
-
-    if off_list:
-        # One probe for the batch. assess_one() would otherwise measure the
-        # machine once per model, which is the same answer at N times the cost.
-        sysinfo = sysprobe.probe(measure_disk=False)
-        for name in off_list:
-            # Lets the Hub's own reason surface for a typo or a gated repo,
-            # which is actionable, unlike "not in the last research run".
-            found[name] = research.assess_one(name, sysinfo=sysinfo)
-
-    return [found[name] for name in sorted(found, key=order.get)]
+            "start_release requires user_approved=true, and that is only honest "
+            "when the user has named these models (or seen this exact plan) and "
+            "said to go ahead. Show them plan_release and ask.")
+    if arguments.get("plan") is not None:
+        return actions.start_media(arguments["plan"], user_approved=True,
+                                   publish=bool(arguments.get("publish", False)))
+    models = arguments.get("models") or []
+    if not models:
+        raise ValueError("name the approved models, or pass the approved media plan")
+    routes = [actions.route_named(name, **_routing(arguments)) for name in models]
+    for item in routes:
+        actions._require_ready(item)
+    pipelines = {item.pipeline for item in routes}
+    if len(pipelines) > 1:
+        raise ValueError("these models resolve to different pipelines; start each separately")
+    pipeline = pipelines.pop()
+    if pipeline == MEDIA:
+        raise ValueError("media releases execute the exact plan the user approved: pass the "
+                         "unchanged `plan` from plan_release")
+    if pipeline == TEXT:
+        options = actions.text_options(arguments.get("sequential"), arguments.get("upload_workers"),
+                                       arguments.get("quantize_threads"))
+        events = []
+        return actions.start_text(models, options, user_approved=True, on_event=events.append)
+    if len(models) > 1:
+        raise ValueError("voice releases run one model per call")
+    plan = actions.voice_plan(routes[0].repo_id, family=actions.voice_family(routes[0], arguments.get("family")),
+                              hunt_forks=arguments.get("hunt_forks", True), **_voice_args(arguments))
+    if plan.get("status") != "ready":
+        raise ValueError(f"voice release is blocked: {plan.get('blocker')}; "
+                         f"fork leads: {plan.get('fork_leads', [])}")
+    actions.prepare_voice_runtimes(plan, persist=True)
+    plan = actions.voice_plan(routes[0].repo_id, family=actions.voice_family(routes[0], arguments.get("family")),
+                              hunt_forks=arguments.get("hunt_forks", True), **_voice_args(arguments))
+    return actions.run_voice(plan, publish=arguments.get("publish", True),
+                             family=arguments.get("family"))
 
 
 def _call(name, arguments=None):
     """Run one tool. Returns JSON-serialisable data, or raises ValueError."""
     arguments = arguments or {}
-    if name in media_tools.NAMES:
-        return media_tools.call(name, arguments)
 
     if name == "probe_system":
         return sysprobe.probe(
@@ -543,12 +453,9 @@ def _call(name, arguments=None):
             "counts": {
                 "trending": result["trending_count"],
                 "base_models": result["kept_count"],
-                "ok": sum(1 for a in result["assessments"]
-                          if a["verdict"] == "ok"),
-                "warn": sum(1 for a in result["assessments"]
-                            if a["verdict"] == "warn"),
-                "blocked": sum(1 for a in result["assessments"]
-                               if a["verdict"] == "blocked"),
+                "ok": sum(1 for a in result["assessments"] if a["verdict"] == "ok"),
+                "warn": sum(1 for a in result["assessments"] if a["verdict"] == "warn"),
+                "blocked": sum(1 for a in result["assessments"] if a["verdict"] == "blocked"),
             },
             "runnable": [
                 {"repo_id": a["repo_id"], "url": a["url"],
@@ -580,226 +487,36 @@ def _call(name, arguments=None):
         return {"generated_at": result["generated_at"],
                 "table": report.table(result, limit=top)}
 
-    if name == "describe_candidate":
-        if media.looks_like_media(arguments["model"]):
-            return {"media": media.plan_release(arguments["model"]),
-                    "text": "This is a likely media model; use plan_media_release and the separate stable-diffusion.cpp pipeline."}
-        if backend := voice.backend_for(arguments["model"]):
-            plan = _voice_plan({"model": arguments["model"]})
-            return {"text": (f"{arguments['model']} is a supported "
-                             f"{backend.track.upper()} model through "
-                             f"{backend.backend}; use plan_voice_release, not "
-                             "the text quantization pipeline."),
-                    "voice": plan}
-        if voice.looks_like_voice_model(arguments["model"]):
-            plan = _voice_plan({"model": arguments["model"]})
-            return {
-                "text": (f"{arguments['model']} looks like a voice model but "
-                         "does not resolve through an installed backend. The "
-                         "voice fork hunt was used instead of misrouting it "
-                         "through text quantization."),
-                "voice": plan,
-            }
-        # Same rule as _assessments_for: a model the user names is assessed on
-        # demand rather than refused for not being in a trending sweep.
-        assessment = _assessments_for([arguments["model"]])[0]
-        return {"text": report.detail(assessment), "assessment": assessment}
+    if name == "inspect_model":
+        return actions.inspect(arguments["model"], hunt_forks=arguments.get("hunt_forks", True),
+                               **_routing(arguments))
 
-    if name == "plan_quantization":
-        if any(media.looks_like_media(model) for model in arguments["models"]):
-            raise ValueError("image/video models use plan_media_release, not the llama.cpp text converter")
-        voice_models = [model for model in arguments["models"]
-                        if voice.backend_for(model)]
-        if voice_models:
-            raise ValueError(
-                "voice models use plan_voice_release, not plan_quantization: "
-                + ", ".join(voice_models))
-        assessments = _assessments_for(arguments["models"])
-        blocked = [a for a in assessments if a["verdict"] == "blocked"]
-        done = [a for a in assessments if a["verdict"] == "done"]
-        jobs = [Job.from_assessment(a) for a in assessments
-                if a["verdict"] not in ("blocked", "done")]
-        jobs.sort(key=lambda j: j.assessment["hours"]["total"])
-        options = _options_from(arguments)
-        # Repriced under the requested concurrency: the research figures assume
-        # the default, and these arguments are exactly what changes them.
-        peaks = {j.base_name: feasibility.peak_disk_for(
-            j.assessment, quantize_workers=options.quantize_workers,
-            upload_workers=options.upload_workers,
-            queue_depth=options.queue_depth, sequential=options.sequential)
-            for j in jobs}
-        return {
-            "concurrency": options.describe(),
-            "quants_on_disk_at_once": options.concurrent_quants,
-            "blocked": [{"repo_id": a["repo_id"], "why": a["blockers"]}
-                        for a in blocked],
-            "already_done": [
-                {"repo_id": a["repo_id"], "target_repo": a["target_repo"],
-                 "published": a["published_count"]} for a in done],
-            "order": "smallest first, so a pipeline problem surfaces cheaply",
-            "total_hours": round(
-                sum(j.assessment["hours"]["total"] for j in jobs), 1),
-            "total_upload_gb": round(
-                sum(j.assessment["upload_gb"] for j in jobs), 1),
-            "peak_disk_gb": max(peaks.values(), default=0),
-            "peak_disk_gb_at_default_concurrency": max(
-                (j.assessment["peak_disk_gb"] for j in jobs), default=0),
-            "jobs": [{
-                "repo_id": job.repo_id,
-                "target_repo": job.target_repo,
-                "quants": job.quants,
-                "quant_count": len(job.quants),
-                "already_published": job.assessment.get("published_count", 0),
-                "source_kind": job.source_kind,
-                "imatrix_source": job.imatrix_source,
-                "imatrix_ngl": job.imatrix_ngl,
-                "fork": job.fork,
-                "hours": job.assessment["hours"]["total"],
-                "peak_disk_gb": peaks[job.base_name],
-                "warnings": job.assessment["warnings"],
-            } for job in jobs],
-        }
+    if name == "plan_release":
+        models = arguments["models"]
+        text = actions.text_options(arguments.get("sequential"), arguments.get("upload_workers"))
+        return actions.plan(models, hunt_forks=arguments.get("hunt_forks", True), text=text,
+                            voice_args=_voice_args(arguments), media_args=_media_args(arguments),
+                            **_routing(arguments))
 
-    if name == "start_quantization":
-        if any(media.looks_like_media(model) for model in arguments["models"]):
-            raise ValueError("image/video models use start_media_release, not the llama.cpp text converter")
-        voice_models = [model for model in arguments["models"]
-                        if voice.backend_for(model)]
-        if voice_models:
-            raise ValueError(
-                "voice models use start_voice_release, not the text pipeline: "
-                + ", ".join(voice_models))
-        if not arguments.get("user_approved"):
-            raise ValueError(
-                "start_quantization requires user_approved=true, and that is "
-                "only honest when the user has named these models and said to "
-                "go ahead. Show them plan_quantization and ask.")
-        assessments = _assessments_for(arguments["models"])
-        jobs = [Job.from_assessment(a) for a in assessments
-                if a["verdict"] not in ("blocked", "done")]
-        if not jobs:
-            raise ValueError(
-                "nothing to do: every named model is either blocked on this "
-                "machine or already fully published.")
-        jobs.sort(key=lambda j: j.assessment["hours"]["total"])
-        originals = [job for job in jobs if not job.fork]
-        if originals:
-            from .. import runtime_control
-            handle = runtime_control.ensure_runtime("llama.cpp", frozen=originals[0].runtime_snapshot or None)
-            if handle:
-                for job in originals:
-                    if job.runtime_snapshot and job.runtime_snapshot["identity"] != handle.identity:
-                        raise ValueError("these jobs require different frozen runtimes; resume them separately")
-                    job.runtime_snapshot = handle.snapshot()
+    if name == "start_release":
+        return _start(arguments)
 
-        events = []
-        outcome = run_mod.run_jobs(jobs, options=_options_from(arguments),
-                                   on_event=events.append)
+    if name == "record_review":
+        return actions.review(arguments["run_id"], arguments["quant"],
+                              accepted=arguments["accepted"], reviewer=arguments["reviewer"],
+                              notes=arguments.get("notes", ""),
+                              watched_video=bool(arguments.get("watched_video")),
+                              listened_audio=bool(arguments.get("listened_audio")))
 
-        # The run just created or filled repos in our namespace, so the cached
-        # listing is now stale. Anything assessed after this in the same
-        # session would otherwise be told we had published nothing.
-        hub.forget_our_repos()
+    if name == "publish_release":
+        return actions.publish(arguments["run_id"], arguments["quant"],
+                               user_approved=arguments.get("user_approved"))
 
-        # Step 5 follows automatically — a run that finishes without a
-        # verified listing and a card is not actually done.
-        #
-        # But it must NEVER be able to fail the run. The quants are already on
-        # the Hub by this point; a broken card generator that propagated its
-        # exception would return "error" for a six-hour job that succeeded,
-        # and the only sane reading of that is "nothing ran" — which is
-        # exactly the wrong thing to tell someone about to retry it.
-        finished = []
-        for job in jobs:
-            entry = {"repo": job.target_repo, "card_published": False}
-            failures = outcome["jobs"].get(job.base_name, {}).get("failures") or []
-            if any(quant == "<model>" for quant, _ in failures):
-                # Aborted before publishing anything; the repo does not exist,
-                # and a 404 here would obscure the real failure.
-                entry["published_nothing"] = True
-                finished.append(entry)
-                continue
-            try:
-                verification = card.verify(job)
-                entry.update({
-                    "url": verification.get("url"),
-                    "files": verification.get("count"),
-                    "total_gb": verification.get("total_gb"),
-                    "missing": verification.get("missing"),
-                    "suspect": verification.get("suspect"),
-                })
-                if not verification.get("error"):
-                    # The TEMPLATE card, deliberately. It is a floor, not the
-                    # finished article: it guarantees the repo is never left
-                    # without a readable card if this session ends here, and
-                    # it is the same document for every model. Saying so in
-                    # the result matters — a bare card_published=true reads as
-                    # "done", and the agent would skip the step that is
-                    # actually its own.
-                    card.publish(verification, job=job)
-                    entry["card_published"] = True
-                    entry["card_is_placeholder"] = True
-                    entry["next"] = (
-                        "A generic template card was published so the repo is "
-                        "not left bare. Replace it: get_card_facts, then "
-                        "write_model_card with your own content.")
-                else:
-                    entry["verify_error"] = verification["error"]
-            except Exception as e:
-                entry["card_error"] = f"{type(e).__name__}: {e}"
-            finished.append(entry)
-        return {"hours": outcome["hours"], "incomplete": outcome["incomplete"],
-                "published": finished,
-                "failures": {name: result.get("failures")
-                             for name, result in outcome["jobs"].items()
-                             if result.get("failures")}}
+    if name == "list_runs":
+        return actions.list_runs()
 
-    if name == "plan_voice_release":
-        return _voice_plan(arguments)
-
-    if name == "record_voice_review":
-        path = (voice_release.work_dir(arguments["model"]) / "reviews"
-                / f"{arguments['quant']}.json")
-        voice.write_human_review(
-            path, quant=arguments["quant"], accepted=arguments["accepted"],
-            reviewer=arguments["reviewer"], notes=arguments.get("notes", ""))
-        return {"path": str(path), "recorded": True,
-                "accepted": bool(arguments["accepted"])}
-
-    if name == "start_voice_release":
-        if not arguments.get("user_approved"):
-            raise ValueError(
-                "start_voice_release requires user_approved=true after the "
-                "user sees plan_voice_release and explicitly approves it.")
-        plan = _voice_plan(arguments)
-        if plan.get("status") != "ready":
-            raise ValueError(
-                f"voice release is blocked: {plan.get('blocker')}; "
-                f"fork leads: {plan.get('fork_leads', [])}")
-        from .. import runtime_control
-        backend = voice.backend_named(plan["backend"])
-        runtime_control.prepare_voice_runtimes(arguments["model"], backend.backend, backend.track, persist=True)
-        plan = _voice_plan(arguments)
-        options = voice_release.VoiceReleaseOptions(
-            quants=plan["quants"], language=arguments.get("language"),
-            speaker=(Path(arguments["speaker"])
-                     if arguments.get("speaker") else None),
-            publish=arguments.get("publish", True),
-            human_review=(Path(arguments["human_review"])
-                          if arguments.get("human_review") else None),
-            family=arguments.get("family"),
-        )
-        if plan["track"] == voice.TTS:
-            return voice_release.run_tts_release(
-                plan["model"], plan["target_repo"], options)
-        return voice_release.run_asr_release(
-            plan["model"], plan["target_repo"], options)
-
-    if name == "verify_published":
-        repo = arguments["repo"]
-        if "/" not in repo:
-            repo = f"{config.HF_NAMESPACE}/{repo.removesuffix('-GGUF')}-GGUF"
-        return card.verify(repo)
+    if name == "verify_release":
+        return actions.verify(arguments["target"])
 
     if name in ("get_card_facts", "write_model_card"):
         repo = _our_gguf_repo(arguments["repo"])
@@ -818,7 +535,7 @@ def _call(name, arguments=None):
             raise ValueError(
                 f"{repo} contains no GGUF files, so there is nothing to write "
                 "a card about. Quantization has not published anything yet - "
-                "run start_quantization and let it finish first.")
+                "run start_release and let it finish first.")
 
         if name == "get_card_facts":
             return card.facts(verification, job=job,
@@ -845,20 +562,20 @@ def _call(name, arguments=None):
     raise ValueError(f"unknown tool: {name}")
 
 
+def _failed(result):
+    return bool(result.get("failures") or result.get("incomplete")
+                or (result.get("pipeline") == VOICE and actions.voice_failed(result))
+                or (result.get("pipeline") == MEDIA and actions.media_failed(result)))
+
+
 def call(name, arguments=None):
     if name in runtime_tools.NAMES:
         return runtime_tools.call(name, arguments or {})
-    if name in ("start_quantization", "start_voice_release", "start_media_release"):
+    if name in EXECUTION_TOOLS:
         from ..runtime_control import execution_session
         with execution_session() as session:
             result = _call(name, arguments)
-            voice_failures = any(
-                entry.get("error") or entry.get("reason", "").endswith("failed")
-                or entry.get("quality", {}).get("regression", {}).get("passed") is False
-                for entry in result.get("results", {}).values())
-            media_failures = any(entry.get("rejected") or entry.get("status") == "quality-rejected"
-                                 for entry in result.get("candidates", []))
-            if result.get("failures") or result.get("incomplete") or voice_failures or media_failures:
+            if _failed(result):
                 session.mark_failed()
             return result
     return _call(name, arguments)

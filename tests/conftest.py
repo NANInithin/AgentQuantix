@@ -47,6 +47,16 @@ def offline(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "STATE_DIR", tmp_path / "state")
     monkeypatch.setattr(config, "RUNS_DIR", tmp_path / "state" / "runs")
     monkeypatch.setattr(config, "REPORTS_DIR", tmp_path / "reports")
+    # Run discovery scans the scratch tree; never the developer's real runs.
+    monkeypatch.setattr(config, "TEMP_DIR", tmp_path / "temp")
+    # Routing reads Hub metadata. Offline, it must fall back exactly as it
+    # would without a network, never reach the live Hub.
+    from agentquantix.tasks import router
+
+    def offline_metadata(repo_id):
+        raise ConnectionError("tests are offline")
+
+    monkeypatch.setattr(router, "hub_metadata", offline_metadata)
     yield
 
 

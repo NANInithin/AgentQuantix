@@ -4,19 +4,23 @@ This implements the separate stable-diffusion.cpp track specified in
 STABLE_DIFFUSION_CPP_RELEASE_PLAN.md. The source release remains 0.4.5 until
 the complete native acceptance matrix and human MiniMax-H3 review pass.
 
+Media models use the same commands as every other task. Hub metadata
+(Diffusers pipeline classes, `text-to-image`/`text-to-video` tags) routes them
+to stable-diffusion.cpp; they never enter the text or voice converters.
+
 ```sh
 pip install '.[media]'
-aqx media backends
-aqx media backends --build --compute-backend cpu
-aqx media inspect org/model
-aqx media plan org/model --quant q4_0 --sequential
-aqx media run org/model --quant q4_0 --sequential
+aqx runtime show stable-diffusion.cpp
+aqx runtime install stable-diffusion.cpp --compute-backend cpu
+aqx inspect org/model
+aqx plan org/model --quant q4_0 --sequential
+aqx run org/model --quant q4_0 --sequential
 ```
 
 For the standard SDXL base repository, no family or component flags are needed:
 
 ```sh
-aqx media run stabilityai/stable-diffusion-xl-base-1.0
+aqx run stabilityai/stable-diffusion-xl-base-1.0
 ```
 
 Planning recognizes its Diffusers pipeline class, selects the checkpoint named
@@ -40,17 +44,20 @@ fixtures with `--init-image`, `--end-image`, `--ref-image`, or `--ref-audio`.
 For a scored, reproducible release with a saved plan:
 
 ```sh
-aqx media plan org/model --family flux --contract source-contract.json --profile quality-profile.json --quant q4_0 --sequential --output approved-plan.json
-aqx media run org/model --plan approved-plan.json
-aqx media review RUN_ID --accept q4_0 --reviewer 'Your name'
-aqx media publish RUN_ID --quant q4_0
-aqx media verify downloaded-bundle/manifest.json
+aqx plan org/model --family flux --contract source-contract.json --profile quality-profile.json --quant q4_0 --sequential --output approved-plan.json
+aqx run org/model --plan approved-plan.json
+aqx review media:RUN_ID --quant q4_0 --accept --reviewer 'Your name'
+aqx publish media:RUN_ID --quant q4_0
+aqx verify downloaded-bundle/manifest.json
 ```
 
-Video reviews additionally require `--watched-video` (playback and extracted
-frames); audio-video additionally requires `--listened-audio`. A rejected or
-modified candidate cannot use an earlier accepted review. `run` builds and
-scores locally by default. Publication is a separate explicit command.
+`aqx runs` lists run ids; a unique prefix of the 64-character plan id also
+resolves. Video reviews additionally require `--watched-video` (playback and
+extracted frames); audio-video additionally requires `--listened-audio`. A
+rejected or modified candidate cannot use an earlier accepted review. `run`
+builds and scores locally by default; `--publish` only publishes candidates that
+already carry a matching review. Publication is otherwise a separate explicit
+command.
 
 The native type names are authoritative. For example, `q4_K` is a native type;
 `Q4_K_M` must not silently borrow llama.cpp's meaning. The read-only offline

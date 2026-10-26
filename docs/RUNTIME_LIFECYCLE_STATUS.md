@@ -111,7 +111,20 @@ Still required before a release claim:
   including the outstanding 0.5.0 media gates.
 - Packaging/install verification and full recorded release evidence.
 
-The shared task router, removal of `aqx media`/`aqx voice`, common review/verify/
-publish actions and the new runtime/task adapters remain in 0.5.2–0.6.0 as
-specified in the approved plan. Existing command groups remain operational
-until their complete shared replacements are implemented.
+## 0.5.2 shared task router and commands
+
+Implemented in local source: `agentquantix.tasks` (task registry, capability
+cells with independent load/convert/quantize/package/acceptance facts, metadata
+router), `agentquantix.runs` (text:/voice:/media: run ids over the existing
+records) and `agentquantix.actions` (inspect/plan/start/review/publish/verify)
+shared by the CLI and every agent harness. `aqx voice` and `aqx media` were
+removed without aliases; `aqx runtime show` carries the engine catalogs. The
+modality-specific agent tools were replaced by `inspect_model`, `plan_release`,
+`start_release`, `record_review`, `publish_release`, `list_runs` and
+`verify_release`. Routing was checked offline and against live Hub metadata for
+text, voice, media, embedding, reranker, detection, depth, CLIP and forecasting
+repositories. Early audits of the seven new engines are recorded in
+[ENGINE_AUDIT_0_5_2.md](ENGINE_AUDIT_0_5_2.md).
+
+The new runtime/task adapters remain in 0.5.3–0.6.0 as specified in the
+approved plan.

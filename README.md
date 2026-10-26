@@ -30,8 +30,10 @@ regular use outside temp, or build it temporarily; when an update is available,
 choose whether to build it. An unavailable update check uses the installed
 revision. Verification and model cards run automatically.
 
-The shared lifecycle is in 0.5.1 development; see
-[runtime lifecycle status](docs/RUNTIME_LIFECYCLE_STATUS.md) and the approved
+The shared runtime lifecycle (0.5.1) and the shared task router and commands
+(0.5.2) are in development; see
+[runtime lifecycle status](docs/RUNTIME_LIFECYCLE_STATUS.md), the
+[engine audit](docs/ENGINE_AUDIT_0_5_2.md) and the approved
 [0.5.1–0.6.0 roadmap](docs/RELEASE_0_6_0_PLAN.md).
 
 ```
@@ -65,9 +67,16 @@ uv tool install ./AgentQuantix[all]   # or: pipx install ./AgentQuantix[all]
 aqx bootstrap     # fresh machine: prerequisites, clone + build llama.cpp
 aqx doctor        # is this machine ready
 aqx research      # steps 1-3, read-only
-aqx show <model>  # full detail on one candidate
-aqx run <model>   # steps 4-5, asks before starting
+aqx inspect <model>  # task, engine and full detail for any repo, read-only
+aqx run <model>   # steps 4-5 for any supported task, asks before starting
 ```
+
+One set of commands covers every task. `aqx run org/model` routes the model by
+its Hub metadata and the installed engine catalogs to llama.cpp text, the voice
+TTS/ASR backends, or stable-diffusion.cpp media; `--task` is only needed when
+the route reports a genuine ambiguity. Recognised tasks whose adapters are still
+on the roadmap (embeddings, reranking, vision, forecasting, ...) are reported as
+blocked rather than sent through the text pipeline.
 
 On a bare VM with no Python at all, `install.sh` / `install.ps1` install uv
 first and then the above. Or drive it with a model instead of by hand — see
@@ -180,7 +189,7 @@ Voice releases are split into two runtime tracks:
   runtimes' publisher forks and open PRs. Leads are reported without pretending
   they are runnable before their conversion and bundle contracts are verified.
 
-Start with `aqx voice list` and `aqx voice plan <repo>`. See [USAGE.md](USAGE.md)
+Start with `aqx runtime show audio.cpp` and `aqx plan <repo>`. See [USAGE.md](USAGE.md)
 for the complete build, review, publication, and verification workflow.
 
 ---
@@ -205,9 +214,10 @@ OpenRouter loop against `urllib` — neither needs the `mcp` or `openai` package
 because a portability layer that needs a pip install in someone else's
 environment is not portable.
 
-The approval gate is enforced three times over for both text and voice: the
-prompt tells the model not to start unasked, each start tool refuses without
-`user_approved=true`, and the built-in loop asks directly before allowing it.
+The approval gate is enforced three times over for every task: the prompt tells
+the model not to start unasked, `start_release` and `publish_release` refuse
+without `user_approved=true`, and the built-in loop asks directly before
+allowing either.
 
 ---
 
@@ -246,18 +256,32 @@ src/agentquantix/
 ├── report.py         the ranked table, the detail view, the markdown report
 ├── card.py           step 5: verification and the model card
 ├── voice.py          voice registry, bundles, WAV gates, WER/CER and voice cards
+├── media.py          media capabilities, component bundles and read-only plans
+├── actions.py        shared inspect/plan/start/review/publish/verify actions
+├── runs.py           text:/voice:/media: run ids, discovery and resolution
 ├── cli.py            aqx
+├── runtime_cli.py    aqx runtime
+├── runtime_control.py execution sessions and runtime decisions
+├── runtime_builders.py native build/probe contracts per engine
 ├── mcp_server.py     MCP over stdio, no dependencies
+├── tasks/
+│   ├── registry.py   tasks, pipelines, engines and capability facts
+│   └── router.py     metadata routing: one repo in, task + engine out
+├── runtimes/
+│   ├── spec.py       engine identities and handles
+│   └── manager.py    install, update, activate, rollback, leases, pruning
 ├── pipeline/
 │   ├── job.py        one approved model, frozen at approval + resume state
 │   ├── build.py      llama.cpp / fork builds
 │   ├── source.py     BF16 acquisition
 │   ├── imatrix.py    calibration, the forward pass, coverage gaps
 │   ├── run.py        the text orchestrator: overlap, delete-on-upload, resume
-│   └── voice_release.py llama.cpp TTS and independent whisper.cpp ASR
+│   ├── voice_release.py llama.cpp TTS and independent whisper.cpp ASR
+│   └── media_release.py stable-diffusion.cpp conversion, validation, publication
 └── agent/
     ├── prompt.py     the system prompt, shared by every harness
-    ├── tools.py      the text and voice tools, defined once
+    ├── tools.py      the shared action tools, defined once
+    ├── runtime_tools.py runtime maintenance tools
     └── loop.py       the OpenAI-compatible loop for raw API keys
 ```
 

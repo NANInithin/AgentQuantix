@@ -562,7 +562,7 @@ def validate_candidate(bundle, binary, candidate_root, fixtures, baselines, prof
 
 def run_release(plan, *, user_approved=False, publish=False, preserve_failed=False):
     if user_approved is not True:
-        raise media.MediaValidationError("start_media_release requires approval of the exact plan")
+        raise media.MediaValidationError("start_release requires approval of the exact media plan")
     media.validate_plan(plan, check_runtime=False)
     from .. import runtime_control
     runtime_control.ensure_runtime(

@@ -421,7 +421,7 @@ def test_mcp_text_resume_resolves_saved_runtime_before_selecting_installed_newer
     previous.status_file.write_text("{}", encoding="utf-8")
     assessment = {"repo_id": "org/Demo", "target_repo": "owner/Demo-GGUF", "quants": ["Q4_0"],
                   "arch_ok": True, "verdict": "ok", "hours": {"total": 1}}
-    monkeypatch.setattr(tools, "_assessments_for", lambda models: [assessment])
+    monkeypatch.setattr(tools.actions, "assessments_for", lambda models: [assessment])
     monkeypatch.setattr(tools.hub, "forget_our_repos", lambda: None)
     captured = []
 
@@ -432,9 +432,9 @@ def test_mcp_text_resume_resolves_saved_runtime_before_selecting_installed_newer
         return {"hours": 0, "incomplete": ["Demo"],
                 "jobs": {"Demo": {"failures": [("<model>", "test stops before publication")]}}}
 
-    monkeypatch.setattr(tools.run_mod, "run_jobs", run_jobs)
+    monkeypatch.setattr("agentquantix.pipeline.run.run_jobs", run_jobs)
     with runtime_control.execution_session(manager=integration):
-        tools.call("start_quantization", {"models": ["org/Demo"], "user_approved": True})
+        tools.call("start_release", {"models": ["org/Demo"], "user_approved": True})
     assert len(captured) == 1
     prepared = [call for call in integration.calls if call[0] == "prepare"]
     assert prepared[0][2]["frozen"] == frozen

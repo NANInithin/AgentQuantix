@@ -107,8 +107,6 @@ def test_cmd_run_reaches_the_plan_with_no_report_at_all(monkeypatch):
     free-disk warning: with no research on file `result` is None, and the
     note dereferenced it. Selection handles a missing report; the rest of
     the run has to as well, at least as far as the --dry-run plan."""
-    from argparse import Namespace
-
     monkeypatch.setattr(research, "load_latest", lambda: None)
     monkeypatch.setattr(
         research, "assess_one",
@@ -123,7 +121,5 @@ def test_cmd_run_reaches_the_plan_with_no_report_at_all(monkeypatch):
                               "target_repo": "NANI-Nithin/model-GGUF",
                               "source_kind": "gguf"})
 
-    args = Namespace(model=["org/model"], dry_run=True, yes=True, xet=None,
-                     sequential=False, quantize_workers=1, upload_workers=1,
-                     queue_depth=1, quantize_threads=None, keep_fork=False)
+    args = cli.build_parser().parse_args(["run", "org/model", "--dry-run", "--yes"])
     assert cli.cmd_run(args) == 0

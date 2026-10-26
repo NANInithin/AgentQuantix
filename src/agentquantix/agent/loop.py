@@ -11,7 +11,7 @@ the MCP server avoids the `mcp` package: this file has to run wherever the
 user happens to be, and a dependency is a thing that can be missing.
 
 The approval gate is enforced in two independent places, which is the point:
-the model is told not to call `start_quantization` without approval, AND the
+the model is told not to call `start_release` without approval, AND the
 tool itself refuses without `user_approved`, AND this loop asks the human
 directly before letting that call through. A confused model cannot start a
 six-hour job by accident.
@@ -34,7 +34,7 @@ DEFAULT_MODEL = "anthropic/claude-opus-5"
 # Tools that spend hours, write to the Hub or touch the disk in a way the user
 # would want to have agreed to first. The loop confirms these with the human
 # regardless of what the model believes it has been authorised to do.
-CONFIRM_BEFORE = {"start_quantization", "start_voice_release", "start_media_release", "publish_media_release"}
+CONFIRM_BEFORE = set(tools_mod.EXECUTION_TOOLS)
 
 # Shown when `aqx agent` is started with no prompt. Printed locally rather
 # than asked of the model: it is the same every time, it costs nothing, and

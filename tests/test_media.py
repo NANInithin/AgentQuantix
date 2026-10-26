@@ -1,3 +1,4 @@
+import json
 import pytest
 
 from agentquantix import config, media, media_quality
@@ -83,14 +84,12 @@ def test_vae_resolution_requires_component_metadata(source, declaration, vae_con
 
 
 def test_blocked_media_run_does_not_prompt_or_build(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-    from agentquantix import media_cli
+    from agentquantix import cli
     plan_path = tmp_path / "plan.json"
     media.atomic_json(plan_path, {"blockers": ["family unresolved"]})
     monkeypatch.setattr("builtins.input", lambda *args: pytest.fail("blocked plan prompted"))
     monkeypatch.setattr(media_release, "run_release", lambda *args, **kwargs: pytest.fail("blocked plan ran"))
-    assert media_cli.command(SimpleNamespace(media_command="run", plan=str(plan_path),
-                                             output=None, dry_run=False)) == 1
+    assert cli.main(["run", "--plan", str(plan_path)]) == 1
 
 
 def test_plan_freezes_sources_components_licenses_and_targets(source, contract):
@@ -230,13 +229,15 @@ def test_readonly_plan_never_builds_or_downloads_weights(source, contract, monke
     assert not plan(source, contract)["blockers"]
 
 
-def test_media_cli_and_shared_tools_are_exposed():
+def test_media_options_live_on_the_shared_cli_and_tools():
     from agentquantix import cli
     from agentquantix.agent import tools
-    assert cli.build_parser().parse_args(["media", "run", "org/model", "--sequential"]).sequential
+    args = cli.build_parser().parse_args(["run", "org/model", "--sequential", "--width", "512"])
+    assert args.sequential and args.width == 512
     names = {t["name"] for t in tools.TOOLS}
-    assert {"plan_media_release", "start_media_release", "record_media_review", "publish_media_release"} <= names
-    assert "media" in tools.call_json("plan_quantization", {"models": ["org/minimax-h3"]})
+    assert {"plan_release", "start_release", "record_review", "publish_release"} <= names
+    result = json.loads(tools.call_json("plan_release", {"models": ["org/minimax-h3"]}))
+    assert "media" in json.dumps(result).casefold()
 
 
 def test_renamed_diffusers_models_cannot_enter_text_assessment(monkeypatch):

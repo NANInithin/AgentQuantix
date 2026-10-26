@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.5.2 — unreleased development
+
+- Add a shared task/capability registry (`agentquantix.tasks`) and metadata
+  routing: installed engine catalogs, Hub task metadata, library contracts and
+  transformers head classes resolve each repository's task, pipeline and engine.
+  Conflicting evidence returns a short `--task` choice. Recognised tasks without
+  an adapter (embeddings, reranking, CLIP, multimodal understanding, extended
+  audio, vision, detection, depth, SAM, forecasting) are blocked with their
+  milestone instead of falling into the text imatrix pipeline.
+- Add shared actions used by both the CLI and every agent harness: `inspect`,
+  `plan`, `run` (including `--resume RUN_ID` and `--plan FILE`), `review`,
+  `publish`, `verify`, `card` and `runs`. Run ids are `text:<name>`,
+  `voice:<slug>` and `media:<plan_id>`; existing records are discovered in place
+  and older voice workspaces gain a `run.json` on first use.
+- **Breaking:** remove the `aqx voice` and `aqx media` command groups with no
+  aliases, and replace the modality-specific agent tools with the shared ones.
+  TTS reviews now require an explicit `--listened-audio` attestation.
+
+| Removed | Replacement |
+|---|---|
+| `aqx voice list`, `aqx media backends` | `aqx runtime show <engine>` |
+| `aqx media backends --build` | `aqx runtime install stable-diffusion.cpp` |
+| `aqx media inspect <repo>` | `aqx inspect <repo>` |
+| `aqx voice plan <repo>`, `aqx media plan <repo>` | `aqx plan <repo>` |
+| `aqx voice run <repo>`, `aqx media run <repo>` | `aqx run <repo>` (`--plan FILE` for a saved media plan) |
+| `aqx voice review <repo> <quant> --accept` | `aqx review <run_id> --quant <quant> --accept --listened-audio --reviewer NAME` |
+| `aqx media review <run_id> --accept <quant>` | `aqx review media:<run_id> --quant <quant> --accept --reviewer NAME` |
+| `aqx media publish <run_id> --quant <quant>` | `aqx publish media:<run_id> --quant <quant>` |
+| `aqx voice verify <bundle.json>`, `aqx media verify <manifest.json>` | `aqx verify <path>` |
+| tools `describe_candidate`, `inspect_media_model` | `inspect_model` |
+| tools `plan_quantization`, `plan_voice_release`, `plan_media_release` | `plan_release` |
+| tools `start_quantization`, `start_voice_release`, `start_media_release` | `start_release` |
+| tools `record_voice_review`, `record_media_review` | `record_review` |
+| tool `publish_media_release` | `publish_release` |
+| tool `verify_published` | `verify_release` |
+
 ## 0.5.1 — unreleased development
 
 - Add shared original-runtime installation/update management for llama.cpp,

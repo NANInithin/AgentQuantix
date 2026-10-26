@@ -1,8 +1,11 @@
 # Using AgentQuantix
 
-For the experimental v0.5.0 image/video workflow, see
-[media usage](docs/MEDIA_USAGE.md). It uses `aqx media` and a separate pinned
-stable-diffusion.cpp engine. Text and voice instructions below remain valid.
+Every task uses the same commands: `aqx inspect`, `aqx plan`, `aqx run`,
+`aqx review`, `aqx publish`, `aqx verify`. AgentQuantix reads the model's Hub
+metadata and the installed engine catalogs to choose the task and engine, so a
+standard repository needs only `aqx run org/model`. The experimental v0.5.0
+image/video workflow is described in [media usage](docs/MEDIA_USAGE.md); it uses
+the same commands with a separate pinned stable-diffusion.cpp engine.
 
 Three ways to drive it. The CLI is the ground truth — the Claude Code skill and
 the API-key loop call exactly the same code, so nothing behaves differently
@@ -265,17 +268,18 @@ phase.
 
 ## Voice releases
 
-Voice models use their own command group and never enter the text-model sweep.
-List the registered backends and inspect a plan without downloading anything:
+Voice models are routed to their TTS or ASR backend automatically and never
+enter the text-model sweep. Show the registered backends, then inspect a plan
+without downloading anything:
 
 ```powershell
-aqx voice list
-aqx voice plan Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M
-aqx voice plan openbmb/VoxCPM2 --quant Q8_0
-aqx voice plan bosonai/higgs-tts-3-4b --quant Q8_0
-aqx voice plan ResembleAI/chatterbox --quant Q8_0
-aqx voice plan Qwen/Qwen3-ASR-0.6B --quant Q8_0
-aqx voice plan openai/whisper-small --quant q5_0
+aqx runtime show audio.cpp          # catalog families, tasks and native quants
+aqx plan Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M
+aqx plan openbmb/VoxCPM2 --quant Q8_0
+aqx plan bosonai/higgs-tts-3-4b --quant Q8_0
+aqx plan ResembleAI/chatterbox --quant Q8_0
+aqx plan Qwen/Qwen3-ASR-0.6B --quant Q8_0
+aqx plan openai/whisper-small --quant q5_0
 ```
 
 Planning verifies the repository against the Hub and records its exact source
@@ -296,16 +300,19 @@ licensed fixture prompts, rejects invalid/silent/clipped audio, and measures
 ASR round-trip WER for whitespace-delimited languages or CER for Chinese and
 Japanese. Generated audio is deterministically resampled to the
 16 kHz PCM input required by the Whisper gate. Publication waits until you
-listen to the samples and record a decision:
+listen to the samples and record a decision. The run prints its `run_id`
+(`aqx runs` lists them); the source repo id also resolves when unambiguous:
 
 ```powershell
-aqx voice run Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M --no-publish -y
-aqx voice review Qwen/Qwen3-TTS-12Hz-1.7B-Base Q4_K_M \
-  --reviewer "Your name" --accept --notes "Clear and correctly paced"
-aqx voice run Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M -y
+aqx run Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M --no-publish -y
+aqx review voice:Qwen--Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M --accept `
+  --listened-audio --reviewer "Your name" --notes "Clear and correctly paced"
+aqx publish voice:Qwen--Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M
 ```
 
-Recorded reviews are discovered automatically. A resumed run reuses its
+`--listened-audio` is your attestation that you listened; a TTS review is
+refused without it. `aqx publish` republishes every accepted quant together so
+`bundle.json` stays complete. Recorded reviews are discovered automatically. A resumed run reuses its
 provenance-matched quality cache; releases created before that cache existed
 are rescored from the reviewed WAV and ASR artifacts without rerunning model
 inference. `--review` remains available as an explicit override.
@@ -317,14 +324,14 @@ limit. TTS round-trip scoring builds only `whisper-cli`; the version-specific
 `whisper-quantize` tool is built only for an actual ASR release:
 
 ```powershell
-aqx voice run openai/whisper-small --quant q5_0 -y
+aqx run openai/whisper-small --quant q5_0 -y
 ```
 
 VoxCPM2 is one example of automatic catalog resolution:
 
 ```powershell
-aqx voice plan openbmb/VoxCPM2 --quant Q8_0
-aqx voice run openbmb/VoxCPM2 --quant Q8_0 --no-publish -y
+aqx plan openbmb/VoxCPM2 --quant Q8_0
+aqx run openbmb/VoxCPM2 --quant Q8_0 --no-publish -y
 ```
 
 The plan reports `required_source_inputs` separately from
@@ -339,7 +346,7 @@ Speaker references follow the selected family's catalog task. They are
 optional for Higgs text-to-speech and can be supplied for cloning:
 
 ```powershell
-aqx voice run bosonai/higgs-tts-3-4b --quant Q8_0 `
+aqx run bosonai/higgs-tts-3-4b --quant Q8_0 `
   --speaker C:\path\to\reference.wav --no-publish -y
 ```
 
@@ -348,16 +355,16 @@ renamed checkpoint whose name does not identify a unique audio.cpp family, use
 the generic override rather than changing AgentQuantix code:
 
 ```powershell
-aqx voice plan owner/my-kokoro-finetune --family kokoro_tts
-aqx voice run owner/my-kokoro-finetune --family kokoro_tts --quant Q8_0 -y
+aqx plan owner/my-kokoro-finetune --family kokoro_tts
+aqx run owner/my-kokoro-finetune --family kokoro_tts --quant Q8_0 -y
 ```
 
 The catalog can also install and validate audio.cpp's published package for a
 family, or an exact package variant, without inventing a source-repo mapping:
 
 ```powershell
-aqx voice plan audio.cpp:fish_audio --quant Q8_0
-aqx voice plan qwen3_tts_0_6b_base_q8_0
+aqx plan audio.cpp:fish_audio --quant Q8_0
+aqx plan qwen3_tts_0_6b_base_q8_0
 ```
 
 An audio.cpp GGUF is not interchangeable with a llama.cpp GGUF. The manifest
@@ -385,7 +392,9 @@ then verifies the remote sizes and SHA-256 values.
 
 ## If it stops
 
-Ctrl-C, a reboot, a dead network — just re-run the identical command.
+Ctrl-C, a reboot, a dead network — just re-run the identical command, or
+`aqx run --resume RUN_ID` (`aqx runs` lists them) to resume with the recorded
+plan and frozen runtime.
 `status.json` plus the Hub listing mean it redoes nothing and never uploads
 twice. A failed quant type does not abort the batch; a failed model does not
 abort the night. The end-of-run summary lists what failed and why.
@@ -474,15 +483,16 @@ migration, frozen resume and development validation boundaries.
 | `aqx runtime prune <engine>` | Inventory obsolete builds; `--apply` requests removal. |
 | `aqx probe` | Measure the machine. `--remeasure-disk` to refresh the cached disk rate. |
 | `aqx research` | Steps 1-3. `--limit N`, `--top N`, `--hide-blocked`, `--markdown`, `--json`, `--no-fork-hunt`. |
-| `aqx show <model>...` | Full detail on candidates from the last research run. |
-| `aqx run [model...]` | Steps 4-5. `--dry-run`, `--yes`, `--keep-fork`. Omit the name to choose interactively. |
-| `aqx verify <repo>...` | What is actually on the Hub, with real sizes and anything missing. |
-| `aqx card <repo>` | Write and publish the model card. `--dry-run` to print it instead. |
-| `aqx voice list` | List the separate TTS and ASR capability registry. |
-| `aqx voice plan <repo>` | Show runtime, bundle members, quants, and quality gates. |
-| `aqx voice run <repo>` | Convert, runtime-test, score, review-gate, and publish a voice bundle. |
-| `aqx voice review <repo> <quant>` | Record the required human TTS listening decision. |
-| `aqx voice verify <bundle.json>` | Verify local bundle sizes and SHA-256 values. |
+| `aqx runtime show <engine>` | One engine's revision plus the tasks, families and native quant types its catalog declares. |
+| `aqx inspect <model>` | Read-only route (task, pipeline, engine, evidence) and the assessment or plan detail. `--task`/`--engine`/`--family` settle a reported ambiguity. |
+| `aqx plan <model>...` | Read-only exact plan for any task. `--output` saves a voice/media plan. |
+| `aqx show <model or run>...` | Research detail, a recorded run, or a live inspection. |
+| `aqx run [model...]` | Plan, approve, build, validate, publish. `--dry-run`, `--yes`, `--resume RUN_ID`, `--plan FILE`. Option groups in `--help` say which task each applies to. |
+| `aqx runs` | Recorded `text:`, `voice:` and `media:` run ids. |
+| `aqx review RUN_ID --quant Q --accept/--reject --reviewer NAME` | Record a human review; `--listened-audio` and `--watched-video` attest playback. |
+| `aqx publish RUN_ID --quant Q` | Publish a validated, reviewed voice or media candidate. |
+| `aqx verify <target>...` | A published repo, a run's built bundles, or a local `bundle.json`/`manifest.json`. |
+| `aqx card <repo>` | Write and publish the text model card. `--dry-run` to print it instead. |
 | `aqx agent [prompt]` | Drive it with an API key. `--model`, `--base-url`, `--max-steps`. |
 | `aqx mcp` | Run as an MCP server on stdio. Harnesses launch this; you never do by hand. |
 

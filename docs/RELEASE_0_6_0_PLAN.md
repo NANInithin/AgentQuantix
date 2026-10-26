@@ -1,6 +1,8 @@
 # AgentQuantix 0.5.1–0.6.0 implementation plan
 
-Status: approved by the user, 25 October 2026; 0.5.1 implementation in progress.
+Status: approved by the user, 25 October 2026; 0.5.1 and 0.5.2 implemented in
+local source with offline tests (see RUNTIME_LIFECYCLE_STATUS.md and
+ENGINE_AUDIT_0_5_2.md); native acceptance remains outstanding.
 This document plans implementation;
 it does not change the package version or claim a runtime/model has passed
 native acceptance. Current source remains 0.4.5, with the existing 0.5.0 media

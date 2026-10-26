@@ -20,11 +20,28 @@ def _approve(args, message):
     return input(message + " [y/N] ").strip().lower() in ("y", "yes")
 
 
+def engine_catalog(engine):
+    """What this engine declares, read offline; replaces voice list / media backends."""
+    from . import tasks
+    result = {"tasks": [spec.to_dict() for spec in tasks.tasks_for_engine(engine)],
+              "capabilities": [cell.to_dict() for cell in tasks.capabilities(engine=engine)]}
+    if engine == "stable-diffusion.cpp":
+        from . import sysprobe
+        from .pipeline import media_release
+        result.update(compute_toolchains=sysprobe.compute_backends(),
+                      converter=media_release.converter_types())
+    return result
+
+
 def command(args):
     try:
         action = args.runtime_command
-        if action in ("list", "show"):
-            _print(runtime_tools.call("get_runtime_status", {"engine": getattr(args, "engine", None)}))
+        if action == "list":
+            _print(runtime_tools.call("get_runtime_status", {"engine": None}))
+            return 0
+        if action == "show":
+            _print({**runtime_tools.call("get_runtime_status", {"engine": args.engine}),
+                    **engine_catalog(args.engine)})
             return 0
         if action == "prune":
             preview = runtime_tools.call("prune_runtime", {"engine": args.engine})

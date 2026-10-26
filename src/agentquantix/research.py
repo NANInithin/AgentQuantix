@@ -124,7 +124,7 @@ def assess_one(repo_id, sysinfo=None, hunt_forks=True, probe_disk=False):
     # every assessment, for data nothing on this path reads.
     from . import media
     if media.looks_like_media(repo_id, {"pipeline_tag": candidate.pipeline_tag, "tags": candidate.tags}):
-        raise ValueError(f"{repo_id}: image/video model; use `aqx media plan {repo_id}` or plan_media_release, not the text converter")
+        raise ValueError(f"{repo_id}: image/video model; use the media plan from `aqx plan {repo_id}` or plan_release, not the text converter")
     hub.enrich(candidate, want_readme=False)
     if candidate.error:
         raise ValueError(f"{repo_id}: {candidate.error}")

@@ -24,8 +24,9 @@ acceptance is implied by this implementation.
 - Component source contracts from unambiguous native examples, including
   documented companion source locations. Explicit CLI component selections
   handle ambiguous layouts without adding model-name branches to the pipeline.
-- Separate `aqx media` CLI and shared MCP/agent tools with exact-plan approval,
-  source/catalog/fixture integrity checks, and routing away from text conversion.
+- Shared CLI actions and MCP/agent tools (the separate `aqx media` group was
+  removed in 0.5.2) with exact-plan approval, source/catalog/fixture integrity
+  checks, and metadata routing away from text conversion.
 - Atomic conversion, SHA-256 journals, revision/command-sensitive resume,
   sequential source processing, and shared retained companions.
 - Deterministic licensed prompts, geometric reference/first/last frames, and

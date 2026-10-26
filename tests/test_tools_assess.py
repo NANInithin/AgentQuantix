@@ -36,7 +36,7 @@ def test_a_model_not_in_the_report_is_assessed_on_demand(monkeypatch):
 
     monkeypatch.setattr(tools.research, "assess_one", fake_assess_one)
 
-    out = tools._assessments_for(["ibm-granite/granite-4.2-3b"])
+    out = tools.actions.assessments_for(["ibm-granite/granite-4.2-3b"])
     assert [a["repo_id"] for a in out] == ["ibm-granite/granite-4.2-3b"]
     assert seen == ["ibm-granite/granite-4.2-3b"]
 
@@ -51,7 +51,7 @@ def test_the_machine_is_probed_once_for_a_batch(monkeypatch):
     monkeypatch.setattr(tools.research, "assess_one",
                         lambda r, sysinfo=None, **k: _fake_assessment(r))
 
-    tools._assessments_for(["a/one", "b/two", "c/three"])
+    tools.actions.assessments_for(["a/one", "b/two", "c/three"])
     assert len(probes) == 1
 
 
@@ -65,7 +65,7 @@ def test_the_report_is_preferred_over_a_fresh_assessment(monkeypatch):
         tools.research, "assess_one",
         lambda *a, **k: pytest.fail("should not assess a researched model"))
 
-    assert tools._assessments_for(["org/known"])[0]["repo_id"] == "org/known"
+    assert tools.actions.assessments_for(["org/known"])[0]["repo_id"] == "org/known"
 
 
 def test_a_mixed_batch_keeps_the_order_it_was_asked_in(monkeypatch):
@@ -75,7 +75,7 @@ def test_a_mixed_batch_keeps_the_order_it_was_asked_in(monkeypatch):
     monkeypatch.setattr(tools.research, "assess_one",
                         lambda r, sysinfo=None, **k: _fake_assessment(r))
 
-    out = tools._assessments_for(["new/first", "org/known", "new/last"])
+    out = tools.actions.assessments_for(["new/first", "org/known", "new/last"])
     assert [a["repo_id"] for a in out] == ["new/first", "org/known", "new/last"]
 
 
@@ -86,4 +86,4 @@ def test_an_ambiguous_short_name_still_asks_rather_than_guessing(monkeypatch):
                               _fake_assessment("org/b-two")]}
     monkeypatch.setattr(tools.research, "load_latest", lambda: report)
     with pytest.raises(ValueError, match="matches 2"):
-        tools._assessments_for(["b-"])
+        tools.actions.assessments_for(["b-"])

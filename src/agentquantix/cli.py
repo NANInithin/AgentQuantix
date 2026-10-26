@@ -22,11 +22,12 @@ import os
 from pathlib import Path
 import sys
 
-from . import (card, config, feasibility, report, research, sysprobe,
-               transfer, voice)
+from . import (actions, card, config, feasibility, media, report, research, runs,
+               sysprobe, transfer)
 from .pipeline import build as build_mod, run as run_mod, source as source_mod
 from .pipeline.job import Job
 from .runtimes import RuntimeDecisionRequired, RuntimeErrorBase
+from .tasks import MEDIA, TEXT, VOICE, TASKS
 
 
 def _print(*args):
@@ -93,18 +94,64 @@ def cmd_research(args):
     return 0
 
 
+def _json(value):
+    _print(json.dumps(value, indent=2, default=str))
+
+
 def cmd_show(args):
+    """Research detail, else a recorded run, else a live read-only inspection."""
     result = research.load_latest()
-    if not result:
-        _print("No research on file. Run `aqx research` first.")
-        return 1
+    failed = False
     for name in args.model:
-        assessment = research.find(result, name)
-        if not assessment:
-            _print(f"{name}: not in the last research run.")
+        assessment = research.find(result, name) if result else None
+        if assessment:
+            _print("")
+            _print(report.detail(assessment))
             continue
+        try:
+            record = runs.resolve(name)
+        except runs.AmbiguousRun:
+            raise
+        except ValueError:
+            record = None
+        if record:
+            _json(record.to_dict())
+            continue
+        if "/" not in name and ":" not in name:
+            _print(f"{name}: not in the last research run or the run records. "
+                   "Name it as a full repo id (org/model).")
+            failed = True
+            continue
+        inspected = actions.inspect(name)
         _print("")
-        _print(report.detail(assessment))
+        _print(inspected["text"] if "text" in inspected else
+               json.dumps(inspected, indent=2, default=str))
+        failed |= not inspected["route"]["ready"]
+    return 1 if failed else 0
+
+
+def cmd_inspect(args):
+    result = actions.inspect(args.model, task=args.task, engine=args.engine,
+                             family=args.family, hunt_forks=not args.no_fork_hunt)
+    if "text" in result and not args.json:
+        _print(result["text"])
+    else:
+        _json(result)
+    return 0 if result["route"]["ready"] else 1
+
+
+def cmd_runs(args):
+    records = runs.discover(args.pipeline)
+    if args.json:
+        _json([item.to_dict() for item in records])
+        return 0
+    if not records:
+        _print("No recorded runs.")
+        return 0
+    for item in records:
+        reviews = item.details.get("reviews")
+        _print(f"  {item.id:<40} {item.task or item.pipeline:<28} {item.repo_id}"
+               + (f"  reviews: {', '.join(reviews)}" if reviews else ""))
     return 0
 
 
@@ -184,33 +231,113 @@ def _select_interactively(result, preselected, *, allow_runtime_setup=False):
     return chosen
 
 
+# Options that only one pipeline understands. Each defaults to None so a value
+# the user actually typed can be told apart from the pipeline's own default.
+TEXT_OPTIONS = {"upload_workers", "quantize_workers", "queue_depth", "quantize_threads",
+                "xet", "keep_fork"}
+VOICE_OPTIONS = {"language", "pocket_language", "speaker", "review",
+                 "max_roundtrip_wer", "max_wer_regression"}
+MEDIA_OPTIONS = {"component", "contract", "profile", "init_image", "end_image", "ref_image",
+                 "ref_audio", "width", "height", "steps", "seed", "frames", "fps", "sampler",
+                 "scheduler", "cfg_scale", "compute_backend", "preserve_failed", "plan"}
+APPLICABLE = {
+    TEXT: TEXT_OPTIONS | {"sequential"},
+    VOICE: VOICE_OPTIONS | {"target", "quant", "publish", "output"},
+    MEDIA: MEDIA_OPTIONS | {"target", "quant", "publish", "output", "sequential"},
+}
+
+
+def _check_applicable(args, pipeline):
+    for dest in sorted(set().union(*APPLICABLE.values()) - APPLICABLE[pipeline]):
+        if getattr(args, dest, None) not in (None, [], False):
+            raise ValueError(f"--{dest.replace('_', '-')} does not apply to "
+                             f"{pipeline} releases")
+
+
+def _text_run_options(args):
+    def pick(value, default):
+        return default if value is None else value
+    return run_mod.RunOptions(
+        quantize_workers=pick(getattr(args, "quantize_workers", None), config.QUANTIZE_WORKERS),
+        upload_workers=pick(getattr(args, "upload_workers", None), config.UPLOAD_WORKERS),
+        queue_depth=pick(getattr(args, "queue_depth", None), config.QUEUE_DEPTH),
+        quantize_threads=pick(getattr(args, "quantize_threads", None), config.QUANTIZE_THREADS),
+        sequential=bool(args.sequential) or config.SEQUENTIAL)
+
+
+def _confirm(args, question):
+    if args.yes:
+        return True
+    if not sys.stdin.isatty():
+        raise ValueError("explicit --yes is required for noninteractive execution")
+    return input(question).strip().casefold() in ("y", "yes")
+
+
 def cmd_run(args):
     # Set before anything reads the policy — the feasibility repricing below
     # asks whether uploads will use xet, and the answer has to be the one this
     # run will actually act on.
     if args.xet:
         os.environ["AQX_XET"] = args.xet
+    if args.resume:
+        if args.model:
+            raise ValueError("--resume takes a run id instead of model names")
+        return _resume(args)
+    if args.plan:
+        if len(args.model) > 1:
+            raise ValueError("a saved plan describes exactly one model")
+        _check_applicable(args, MEDIA)
+        saved = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+        return _run_media(args, args.model[0] if args.model else None, saved=saved)
+    if not args.model:
+        _check_applicable(args, TEXT)
+        return _run_text(args, [])
 
+    routes = [actions.route_named(name, task=args.task, engine=args.engine, family=args.family)
+              for name in args.model]
+    for item in routes:
+        if not item.ready:
+            _print(f"{item.repo_id}: BLOCKED - {item.blocker}")
+            for choice in item.choices:
+                _print(f"    --task {choice['task'] or '?'}  ({choice['pipeline']}: {choice['evidence']})")
+    ready = [(name, item) for name, item in zip(args.model, routes) if item.ready]
+    if not ready:
+        return 2
+    pipelines = sorted({item.pipeline for _, item in ready})
+    if len(pipelines) > 1:
+        raise ValueError(f"these models resolve to different pipelines ({', '.join(pipelines)}); "
+                         "run each pipeline separately")
+    pipeline = pipelines[0]
+    _check_applicable(args, pipeline)
+    if pipeline == TEXT:
+        code = _run_text(args, [name for name, _ in ready])
+    elif len(ready) > 1:
+        raise ValueError(f"{pipeline} releases run one model per invocation")
+    elif pipeline == VOICE:
+        code = _run_voice(args, ready[0][1].repo_id, family=actions.voice_family(ready[0][1], args.family))
+    else:
+        code = _run_media(args, ready[0][1].repo_id, route=ready[0][1])
+    return code or (1 if len(ready) < len(routes) else 0)
+
+
+def _run_text(args, names):
     result = research.load_latest()
-    if not result and not args.model:
+    if not result and not names:
         _print("No research on file. Run `aqx research` first, or name a "
                "model directly: `aqx run org/model`.")
         return 1
 
-    chosen = _select_interactively(result, args.model, allow_runtime_setup=not args.dry_run)
+    chosen = _select_interactively(result, names, allow_runtime_setup=not args.dry_run)
     if not chosen:
         _print("Nothing approved - stopping.")
         return 0
 
-    options = run_mod.RunOptions(
-        quantize_workers=args.quantize_workers,
-        upload_workers=args.upload_workers,
-        queue_depth=args.queue_depth,
-        quantize_threads=args.quantize_threads,
-        sequential=args.sequential)
-
+    options = _text_run_options(args)
     jobs = [Job.from_assessment(a) for a in chosen]
+    return _execute_text(args, jobs, options, result)
 
+
+def _execute_text(args, jobs, options, result=None, resumed=False):
     # The research run priced these under whatever xet policy was in force at
     # the time. --xet off (or a backend that has since gone missing) can make a
     # BF16 undownloadable, and that is a failure which would otherwise surface
@@ -274,7 +401,8 @@ def cmd_run(args):
                 job.runtime_snapshot = handle.snapshot()
             # Reassess only new jobs against the selected installation before
             # displaying the final quant list and asking for model approval.
-            if not frozen:
+            # A resumed job keeps the plan it was approved with.
+            if not frozen and not resumed:
                 refreshed = []
                 for job in jobs:
                     if job.fork:
@@ -404,29 +532,58 @@ def _verification_text(verification):
     return "\n".join(lines)
 
 
-def _resolve_repo(name):
-    """Accept a full repo id, our target-repo shorthand, or a base model name."""
-    if "/" in name:
-        return name
-    if name.endswith("-GGUF"):
-        return f"{config.HF_NAMESPACE}/{name}"
-    return f"{config.HF_NAMESPACE}/{name}-GGUF"
-
-
 def cmd_verify(args):
-    for name in args.repo:
-        verification = card.verify(_resolve_repo(name))
-        _print(f"\n{verification['repo_id']}")
+    failed = False
+    for target in args.target:
+        verification = actions.verify(target, root=args.root)
+        if "kind" in verification:
+            _json(verification)
+            failed |= verification.get("valid") is False
+            continue
+        _print(f"\n{verification.get('run_id') or verification.get('repo_id', target)}")
         _print(_verification_text(verification))
-    return 0
+        failed |= bool(verification.get("error"))
+    return 1 if failed else 0
+
+
+def _run_record(target):
+    try:
+        return runs.resolve(target)
+    except runs.AmbiguousRun:
+        raise
+    except ValueError:
+        return None
 
 
 def cmd_card(args):
-    repo_id = _resolve_repo(args.repo)
+    record = _run_record(args.repo)
+    if record and record.pipeline in (VOICE, MEDIA):
+        if not args.dry_run:
+            raise ValueError(f"{record.pipeline} cards are generated from the verified bundle "
+                             f"manifest and published with it: aqx publish {record.id} --quant QUANT")
+        if record.pipeline == MEDIA:
+            from .pipeline import media_release
+            if not args.quant:
+                raise ValueError("--quant selects the candidate whose card is rendered")
+            manifest = Path(record.location) / "candidates" / media.relative_path(args.quant) / "manifest.json"
+            _print(media_release.render_card(media_release.load_bundle(manifest)))
+            return 0
+        cards = sorted(Path(record.location).glob("models/**/publication/*/README.md"))
+        if not cards:
+            raise ValueError(f"{record.id} has not staged a bundle card yet")
+        for path in cards:
+            _print(path.read_text(encoding="utf-8"))
+        return 0
+
+    repo_id = actions.our_repo(args.repo)
     job = None
-    record = config.RUNS_DIR / f"{repo_id.split('/')[-1].removesuffix('-GGUF')}.json"
-    if record.exists():
-        job = Job.load(record)
+    if record and record.pipeline == TEXT:
+        job = Job.load(record.location)
+        repo_id = job.target_repo
+    else:
+        path = config.RUNS_DIR / f"{repo_id.split('/')[-1].removesuffix('-GGUF')}.json"
+        if path.exists():
+            job = Job.load(path)
 
     verification = card.verify(job or repo_id)
     if verification.get("error"):
@@ -442,146 +599,180 @@ def cmd_card(args):
 
 
 # =====================================================
-# voice
+# review / publish
 # =====================================================
-def _voice_plan(repo_id, target_repo=None, quants=None, family=None,
-                hunt_forks=True):
-    from . import voice
-    from .pipeline import voice_release
-
-    allowed, reason, backend = voice.execution_gate(repo_id, family=family)
-    if not allowed:
-        leads = (voice_release.find_backend_forks(repo_id)
-                 if hunt_forks else [])
-        return {
-            "source": repo_id, "status": "blocked", "blocker": reason,
-            "fork_hunt": "searched" if hunt_forks else "disabled",
-            "fork_leads": leads,
-            "next": ("A lead must still prove its converter, model spec, "
-                     "bundle contract, and smoke inference before execution."
-                     if leads else
-                     "No installed backend or current fork/PR lead was found."),
-        }
-    available = voice.available_quants(repo_id, backend)
-    requested = [voice.normalize_quant(backend, quant)
-                 for quant in (quants or available)]
-    unsupported = [quant for quant in requested
-                   if quant not in available]
-    if unsupported:
-        raise ValueError(
-            f"{backend.id} does not support {unsupported}; choose from "
-            f"{list(available)}")
-    source = voice_release.source_metadata(repo_id, family=family)
-    source_inputs = voice_release.audiocpp_source_plan(
-        repo_id, backend, source.get("source_files"))
-    missing_inputs = [item for item in source_inputs
-                      if item["status"] == "missing"]
-    suffix = "GGUF" if backend.model_format.endswith("gguf") else "GGML"
-    source_name = repo_id.split("/")[-1].replace(":", "-")
-    result = {
-        "source": repo_id,
-        "status": "blocked" if missing_inputs else "ready",
-        "target": target_repo or f"{config.namespace()}/{source_name}-{suffix}",
-        "track": backend.track,
-        "backend": backend.backend,
-        "family": backend.family,
-        "backend_status": backend.status,
-        "runtime": backend.runtime,
-        "converter": backend.converter,
-        "model_format": backend.model_format,
-        "quants": requested,
-        "available_quants": list(available),
-        "quant_source": ("native converter/quantizer capability; package "
-                         "references are narrowed to published precisions"),
-        "fork_leads": [],
-        "required_companions": list(backend.required_companions),
-        "required_source_inputs": source_inputs,
-        "speaker_reference": backend.speaker_reference,
-        "sample_rate": backend.sample_rate,
-        "source_revision": source["revision"],
-        "source_bytes": source["source_bytes"],
-        "source_gated": source["gated"],
-        "quality_gate": ("WAV integrity + silence/clipping + ASR round-trip WER/CER + "
-                         "human listening review" if backend.track == voice.TTS
-                         else "fixed-corpus WER/CER regression versus the base model"),
-    }
-    if missing_inputs:
-        result["blocker"] = (
-            "source repository is missing backend-declared tensor inputs: "
-            + ", ".join(item["required_path"] for item in missing_inputs))
-    return result
+def cmd_review(args):
+    _json(actions.review(args.run_id, args.quant, accepted=args.accept, reviewer=args.reviewer,
+                         notes=args.notes or "", watched_video=args.watched_video,
+                         listened_audio=args.listened_audio))
+    return 0
 
 
-def cmd_voice(args):
-    from . import voice
-    from .pipeline import voice_release
-
-    if args.voice_command == "list":
-        _print(json.dumps(voice.advisory_catalog(), indent=2))
+def cmd_publish(args):
+    record = runs.resolve(args.run_id)
+    _print(f"{record.id}: publish {args.quant} of {record.repo_id} -> "
+           f"{record.target or 'the target recorded in its plan'}")
+    if not _confirm(args, "Publish this validated, reviewed candidate? [y/N] "):
+        _print("Cancelled.")
         return 0
+    result = actions.publish(record.id, args.quant, user_approved=True)
+    _json(result)
+    if record.pipeline == VOICE:
+        return 0 if any(entry.get("published") for entry in result.get("results", {}).values()) else 1
+    return 0 if result.get("published") else 1
 
-    if args.voice_command == "plan":
-        _print(json.dumps(_voice_plan(
-            args.repo, args.target, args.quant, args.family,
-            not args.no_fork_hunt), indent=2))
-        return 0
 
-    if args.voice_command == "review":
-        path = Path(args.output) if args.output else (
-            voice_release.work_dir(args.repo) / "reviews" / f"{args.quant}.json")
-        voice.write_human_review(
-            path, quant=args.quant, accepted=args.accept,
-            reviewer=args.reviewer, notes=args.notes or "")
-        _print(f"review saved: {path}")
-        return 0
+# =====================================================
+# voice / media execution
+# =====================================================
+VOICE_NON_ERRORS = {"human listening review required",
+                    "accepted and waiting for atomic bundle publication"}
 
-    if args.voice_command == "verify":
-        manifest_path = Path(args.manifest)
-        manifest = voice.load_manifest(manifest_path)
-        problems = voice.verify_manifest_files(manifest, args.root or manifest_path.parent)
-        _print(json.dumps({"valid": not problems, "problems": problems}, indent=2))
-        return 1 if problems else 0
 
-    plan = _voice_plan(args.repo, args.target, args.quant, args.family,
-                       not args.no_fork_hunt)
+def _read_json(path):
+    return json.loads(Path(path).read_text(encoding="utf-8")) if path else None
+
+
+def _voice_args(args, family=None):
+    return {"target_repo": args.target, "quants": args.quant, "family": family,
+            "hunt_forks": not args.no_fork_hunt, "language": args.language,
+            "speaker": args.speaker}
+
+
+def _run_voice(args, repo, family=None, saved=None):
+    voice_args = _voice_args(args, family)
+    for key in ("target_repo", "quants", "language", "speaker", "family"):
+        if voice_args.get(key) is None and saved:
+            voice_args[key] = saved.get(key)
+    plan = actions.voice_plan(repo, **voice_args)
     if plan.get("status") == "ready" and not args.dry_run:
-        from . import runtime_control
-        engine = plan["backend"]
-        runtime_control.prepare_voice_runtimes(args.repo, engine, plan["track"])
-        plan = _voice_plan(args.repo, args.target, args.quant, args.family,
-                           not args.no_fork_hunt)
-    _print(json.dumps(plan, indent=2))
+        actions.prepare_voice_runtimes(plan)
+        plan = actions.voice_plan(repo, **voice_args)
+    if args.output:
+        media.atomic_json(args.output, plan)
+    _json(plan)
     if plan.get("status") != "ready":
         return 2
     if args.dry_run:
         return 0
-    if not args.yes:
-        answer = input("Run this voice release? This downloads, builds and may publish. [y/N] ")
-        if answer.strip().casefold() not in ("y", "yes"):
-            _print("Nothing started.")
-            return 0
-    options = voice_release.VoiceReleaseOptions(
-        quants=plan["quants"], language=args.language,
-        speaker=Path(args.speaker) if args.speaker else None,
-        publish=not args.no_publish,
-        max_roundtrip_wer=args.max_roundtrip_wer,
-        max_wer_regression=args.max_wer_regression,
-        pocket_language=args.pocket_language,
-        human_review=Path(args.review) if args.review else None,
-        family=args.family,
-    )
-    if plan["track"] == voice.TTS:
-        result = voice_release.run_tts_release(args.repo, plan["target"], options)
-    else:
-        result = voice_release.run_asr_release(args.repo, plan["target"], options)
-    _print(json.dumps(result, indent=2, default=str))
-    non_error_reasons = {
-        "human listening review required",
-        "accepted and waiting for atomic bundle publication",
-    }
-    return 0 if all(item.get("published") or
-                    item.get("reason") in non_error_reasons
+    if not _confirm(args, "Run this voice release? This downloads, builds and may publish. [y/N] "):
+        _print("Nothing started.")
+        return 0
+    result = actions.run_voice(
+        plan, publish=args.publish is not False, human_review=args.review,
+        family=voice_args["family"], language=args.language, speaker=args.speaker,
+        pocket_language=args.pocket_language, max_roundtrip_wer=args.max_roundtrip_wer,
+        max_wer_regression=args.max_wer_regression)
+    _json(result)
+    return 0 if all(item.get("published") or item.get("reason") in VOICE_NON_ERRORS
                     for item in result["results"].values()) else 1
+
+
+def _components(values):
+    members = []
+    for value in values or []:
+        if "=" not in value:
+            raise media.MediaValidationError("use --component role=path or role=org/repo::path")
+        role, source = value.split("=", 1)
+        member = {"role": role, "precision": "source",
+                  "quantizable": role not in ("vae", "audio_vae", "llm_vision", "config",
+                                              "tokenizer", "scheduler")}
+        if "::" in source:
+            member["source_repo"], source = source.split("::", 1)
+        member["source_path"] = source
+        members.append(member)
+    return members or None
+
+
+def _media_args(args, route=None):
+    task = args.task if args.task in media.MEDIA_TASKS else (
+        route.task if route and route.task in media.MEDIA_TASKS else None)
+    return {"target_repo": args.target, "quants": args.quant, "task": task,
+            "family": args.family or (route.family if route else None),
+            "components": _components(args.component),
+            "compute_backend": args.compute_backend or "auto",
+            "sequential": bool(args.sequential),
+            "contract": _read_json(args.contract), "quality_profile": _read_json(args.profile),
+            "conditioning": {key: value for key, value in {
+                "init_image": args.init_image, "end_image": args.end_image,
+                "ref_image": args.ref_image, "ref_audio": args.ref_audio}.items() if value},
+            "settings": {key: getattr(args, key) for key in (
+                "width", "height", "steps", "seed", "frames", "fps", "sampler", "scheduler",
+                "cfg_scale") if getattr(args, key) is not None}}
+
+
+def _run_media(args, repo, route=None, saved=None):
+    def make_plan():
+        return media.plan_release(repo, hunt_forks=not args.no_fork_hunt, **_media_args(args, route))
+
+    plan = saved if saved is not None else make_plan()
+    if saved is not None:
+        media.validate_plan(plan, check_runtime=False)
+    if not args.dry_run and not plan["blockers"]:
+        from . import runtime_control
+        revision = ({"revision": plan["engine_revision"], "repository": "leejet/stable-diffusion.cpp"}
+                    if saved and not saved.get("runtime_snapshot") else None)
+        handle = runtime_control.ensure_runtime(
+            "stable-diffusion.cpp", compute_backend=plan["compute_backend"],
+            frozen=saved.get("runtime_snapshot") if saved else None, revision=revision)
+        if handle and saved is None:
+            plan = make_plan()
+    if args.output:
+        media.atomic_json(args.output, plan)
+    _json(plan)
+    if args.dry_run:
+        return 1 if plan["blockers"] else 0
+    if plan["blockers"]:
+        raise media.MediaValidationError("media plan is blocked: " + "; ".join(plan["blockers"]))
+    if repo and repo != plan["repo_id"]:
+        raise media.MediaValidationError("repository differs from the saved approved plan")
+    if not _confirm(args, "Build and validate this exact media plan? [y/N] "):
+        return 0
+    publish = bool(args.publish)
+    result = actions.start_media(plan, user_approved=True, publish=publish,
+                                 preserve_failed=bool(args.preserve_failed))
+    _json(result)
+    if actions.media_failed(result):
+        return 1
+    if publish and any(not c.get("published") for c in result.get("candidates", [])
+                       if c.get("quant") != "f16"):
+        return 1
+    return 0
+
+
+def _resume(args):
+    record = runs.resolve(args.resume)
+    _print(f"resuming {record.id} ({record.task or record.pipeline}): {record.repo_id}")
+    _check_applicable(args, record.pipeline)
+    if record.pipeline == TEXT:
+        return _execute_text(args, [Job.load(record.location)], _text_run_options(args),
+                             resumed=True)
+    if record.pipeline == VOICE:
+        saved = record.details.get("plan") or {}
+        return _run_voice(args, record.repo_id, family=args.family or saved.get("family"),
+                          saved=saved)
+    plan = json.loads((Path(record.location) / "plan.json").read_text(encoding="utf-8"))
+    return _run_media(args, None, saved=plan)
+
+
+def cmd_plan(args):
+    routes = [actions.route_named(name, task=args.task, engine=args.engine, family=args.family)
+              for name in args.model]
+    for pipeline in {item.pipeline for item in routes if item.ready}:
+        _check_applicable(args, pipeline)
+    media_args = _media_args(args, next((r for r in routes if r.pipeline == MEDIA), None))
+    result = actions.plan(args.model, task=args.task, engine=args.engine, family=args.family,
+                          hunt_forks=not args.no_fork_hunt, text=_text_run_options(args),
+                          voice_args=_voice_args(args), media_args=media_args)
+    if args.output:
+        if len(result["releases"]) != 1:
+            raise ValueError("--output saves exactly one voice or media plan")
+        media.atomic_json(args.output, result["releases"][0]["plan"])
+    _json(result)
+    blocked = bool(result["blocked"]) or bool((result["text"] or {}).get("blocked")) or any(
+        release["plan"].get("blockers") or release["plan"].get("status") == "blocked"
+        for release in result["releases"])
+    return 1 if blocked else 0
 
 
 # =====================================================
@@ -691,6 +882,86 @@ def cmd_agent(args):
 # =====================================================
 # parser
 # =====================================================
+def _add_routing(parser):
+    from .runtimes import RUNTIMES
+    group = parser.add_argument_group(
+        "routing", "Resolved from Hub metadata and engine catalogs; set these only "
+                   "to settle a reported ambiguity.")
+    group.add_argument("--task", choices=sorted(TASKS))
+    group.add_argument("--engine", choices=list(RUNTIMES))
+    group.add_argument("--family", help="engine catalog family for a custom or renamed repository")
+    group.add_argument("--no-fork-hunt", action="store_true",
+                       help="do not search engine forks and open PRs for unresolved sources")
+
+
+def _add_release_options(parser, *, execution):
+    text = parser.add_argument_group(
+        "text-generation (llama.cpp)",
+        "Files on disk at once = quantize workers + upload workers + queue depth "
+        "(3 by default), or exactly 1 with --sequential.")
+    text.add_argument(
+        "--sequential", action="store_true", default=None,
+        help="text: quantize -> upload -> delete, one at a time (smallest disk, slower). "
+             "media: price and run components sequentially.")
+    text.add_argument("--upload-workers", type=int, metavar="N",
+                      help=f"concurrent uploads (default {config.UPLOAD_WORKERS}); "
+                           "each costs one more quant of peak disk")
+    text.add_argument("--quantize-workers", type=int, metavar="N",
+                      help=f"concurrent llama-quantize processes (default {config.QUANTIZE_WORKERS})")
+    text.add_argument("--queue-depth", type=int, metavar="N",
+                      help=f"finished quants waiting for an uploader (default {config.QUEUE_DEPTH})")
+    text.add_argument("--quantize-threads", type=int, metavar="N",
+                      help="threads per llama-quantize; omitted, it uses every core")
+    if execution:
+        text.add_argument(
+            "--xet", choices=transfer.MODES, default=None,
+            help="xet transfer policy. 'auto' (the default) enables it only for "
+                 f"downloads over {transfer.HTTP_DOWNLOAD_LIMIT_GIB:.0f} GiB and keeps "
+                 "uploads on the faster plain-HTTP path.")
+        text.add_argument("--keep-fork", action="store_true", default=None,
+                          help="keep any fork checkout after the run")
+
+    bundle = parser.add_argument_group("voice and media bundles")
+    bundle.add_argument("--target", help="target repository (defaults to your namespace)")
+    bundle.add_argument("--quant", action="append",
+                        help="quant/precision policy; repeat for more (defaults to every native type)")
+    bundle.add_argument("--output", help="save the exact reviewable plan as JSON")
+    if execution:
+        publication = bundle.add_mutually_exclusive_group()
+        publication.add_argument("--publish", dest="publish", action="store_true", default=None,
+                                 help="media: publish candidates that already have a matching human review")
+        publication.add_argument("--no-publish", dest="publish", action="store_false",
+                                 help="voice: build and score locally without writing to the Hub")
+
+    voice_group = parser.add_argument_group("text-to-speech / speech recognition")
+    voice_group.add_argument("--language")
+    voice_group.add_argument("--speaker", help="consented speaker-reference WAV when required")
+    if execution:
+        voice_group.add_argument("--pocket-language")
+        voice_group.add_argument("--review", help="listening-review JSON (recorded reviews are found automatically)")
+        voice_group.add_argument("--max-roundtrip-wer", type=float)
+        voice_group.add_argument("--max-wer-regression", type=float)
+
+    media_group = parser.add_argument_group("image / video (stable-diffusion.cpp)")
+    media_group.add_argument("--component", action="append",
+                             help="resolve an ambiguous member: role=path or role=org/repo::path")
+    media_group.add_argument("--contract", help="reviewed component source contract JSON")
+    media_group.add_argument("--profile", help="calibrated family/task quality profile JSON")
+    media_group.add_argument("--init-image", nargs="?", const="fixtures/reference.png")
+    media_group.add_argument("--end-image", nargs="?", const="fixtures/last.png")
+    media_group.add_argument("--ref-image", nargs="?", const="fixtures/reference.png")
+    media_group.add_argument("--ref-audio", nargs="?", const="fixtures/reference.wav")
+    for setting in ("width", "height", "steps", "seed", "frames", "fps"):
+        media_group.add_argument("--" + setting, type=int)
+    media_group.add_argument("--sampler")
+    media_group.add_argument("--scheduler")
+    media_group.add_argument("--cfg-scale", type=float)
+    media_group.add_argument("--compute-backend", help="auto (default), cpu, cuda, vulkan or metal")
+    if execution:
+        media_group.add_argument("--plan", help="execute this saved media plan unchanged")
+        media_group.add_argument("--preserve-failed", action="store_true", default=None)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="aqx",
@@ -724,140 +995,79 @@ def build_parser():
     res.add_argument("--json", action="store_true")
     res.set_defaults(func=cmd_research)
 
-    show = sub.add_parser("show", help="full detail for one candidate")
+    show = sub.add_parser("show", help="detail for a researched candidate, a recorded run, or any repo")
     show.add_argument("model", nargs="+")
     show.set_defaults(func=cmd_show)
 
-    run_cmd = sub.add_parser("run", help="step 4: quantize and upload (asks first)")
+    inspect = sub.add_parser(
+        "inspect", help="read-only: resolve a model's task and engine and show its assessment")
+    inspect.add_argument("model")
+    _add_routing(inspect)
+    inspect.add_argument("--json", action="store_true")
+    inspect.set_defaults(func=cmd_inspect)
+
+    plan = sub.add_parser(
+        "plan", help="read-only: the exact release plan for one or more models")
+    plan.add_argument("model", nargs="+")
+    _add_routing(plan)
+    _add_release_options(plan, execution=False)
+    plan.set_defaults(func=cmd_plan)
+
+    run_cmd = sub.add_parser(
+        "run", help="plan, ask, then build, validate and publish (any supported task)")
     run_cmd.add_argument("model", nargs="*",
                          help="models to run, by name from the last research "
                               "run or as any full repo id (org/model); omit "
                               "to choose interactively")
+    run_cmd.add_argument("--resume", metavar="RUN_ID",
+                         help="resume a recorded run with its frozen plan and runtime")
     run_cmd.add_argument("--yes", "-y", action="store_true",
-                         help="skip the final confirmation")
+                         help="skip the final model confirmation (never approves runtime updates)")
     run_cmd.add_argument("--dry-run", action="store_true",
                          help="show the plan and stop")
-    run_cmd.add_argument("--keep-fork", action="store_true",
-                         help="keep any fork checkout after the run")
-
-    concurrency = run_cmd.add_argument_group(
-        "concurrency",
-        "How much to overlap, and therefore how much disk the sweep needs. "
-        "Files on disk at once = quantize workers + upload workers + queue "
-        "depth (3 by default), or exactly 1 with --sequential.")
-    concurrency.add_argument(
-        "--sequential", action="store_true",
-        help="quantize -> upload -> delete, one at a time, no background "
-             "uploader (as scripts/Ornith-1.5-9B.py does it). Smallest "
-             "possible disk footprint; slower, because uploads stop hiding "
-             "behind the next quantize.")
-    concurrency.add_argument(
-        "--upload-workers", type=int, default=config.UPLOAD_WORKERS,
-        metavar="N",
-        help=f"concurrent uploads (default {config.UPLOAD_WORKERS}). Raise "
-             "this when a run is upload-bound; each stream costs one more "
-             "quant held on disk.")
-    concurrency.add_argument(
-        "--quantize-workers", type=int, default=config.QUANTIZE_WORKERS,
-        metavar="N",
-        help=f"concurrent llama-quantize processes (default "
-             f"{config.QUANTIZE_WORKERS}). Rarely worth raising - "
-             "llama-quantize already threads across every core.")
-    concurrency.add_argument(
-        "--queue-depth", type=int, default=config.QUEUE_DEPTH, metavar="N",
-        help=f"finished quants allowed to wait for an uploader (default "
-             f"{config.QUEUE_DEPTH}). Costs one quant of disk each.")
-    concurrency.add_argument(
-        "--quantize-threads", type=int, default=config.QUANTIZE_THREADS,
-        metavar="N",
-        help="threads per llama-quantize process (its trailing [nthreads] "
-             "argument). Omitted, it uses every core; set it to keep the "
-             "machine usable while a sweep runs.")
-    run_cmd.add_argument(
-        "--xet", choices=transfer.MODES, default=None,
-        help="xet transfer policy. 'auto' (the default) enables it only for "
-             f"downloads over {transfer.HTTP_DOWNLOAD_LIMIT_GIB:.0f} GiB, "
-             "where huggingface_hub requires it, and keeps uploads on the "
-             "much faster plain-HTTP path. 'on'/'off' pin it for every "
-             "transfer.")
+    _add_routing(run_cmd)
+    _add_release_options(run_cmd, execution=True)
     run_cmd.set_defaults(func=cmd_run)
 
-    verify = sub.add_parser("verify", help="step 5: check what is on the Hub")
-    verify.add_argument("repo", nargs="+")
+    review = sub.add_parser("review", help="record a human review of exact candidate artifacts")
+    review.add_argument("run_id")
+    review.add_argument("--quant", required=True)
+    decision = review.add_mutually_exclusive_group(required=True)
+    decision.add_argument("--accept", dest="accept", action="store_true", default=None)
+    decision.add_argument("--reject", dest="accept", action="store_false")
+    review.add_argument("--reviewer", required=True)
+    review.add_argument("--notes", default="")
+    review.add_argument("--watched-video", action="store_true",
+                        help="confirm video playback and extracted-frame inspection")
+    review.add_argument("--listened-audio", action="store_true",
+                        help="confirm listening to the generated audio")
+    review.set_defaults(func=cmd_review)
+
+    publish = sub.add_parser("publish", help="publish a validated, reviewed candidate")
+    publish.add_argument("run_id")
+    publish.add_argument("--quant", required=True)
+    publish.add_argument("--yes", "-y", action="store_true")
+    publish.set_defaults(func=cmd_publish)
+
+    runs_cmd = sub.add_parser("runs", help="list recorded runs and their ids")
+    runs_cmd.add_argument("--pipeline", choices=[TEXT, VOICE, MEDIA])
+    runs_cmd.add_argument("--json", action="store_true")
+    runs_cmd.set_defaults(func=cmd_runs)
+
+    verify = sub.add_parser(
+        "verify", help="check a published repo, a recorded run, or a local bundle manifest")
+    verify.add_argument("target", nargs="+")
+    verify.add_argument("--root", help="directory holding a local manifest's files")
     verify.set_defaults(func=cmd_verify)
 
-    card_cmd = sub.add_parser("card", help="step 5: write the model card")
+    card_cmd = sub.add_parser("card", help="write or preview the model card")
     card_cmd.add_argument("repo")
+    card_cmd.add_argument("--quant", help="bundle candidate to render (media runs)")
     card_cmd.add_argument("--dry-run", action="store_true",
                           help="print the card instead of publishing it")
     card_cmd.set_defaults(func=cmd_card)
 
-    voice_cmd = sub.add_parser(
-        "voice", help="TTS and ASR bundle conversion, validation and release")
-    voice_sub = voice_cmd.add_subparsers(dest="voice_command", required=True)
-
-    voice_list = voice_sub.add_parser("list", help="show registered voice backends")
-    voice_list.set_defaults(func=cmd_voice)
-
-    voice_plan = voice_sub.add_parser("plan", help="show a voice release plan")
-    voice_plan.add_argument("repo")
-    voice_plan.add_argument("--target")
-    voice_plan.add_argument(
-        "--family", help="audio.cpp catalog family when repo-name detection "
-                         "would be ambiguous")
-    voice_plan.add_argument("--quant", action="append",
-                            help="quant to release; repeat for more than one")
-    voice_plan.add_argument("--no-fork-hunt", action="store_true",
-                            help="do not search backend forks and open PRs")
-    voice_plan.set_defaults(func=cmd_voice)
-
-    voice_run = voice_sub.add_parser(
-        "run", help="convert, quantize, validate and optionally publish a bundle")
-    voice_run.add_argument("repo")
-    voice_run.add_argument("--target")
-    voice_run.add_argument(
-        "--family", help="audio.cpp catalog family when repo-name detection "
-                         "would be ambiguous")
-    voice_run.add_argument("--quant", action="append",
-                           help="quant to release; defaults to every type the source can produce")
-    voice_run.add_argument("--no-fork-hunt", action="store_true",
-                           help="do not search backend forks and open PRs")
-    voice_run.add_argument("--language")
-    voice_run.add_argument("--pocket-language", default="english")
-    voice_run.add_argument("--speaker",
-                           help="consented speaker-reference WAV when the "
-                                "selected backend task requires or supports it")
-    voice_run.add_argument("--review",
-                           help="human listening-review JSON produced by voice review")
-    voice_run.add_argument("--max-roundtrip-wer", type=float, default=0.35)
-    voice_run.add_argument("--max-wer-regression", type=float, default=0.05)
-    voice_run.add_argument("--no-publish", action="store_true",
-                           help="build and score locally without writing to the Hub")
-    voice_run.add_argument("--dry-run", action="store_true")
-    voice_run.add_argument("--yes", "-y", action="store_true")
-    voice_run.set_defaults(func=cmd_voice)
-
-    voice_review = voice_sub.add_parser(
-        "review", help="record the required human listening decision")
-    voice_review.add_argument("repo")
-    voice_review.add_argument("quant",
-                              choices=list(voice.TTS_REVIEW_QUANTS))
-    voice_review.add_argument("--reviewer", required=True)
-    decision = voice_review.add_mutually_exclusive_group(required=True)
-    decision.add_argument("--accept", action="store_true")
-    decision.add_argument("--reject", action="store_true")
-    voice_review.add_argument("--notes")
-    voice_review.add_argument("--output")
-    voice_review.set_defaults(func=cmd_voice)
-
-    voice_verify = voice_sub.add_parser(
-        "verify", help="verify local bundle files against bundle.json")
-    voice_verify.add_argument("manifest")
-    voice_verify.add_argument("--root")
-    voice_verify.set_defaults(func=cmd_voice)
-
-    from . import media_cli, runtime_cli
-    media_cli.add_parser(sub)
+    from . import runtime_cli
     runtime_cli.add_parser(sub)
 
     boot = sub.add_parser(

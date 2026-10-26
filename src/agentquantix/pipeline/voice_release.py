@@ -48,7 +48,7 @@ def work_dir(repo_id: str) -> Path:
 
 def _with_recorded_reviews(repo_id: str,
                            options: VoiceReleaseOptions) -> VoiceReleaseOptions:
-    """Use reviews written by ``record_voice_review`` unless overridden."""
+    """Use reviews written by ``aqx review`` / ``record_review`` unless overridden."""
     if options.human_review is not None:
         return options
     reviews = work_dir(repo_id) / "reviews"

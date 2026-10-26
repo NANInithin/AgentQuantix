@@ -3,9 +3,23 @@
 ## Start here
 
 The user approved the [0.5.1–0.6.0 implementation plan](RELEASE_0_6_0_PLAN.md).
-The 0.5.1 shared runtime foundation is implemented in local source and covered
-by offline tests. Continue with the **0.5.2 shared task router and unified CLI**,
-while keeping native acceptance outstanding and accurately reported.
+0.5.1 (shared runtime lifecycle) and **0.5.2 (shared task router, unified CLI
+and agent actions)** are implemented in local source with offline tests. The
+user asked to stop after 0.5.2 and check in per milestone: **do not start
+0.5.3 without the user's go-ahead.** Read [ENGINE_AUDIT_0_5_2.md](ENGINE_AUDIT_0_5_2.md)
+first — none of the seven new engines builds unmodified with MSVC, which is a
+scope question for the user before 0.5.3.
+
+0.5.2 summary: `agentquantix/tasks/` (registry + metadata router),
+`agentquantix/runs.py` (`text:`/`voice:`/`media:` run ids over existing
+records), `agentquantix/actions.py` (shared inspect/plan/start/review/publish/
+verify). `aqx voice`/`aqx media` are removed without aliases; agent tools are
+`inspect_model`, `plan_release`, `start_release`, `record_review`,
+`publish_release`, `list_runs`, `verify_release`. New tasks get a pipeline by
+setting `TaskSpec.pipeline` in `tasks/registry.py` and adding an adapter branch
+in `actions.py`; until then the router blocks them with their milestone.
+
+The sections below are the original 0.5.1 handover and remain accurate.
 
 Read the approved plan and [runtime implementation status](RUNTIME_LIFECYCLE_STATUS.md)
 before editing. Source/package version is still **0.4.5**. No release, tag,
