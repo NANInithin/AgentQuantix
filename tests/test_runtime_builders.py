@@ -148,7 +148,8 @@ def test_msvc_configuration_and_build_share_developer_environment(native, monkey
 
     def windows_run(command, **kwargs):
         if str(command[0]) == "cmd.exe":
-            script = Path(kwargs["cwd"]) / command[-1]
+            # `.\aqx-build.bat` is a cmd.exe path; the test may run on POSIX.
+            script = Path(kwargs["cwd"]) / command[-1].rsplit("\\", 1)[-1]
             scripts.append(script.read_text(encoding="utf-8"))
             for target in native.options["targets"]:
                 path = native.build / "bin" / (target + ".exe")
