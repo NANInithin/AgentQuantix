@@ -47,13 +47,13 @@ def _write(path, value):
     os.replace(pending, path)
 
 
-def _command(argv, *, cwd=None, env=None):
+def _command(argv, *, cwd=None, env=None, stdout_only=False):
     result = subprocess.run([str(value) for value in argv], cwd=cwd, capture_output=True,
                             text=True, errors="replace", stdin=subprocess.DEVNULL, env=env)
     if result.returncode:
         raise RuntimeError(f"native command failed ({result.returncode}): {' '.join(map(str, argv))}\n"
                            f"{result.stdout}\n{result.stderr}")
-    return result.stdout + result.stderr
+    return result.stdout if stdout_only else result.stdout + result.stderr
 
 
 def _record_stage(journal_path, journal, key, path):
@@ -114,7 +114,8 @@ def _quantize(plan, f16, binaries, root, journal, journal_path, quant):
 
 def _embed(binary, model, text, pooling):
     output = _command([binary, "-m", model, "-p", text, "--pooling", pooling,
-                       "--embd-normalize", "2", "--embd-output-format", "array"])
+                       "--embd-normalize", "2", "--embd-output-format", "array"],
+                      stdout_only=True)
     for line in reversed(output.splitlines()):
         if line.lstrip().startswith("["):
             try:

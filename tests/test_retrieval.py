@@ -44,6 +44,69 @@ def test_missing_sentence_transformer_contract_has_exact_blocker():
         "no sentence-transformers pooling contract; the native pooling cannot be verified against a reference"]
 
 
+def _plan_for_reranker(monkeypatch, tmp_path, model_config):
+    import huggingface_hub
+
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps(model_config), encoding="utf-8")
+    info = SimpleNamespace(
+        sha="a" * 40,
+        siblings=[SimpleNamespace(rfilename="config.json", size=config_file.stat().st_size)],
+        gated=False,
+        card_data=SimpleNamespace(license="mit"))
+
+    class Api:
+        def __init__(self, token=None):
+            pass
+
+        def model_info(self, repo_id, *, files_metadata):
+            return info
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", Api)
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download",
+                        lambda repo_id, name, **kwargs: str(config_file))
+    monkeypatch.setattr("agentquantix.archsupport.supported_quants", lambda: ["F16"])
+    monkeypatch.setattr("agentquantix.runtimes.RuntimeManager.inspect",
+                        lambda *args, **kwargs: None)
+    return retrieval.plan_release("BAAI/bge-reranker-base", task="reranking",
+                                  engine="llama.cpp", quants=["F16"])
+
+
+def test_id2label_only_config_produces_ready_reranker_plan(monkeypatch, tmp_path):
+    plan = _plan_for_reranker(monkeypatch, tmp_path, {
+        "architectures": ["XLMRobertaForSequenceClassification"],
+        "id2label": {"0": "LABEL_0"}})
+
+    assert plan["status"] == "ready"
+    assert plan["contract"]["num_labels"] == 1
+    assert plan["contract"]["reranker"] is True
+    assert not plan["blockers"]
+
+
+def test_two_label_id2label_remains_blocked_for_reranking(monkeypatch, tmp_path):
+    plan = _plan_for_reranker(monkeypatch, tmp_path, {
+        "architectures": ["XLMRobertaForSequenceClassification"],
+        "id2label": {"0": "LABEL_0", "1": "LABEL_1"}})
+
+    assert plan["status"] == "blocked"
+    assert plan["contract"]["num_labels"] == 2
+    assert plan["contract"]["reranker"] is False
+    assert "reranker must have one classification label" in plan["blockers"]
+
+
+def test_embed_parses_stdout_without_trailing_newline_or_stderr_logs(tmp_path):
+    binary = tmp_path / "llama-embedding"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdout.write('[[0.6,0.8]]')\n"
+        "sys.stderr.write('llama log line\\n')\n",
+        encoding="utf-8")
+    binary.chmod(0o755)
+
+    assert release._embed(binary, "model.gguf", "text", "mean") == [0.6, 0.8]
+
+
 def test_plan_includes_revision_size_license_contract_and_fixture_hashes(monkeypatch, tmp_path):
     import huggingface_hub
 

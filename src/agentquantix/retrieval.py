@@ -28,8 +28,12 @@ def source_contract(repo_id, files, read_json):
         contract["architectures"] = model.get("architectures", [])
         if any(str(arch).endswith("ForSequenceClassification")
                for arch in contract["architectures"]):
-            contract["num_labels"] = model.get("num_labels")
-            contract["reranker"] = model.get("num_labels") == 1
+            num_labels = model.get("num_labels")
+            if num_labels is None:
+                id2label = model.get("id2label")
+                num_labels = len(id2label) if isinstance(id2label, dict) else 2
+            contract["num_labels"] = num_labels
+            contract["reranker"] = num_labels == 1
     if "preprocessor_config.json" in names:
         preprocessing = read_json("preprocessor_config.json")
         contract["image_preprocessing"] = {
