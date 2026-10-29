@@ -188,6 +188,16 @@ def test_audiocpp_asr_command_uses_catalog_family(tmp_path):
     assert command[:5] == [
         "audiocpp_cli", "--task", "asr", "--family", "qwen3_asr"]
     assert "--text-out" in command and "--audio" in command
+    assert command[command.index("--language") + 1] == "en"
+
+
+def test_audiocpp_asr_omits_redundant_language_for_single_language_models(
+        tmp_path):
+    backend = voice.backend_for("audio.cpp:moonshine_asr")
+    command = voice.audiocpp_asr_command(
+        "audiocpp_cli", backend, "model.gguf", "input.wav",
+        tmp_path / "transcript.txt", language="en")
+    assert "--language" not in command
 
 
 def test_tts_smoke_runs_inference_and_enforces_audio_contract(tmp_path, monkeypatch):

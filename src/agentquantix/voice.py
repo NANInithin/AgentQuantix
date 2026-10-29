@@ -901,7 +901,7 @@ def audiocpp_asr_command(runtime: Path | str, backend: VoiceBackend,
                "--family", backend.family, "--model", str(model),
                "--backend", "best", "--audio", str(audio),
                "--text-out", str(output), "--metrics"]
-    if language:
+    if language and (not backend.languages or len(backend.languages) > 1):
         command += ["--language", language]
     return command
 
