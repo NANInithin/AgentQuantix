@@ -399,8 +399,9 @@ def test_audio_cpp_catalog_revision_guard_only_blocks_new_tracks(monkeypatch):
     assert plan["status"] == "blocked"
     assert plan["blocker"] == (
         "audio.cpp runtime 41c1f8ffa0d13a1b7e366e30ea5fe5ab8d169d48 does not "
-        "match the vendored model-spec catalog v0.8.0; install audio.cpp "
-        "v0.8.0 or update the catalog")
+        "match the vendored model-spec catalog v0.8.0; install with aqx runtime "
+        "install audio.cpp --persistent --revision "
+        "4af143229384fb6da3f373dc87de145ae954609b")
     assert actions._audio_cpp_catalog_blocker(voice.TTS) is None
     assert actions._audio_cpp_catalog_blocker(voice.ASR) is None
 

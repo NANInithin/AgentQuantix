@@ -208,8 +208,9 @@ def _audio_cpp_catalog_blocker(track):
             voice_release.AUDIOCPP_REVISION_SHA):
         return None
     return (f"audio.cpp runtime {handle.revision} does not match the vendored "
-            f"model-spec catalog {voice_release.AUDIOCPP_REVISION}; install "
-            f"audio.cpp {voice_release.AUDIOCPP_REVISION} or update the catalog")
+            f"model-spec catalog {voice_release.AUDIOCPP_REVISION}; install with "
+            "aqx runtime install audio.cpp --persistent --revision "
+            f"{voice_release.AUDIOCPP_REVISION_SHA}")
 
 
 def voice_plan(repo_id, *, target_repo=None, quants=None, task=None, family=None,
