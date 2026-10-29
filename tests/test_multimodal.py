@@ -115,6 +115,8 @@ def test_answer_synonyms_are_whole_words_and_order_uses_earliest_synonym():
 
 def test_strip_markup_is_generic():
     assert multimodal.strip_markup("<asr_text>recognized words</asr_text>") == "recognized words"
+    assert multimodal.strip_markup("language English<asr_text>recognized words") == \
+        "recognized words"
     assert multimodal.strip_markup("before <tag>after") == "before after"
     assert multimodal.strip_markup("plain <b>text</b>") == "plain text"
 

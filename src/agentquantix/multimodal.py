@@ -100,10 +100,9 @@ def order_ok(answer, first, second):
 
 def strip_markup(text):
     value = str(text)
-    for opening in reversed(list(re.finditer(r"<([A-Za-z][\w:.-]*)>", value))):
-        closing = re.search(rf"</{re.escape(opening.group(1))}\s*>", value[opening.end():])
-        if closing and not value[:opening.start()].strip():
-            return re.sub(r"<[^>]+>", "", value[opening.end():]).strip()
+    markers = list(re.finditer(r"<[A-Za-z][\w:.-]*_text>", value))
+    if markers:
+        value = value[markers[-1].end():]
     return re.sub(r"<[^>]+>", "", value).strip()
 
 
