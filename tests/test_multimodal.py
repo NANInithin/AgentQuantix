@@ -178,6 +178,23 @@ def test_video_requires_both_cli_help_flag_and_ffmpeg(monkeypatch):
     assert not release._video_support("mtmd")
 
 
+def test_video_answer_uses_verified_frame_rate_and_timestamp_interval(monkeypatch, tmp_path):
+    calls = {}
+
+    def run(argv, **kwargs):
+        calls["argv"] = argv
+        calls["kwargs"] = kwargs
+        return SimpleNamespace(returncode=0, stdout="red circle first, blue square next", stderr="")
+
+    monkeypatch.setattr(release.subprocess, "run", run)
+    answer, _ = release._video_answer("mtmd", "text.gguf", "mmproj.gguf", tmp_path)
+
+    assert answer == "red circle first, blue square next"
+    assert calls["argv"][calls["argv"].index("--video-fps") + 1] == "1"
+    assert calls["argv"][calls["argv"].index("--video-timestamp-interval") + 1] == "1000"
+    assert calls["kwargs"]["cwd"] == tmp_path
+
+
 def test_chat_requests_encode_image_and_audio_shapes(monkeypatch, tmp_path):
     image, audio = tmp_path / "sample.png", tmp_path / "sample.wav"
     image.write_bytes(b"image-bytes")
@@ -527,6 +544,7 @@ def test_multimodal_card_and_runtime_targets_include_required_contract():
     card = multimodal.render_card(manifest)
     assert "llama-server -m" in card and "--mmproj" in card and "--jinja" in card
     assert "image_url" in card and "llama-mtmd-cli" in card
+    assert "--video-fps 1 --video-timestamp-interval 1000" in card
     assert "projector quantization is unaccepted" in card
     assert release.RUNTIME_TARGETS == ("llama-server", "llama-mtmd-cli", "llama-quantize")
 

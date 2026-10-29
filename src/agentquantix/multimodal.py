@@ -157,6 +157,7 @@ def runtime_commands(model_path, mmproj_path, modalities, *, video=True):
     if video and "vision" in modalities:
         commands.append(
             f"llama-mtmd-cli -m {model_path} --mmproj {mmproj_path} --video video.mp4 "
+            "--video-fps 1 --video-timestamp-interval 1000 "
             "--temp 0 --seed 42 -n 96 --no-mmproj-offload -p 'What happens first and what happens next?'")
     return commands
 

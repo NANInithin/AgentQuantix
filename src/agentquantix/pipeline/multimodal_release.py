@@ -76,8 +76,9 @@ def _video_support(binary):
 def _video_answer(binary, text_model, mmproj, root):
     case = _IMAGE_CASES["video"]
     argv = [binary, "-m", text_model, "--mmproj", mmproj, "--video",
-            _fixture_path(case["file"]), "--temp", "0", "--seed", "42", "-n", "96",
-            "--no-mmproj-offload", "-p", case["prompt"]]
+            _fixture_path(case["file"]), "--video-fps", "1",
+            "--video-timestamp-interval", "1000", "--temp", "0", "--seed", "42",
+            "-n", "96", "--no-mmproj-offload", "-p", case["prompt"]]
     started = time.monotonic()
     result = subprocess.run([str(value) for value in argv], cwd=root, capture_output=True,
                             text=True, errors="replace", timeout=1800)
