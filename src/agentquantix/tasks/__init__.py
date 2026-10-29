@@ -1,7 +1,7 @@
 """Shared task registry, capability facts and metadata routing."""
-from .registry import (MEDIA, PIPELINES, RETRIEVAL, TASKS, TEXT, VOICE, Capability, TaskSpec,
+from .registry import (MEDIA, MULTIMODAL, PIPELINES, RETRIEVAL, TASKS, TEXT, VOICE, Capability, TaskSpec,
                        capabilities, task_spec, tasks_for_engine)
 from .router import Route, route
 
-__all__ = ["MEDIA", "PIPELINES", "RETRIEVAL", "TASKS", "TEXT", "VOICE", "Capability", "Route", "TaskSpec",
+__all__ = ["MEDIA", "MULTIMODAL", "PIPELINES", "RETRIEVAL", "TASKS", "TEXT", "VOICE", "Capability", "Route", "TaskSpec",
            "capabilities", "route", "task_spec", "tasks_for_engine"]

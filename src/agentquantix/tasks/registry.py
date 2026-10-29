@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
-TEXT, VOICE, MEDIA, RETRIEVAL = "text", "voice", "media", "retrieval"
-PIPELINES = (TEXT, VOICE, MEDIA, RETRIEVAL)
+TEXT, VOICE, MEDIA, RETRIEVAL, MULTIMODAL = "text", "voice", "media", "retrieval", "multimodal"
+PIPELINES = (TEXT, VOICE, MEDIA, RETRIEVAL, MULTIMODAL)
 
 
 @dataclass(frozen=True)
@@ -78,9 +78,10 @@ TASKS = {spec.id: spec for spec in (
     TaskSpec("image-feature-extraction", "retrieval", RETRIEVAL, ("clip.cpp",),
              ("image-feature-extraction",), "0.5.3", "none",
              "one atomic bundle commit of passing quants after native inference parity and retrieval-quality gates"),
-    TaskSpec("multimodal-understanding", "multimodal", None, ("llama.cpp",),
+    TaskSpec("multimodal-understanding", "multimodal", MULTIMODAL, ("llama.cpp",),
              ("visual-question-answering", "document-question-answering", "image-to-text",
-              "video-text-to-text", "audio-text-to-text"), "0.5.4"),
+              "video-text-to-text", "audio-text-to-text"), "0.5.4", "none",
+             "one atomic bundle commit of passing text quants plus the F16 projector after native multimodal task gates"),
     TaskSpec("audio-generation", "audio", None, ("audio.cpp",), ("text-to-audio",), "0.5.5"),
     TaskSpec("audio-to-audio", "audio", None, ("audio.cpp",), ("audio-to-audio",), "0.5.5"),
     TaskSpec("audio-classification", "audio", None, ("audio.cpp",), ("audio-classification",), "0.5.5"),

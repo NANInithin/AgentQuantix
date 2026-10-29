@@ -7,6 +7,11 @@ standard repository needs only `aqx run org/model`. The experimental v0.5.0
 image/video workflow is described in [media usage](docs/MEDIA_USAGE.md); it uses
 the same commands with a separate pinned stable-diffusion.cpp engine.
 
+For explicit llama.cpp multimodal understanding, use
+`--task multimodal-understanding` with `aqx plan` or `aqx run`. This supports
+the implemented vision, document, video and ASR-style audio routes.
+`image-text-to-text` and `any-to-any` remain on text-generation by default.
+
 Three ways to drive it. The CLI is the ground truth — the Claude Code skill and
 the API-key loop call exactly the same code, so nothing behaves differently
 depending on which one you pick.
@@ -488,7 +493,7 @@ migration, frozen resume and development validation boundaries.
 | `aqx plan <model>...` | Read-only exact plan for any task. `--output` saves a voice/media plan. |
 | `aqx show <model or run>...` | Research detail, a recorded run, or a live inspection. |
 | `aqx run [model...]` | Plan, approve, build, validate, publish. `--dry-run`, `--yes`, `--resume RUN_ID`, `--plan FILE`. Option groups in `--help` say which task each applies to. |
-| `aqx runs [--pipeline retrieval]` | Recorded `text:`, `voice:`, `media:` and `retrieval:` run ids; filter to retrieval runs with `--pipeline retrieval`. |
+| `aqx runs [--pipeline retrieval|multimodal]` | Recorded `text:`, `voice:`, `media:`, `retrieval:` and `multimodal:` run ids; filter by pipeline. |
 | `aqx review RUN_ID --quant Q --accept/--reject --reviewer NAME` | Record a human review; `--listened-audio` and `--watched-video` attest playback. |
 | `aqx publish RUN_ID --quant Q` | Publish a validated, reviewed voice or media candidate. |
 | `aqx verify <target>...` | A published repo, a run's built bundles, or a local `bundle.json`/`manifest.json`. |

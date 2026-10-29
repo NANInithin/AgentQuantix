@@ -6,6 +6,7 @@ shared CLI existed stays reachable without being moved:
   text:<base_name>   state/runs/<base_name>.json (the frozen Job)
   voice:<slug>       TEMP_DIR/voice/<slug>/ (run.json added on first use)
   media:<plan_id>    TEMP_DIR/aqx-media-runs/<plan_id>/plan.json
+  multimodal:<slug>  TEMP_DIR/aqx-multimodal-runs/<slug>/run.json
 
 Resolution is deterministic. An identifier that matches several runs returns
 those choices instead of picking one.
@@ -19,7 +20,7 @@ import re
 import time
 
 from . import config
-from .tasks import MEDIA, PIPELINES, RETRIEVAL, TEXT, VOICE
+from .tasks import MEDIA, MULTIMODAL, PIPELINES, RETRIEVAL, TEXT, VOICE
 
 
 class AmbiguousRun(ValueError):
@@ -56,6 +57,10 @@ def media_root():
 
 def retrieval_root():
     return config.TEMP_DIR / "aqx-retrieval-runs"
+
+
+def multimodal_root():
+    return config.TEMP_DIR / "aqx-multimodal-runs"
 
 
 def _read(path):
@@ -122,8 +127,23 @@ def _retrieval_runs():
                         details={"plan": plan, "journal": journal})
 
 
+def _multimodal_runs():
+    root = multimodal_root()
+    for directory in sorted(root.iterdir()) if root.is_dir() else ():
+        data = _read(directory / "run.json")
+        plan = data.get("plan") if isinstance(data, dict) else None
+        if not isinstance(plan, dict) or not plan.get("model"):
+            continue
+        journal = _read(directory / "journal.json") or {}
+        yield RunRecord(f"multimodal:{directory.name}", MULTIMODAL, plan["model"],
+                        str(directory), target=plan.get("target_repo"),
+                        task=plan.get("task"), engine=plan.get("engine"),
+                        created=data.get("created"), details={"plan": plan, "journal": journal})
+
+
 def discover(pipeline=None):
-    found = [*_text_runs(), *_voice_runs(), *_media_runs(), *_retrieval_runs()]
+    found = [*_text_runs(), *_voice_runs(), *_media_runs(), *_retrieval_runs(),
+             *_multimodal_runs()]
     return [item for item in found if pipeline in (None, item.pipeline)]
 
 

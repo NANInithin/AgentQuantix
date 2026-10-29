@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "vqa": [
+    {
+      "id": "red-circle",
+      "image": "../retrieval/red-circle.png",
+      "prompt": "What shape is in this image and what color is it?",
+      "expected": [["circle", "round"], ["red"]]
+    },
+    {
+      "id": "blue-square",
+      "image": "../retrieval/blue-square.png",
+      "prompt": "What shape is in this image and what color is it?",
+      "expected": [["square"], ["blue"]]
+    },
+    {
+      "id": "green-triangle",
+      "image": "../retrieval/green-triangle.png",
+      "prompt": "What shape is in this image and what color is it?",
+      "expected": [["triangle"], ["green"]]
+    },
+    {
+      "id": "yellow-star",
+      "image": "../retrieval/yellow-star.png",
+      "prompt": "What shape is in this image and what color is it?",
+      "expected": [["star"], ["yellow"]]
+    },
+    {
+      "id": "black-stripes",
+      "image": "../retrieval/black-stripes.png",
+      "prompt": "What shape is in this image and what color is it?",
+      "expected": [["stripe", "stripes", "bar", "bars", "line", "lines"], ["black"]]
+    }
+  ],
+  "ocr": {
+    "image": "document.png",
+    "prompt": "Transcribe all text in this image exactly.",
+    "expected": "INVOICE 4821\nTotal: 37.50 EUR\nDue 2026-11-30"
+  },
+  "video": {
+    "file": "red-circle-then-blue-square.mp4",
+    "prompt": "What happens first and what happens next in this video?",
+    "first": ["red", "circle"],
+    "second": ["blue", "square"]
+  },
+  "asr": {
+    "audio": "../voice/jfk.wav",
+    "transcript_source": "../voice/asr.json",
+    "fixture_id": "jfk-1961",
+    "prompt": "Transcribe the audio."
+  }
+}

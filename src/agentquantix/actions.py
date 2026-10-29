@@ -13,7 +13,7 @@ from pathlib import Path
 from . import card, config, feasibility, media, report, research, runs, sysprobe, voice
 from .pipeline import voice_release
 from .pipeline.job import Job
-from .tasks import MEDIA, RETRIEVAL, TEXT, VOICE
+from .tasks import MEDIA, MULTIMODAL, RETRIEVAL, TEXT, VOICE
 from .tasks.router import Route, is_short_name, route as route_model
 
 VOICE_RUN_DEFAULTS = {"language": None, "speaker": None, "pocket_language": "english",
@@ -318,6 +318,23 @@ def start_retrieval(plan, *, user_approved, publish=False):
     return {"pipeline": RETRIEVAL, **result, "run_id": f"retrieval:{result['run_id']}"}
 
 
+def multimodal_plan(model, *, task="multimodal-understanding", engine="llama.cpp",
+                    target_repo=None, quants=None):
+    from . import multimodal
+    return multimodal.plan_release(model, task=task, engine=engine,
+                                   target_repo=target_repo, quants=quants)
+
+
+def start_multimodal(plan, *, user_approved, publish=False):
+    if user_approved is not True:
+        raise ValueError("start_release requires approval of the exact multimodal plan")
+    if plan.get("blockers") or plan.get("status") != "ready":
+        raise ValueError("multimodal plan is blocked: " + "; ".join(plan.get("blockers", [])))
+    from .pipeline import multimodal_release
+    result = multimodal_release.run_release(plan, user_approved=True, publish=publish)
+    return {"pipeline": MULTIMODAL, **result, "run_id": f"multimodal:{result['run_id']}"}
+
+
 # =====================================================
 # shared actions
 # =====================================================
@@ -335,6 +352,8 @@ def inspect(model, *, task=None, engine=None, family=None, hunt_forks=True):
                                      hunt_forks=hunt_forks)
     elif item.pipeline == RETRIEVAL:
         result["retrieval"] = retrieval_plan(item.repo_id, task=item.task, engine=item.engine)
+    elif item.pipeline == MULTIMODAL:
+        result["multimodal"] = multimodal_plan(item.repo_id, task=item.task, engine=item.engine)
     else:
         metadata = item.metadata if item.metadata.get("revision") else media.inspect_repository(item.repo_id)
         result.update(metadata=metadata, likely_media=media.looks_like_media(item.repo_id, metadata),
@@ -343,7 +362,8 @@ def inspect(model, *, task=None, engine=None, family=None, hunt_forks=True):
 
 
 def plan(models, *, task=None, engine=None, family=None, hunt_forks=True,
-         text=None, voice_args=None, media_args=None, retrieval_args=None):
+         text=None, voice_args=None, media_args=None, retrieval_args=None,
+         multimodal_args=None):
     """Read-only plans for named models, grouped by their resolved pipeline."""
     if isinstance(models, str):
         models = [models]
@@ -352,10 +372,12 @@ def plan(models, *, task=None, engine=None, family=None, hunt_forks=True,
     routes = [route_named(name, task=task, engine=engine, family=family) for name in models]
     if sum(route.pipeline == RETRIEVAL for route in routes) > 1:
         raise ValueError("retrieval releases run one model per plan")
+    if sum(route.pipeline == MULTIMODAL for route in routes) > 1:
+        raise ValueError("multimodal releases run one model per plan")
     per_model = ("target_repo", "quants", "speaker", "components", "contract",
                  "quality_profile", "conditioning", "settings")
     single = {k: v for k, v in {**(voice_args or {}), **(media_args or {}),
-                                **(retrieval_args or {})}.items()
+                                **(retrieval_args or {}), **(multimodal_args or {})}.items()
               if k in per_model and v not in (None, [], {})}
     if single and len(models) > 1:
         raise ValueError("target, quant, speaker and media options apply to one model at a time")
@@ -381,6 +403,9 @@ def plan(models, *, task=None, engine=None, family=None, hunt_forks=True,
         elif r.pipeline == RETRIEVAL:
             args = {k: v for k, v in (retrieval_args or {}).items() if v is not None}
             entry = retrieval_plan(r.repo_id, task=r.task, engine=r.engine, **args)
+        elif r.pipeline == MULTIMODAL:
+            args = {k: v for k, v in (multimodal_args or {}).items() if v is not None}
+            entry = multimodal_plan(r.repo_id, task=r.task, engine=r.engine, **args)
         else:
             continue
         output["releases"].append({"pipeline": r.pipeline, "model": r.repo_id, "plan": entry})
@@ -397,12 +422,16 @@ def review(run_id, quant, *, accepted, reviewer, notes="", watched_video=False, 
             record = None
         if record and record.pipeline == RETRIEVAL:
             raise ValueError("retrieval releases are gated by automated parity and retrieval metrics; there is no human review")
+        if record and record.pipeline == MULTIMODAL:
+            raise ValueError("multimodal releases are gated by automated task metrics; there is no human review")
         raise ValueError("a human reviewer name is required")
     record = runs.resolve(run_id)
     if record.pipeline == TEXT:
         raise ValueError("text-generation runs have no human review gate")
     if record.pipeline == RETRIEVAL:
         raise ValueError("retrieval releases are gated by automated parity and retrieval metrics; there is no human review")
+    if record.pipeline == MULTIMODAL:
+        raise ValueError("multimodal releases are gated by automated task metrics; there is no human review")
     if record.pipeline == MEDIA:
         review_data = media_release.record_review(
             record.id.partition(":")[2], quant, reviewer, accepted, notes=notes,
@@ -437,6 +466,10 @@ def publish(run_id, quant, *, user_approved):
         from .pipeline import retrieval_release
         return {"run_id": record.id,
                 **retrieval_release.publish_run(record.id.partition(":")[2], quant)}
+    if record.pipeline == MULTIMODAL:
+        from .pipeline import multimodal_release
+        return {"run_id": record.id,
+                **multimodal_release.publish_run(record.id.partition(":")[2], quant)}
     if record.pipeline == MEDIA:
         return {"run_id": record.id, **media_release.publish_run(record.id.partition(":")[2], quant)}
     saved = record.details.get("plan") or {}
@@ -463,6 +496,11 @@ def _verify_local(path, root=None):
         from .pipeline.retrieval_release import verify_manifest
         problems = verify_manifest(data, root or Path(path).parent)
         return {"target": str(path), "kind": "retrieval-bundle",
+                "valid": not problems, "problems": problems}
+    if data.get("pipeline") == "multimodal":
+        from .pipeline.multimodal_release import verify_manifest
+        problems = verify_manifest(data, root or Path(path).parent)
+        return {"target": str(path), "kind": "multimodal-bundle",
                 "valid": not problems, "problems": problems}
     if isinstance(data, dict) and data.get("engine") == "stable-diffusion.cpp":
         from .pipeline import media_release
@@ -498,10 +536,10 @@ def verify(target, *, root=None):
         return {"run_id": record.id, "kind": f"{record.pipeline}-run", "bundles": bundles,
                 "valid": bool(bundles) and all(b["valid"] for b in bundles),
                 "problems": [] if bundles else ["no built bundle manifests in this run yet"]}
-    if record and record.pipeline == RETRIEVAL:
+    if record and record.pipeline in (RETRIEVAL, MULTIMODAL):
         manifests = sorted(Path(record.location).glob("publication/manifest.json"))
         bundles = [_verify_local(p) for p in manifests]
-        return {"run_id": record.id, "kind": "retrieval-run", "bundles": bundles,
+        return {"run_id": record.id, "kind": f"{record.pipeline}-run", "bundles": bundles,
                 "valid": bool(bundles) and all(item["valid"] for item in bundles),
                 "problems": [] if bundles else ["no published retrieval manifest in this run"]}
     return verify_remote(our_repo(target))
@@ -548,6 +586,20 @@ def verify_remote(repo_id):
                 expected_files, remote,
                 download=lambda name: hf_hub_download(repo_id, name, token=config.TOKEN))
             return {"repo_id": repo_id, "kind": "retrieval-bundle",
+                    "valid": not problems, "problems": problems}
+        if data.get("pipeline") == "multimodal":
+            from .pipeline.native_common import _hash
+            manifest_path = Path(hf_hub_download(repo_id, "manifest.json", token=config.TOKEN))
+            expected = [*data.get("members", []), *data.get("published_files", []),
+                        {"path": "manifest.json", "bytes": manifest_path.stat().st_size,
+                         "sha256": _hash(manifest_path)}]
+            problems = []
+            for member in expected:
+                actual = remote.get(member["path"])
+                if actual is None or actual.get("bytes") != member["bytes"] or \
+                        actual.get("sha256") != member["sha256"]:
+                    problems.append(f"remote verification mismatch: {member['path']}")
+            return {"repo_id": repo_id, "kind": "multimodal-bundle",
                     "valid": not problems, "problems": problems}
     return card.verify(repo_id)
 
