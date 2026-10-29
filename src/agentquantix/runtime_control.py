@@ -10,7 +10,10 @@ import json
 import sys
 
 from . import config
-from .runtimes import RuntimeCancelled, RuntimeDecisionRequired, RuntimeErrorBase, RuntimeSession, current_session
+from .runtimes import (
+    RuntimeCancelled, RuntimeDecisionRequired, RuntimeErrorBase, RuntimeManager,
+    RuntimeSession, current_session,
+)
 
 
 def _interactive_decision(details):
@@ -52,6 +55,15 @@ def execution_session(*, interactive=False, manager=None, decide=None):
 def handle_for(engine):
     session = current_session()
     return session.get(engine) if session else None
+
+
+def selected_runtime(engine):
+    session = current_session()
+    handle = session.get(engine) if session else None
+    if handle is not None:
+        return handle
+    manager = session.manager if session else RuntimeManager()
+    return manager.inspect(engine, verify=False)
 
 
 def ensure_runtime(engine, *, compute_backend="auto", frozen=None, revision=None, required_targets=None):
@@ -152,7 +164,8 @@ def prepare_voice_runtimes(repo_id, engine, track, *, persist=False):
     snapshots = json.loads(record.read_text(encoding="utf-8")) if record.is_file() else {}
     if not isinstance(snapshots, dict):
         raise RuntimeErrorBase("invalid voice runtime snapshot journal")
-    required = list(dict.fromkeys([engine, *(["whisper.cpp"] if track == "tts" else [])]))
+    required = list(dict.fromkeys(
+        [engine, *(["whisper.cpp"] if track in ("tts", "vc") else [])]))
     selected = {}
     for item in required:
         handle = ensure_runtime(item, frozen=snapshots.get(item),

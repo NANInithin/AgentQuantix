@@ -323,7 +323,10 @@ def cmd_run(args):
     elif len(ready) > 1:
         raise ValueError(f"{pipeline} releases run one model per invocation")
     elif pipeline == VOICE:
-        code = _run_voice(args, ready[0][1].repo_id, family=actions.voice_family(ready[0][1], args.family))
+        code = _run_voice(
+            args, ready[0][1].repo_id,
+            family=actions.voice_family(ready[0][1], args.family),
+            task=ready[0][1].task)
     elif pipeline == RETRIEVAL:
         code = _run_retrieval(args, ready[0][1])
     elif pipeline == MULTIMODAL:
@@ -646,15 +649,16 @@ def _read_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8")) if path else None
 
 
-def _voice_args(args, family=None):
-    return {"target_repo": args.target, "quants": args.quant, "family": family,
+def _voice_args(args, family=None, task=None):
+    return {"target_repo": args.target, "quants": args.quant,
+            "family": family, "task": task or args.task,
             "hunt_forks": not args.no_fork_hunt, "language": args.language,
             "speaker": args.speaker}
 
 
-def _run_voice(args, repo, family=None, saved=None):
-    voice_args = _voice_args(args, family)
-    for key in ("target_repo", "quants", "language", "speaker", "family"):
+def _run_voice(args, repo, family=None, saved=None, task=None):
+    voice_args = _voice_args(args, family, task)
+    for key in ("target_repo", "quants", "language", "speaker", "family", "task"):
         if voice_args.get(key) is None and saved:
             voice_args[key] = saved.get(key)
     plan = actions.voice_plan(repo, **voice_args)
@@ -810,8 +814,9 @@ def _resume(args):
                              resumed=True)
     if record.pipeline == VOICE:
         saved = record.details.get("plan") or {}
-        return _run_voice(args, record.repo_id, family=args.family or saved.get("family"),
-                          saved=saved)
+        return _run_voice(args, record.repo_id,
+                          family=args.family or saved.get("family"),
+                          saved=saved, task=saved.get("task"))
     if record.pipeline == RETRIEVAL:
         return _run_retrieval(args, saved=record.details["plan"])
     if record.pipeline == MULTIMODAL:

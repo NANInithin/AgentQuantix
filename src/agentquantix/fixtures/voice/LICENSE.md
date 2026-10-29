@@ -10,3 +10,8 @@ transcript is stored in `asr.json` so CI comparisons are deterministic.
 
 The fixture is used only for conversion, audio-header, smoke-inference, and
 word-error-rate tests. Larger quality corpora remain opt-in.
+
+The synthetic separation mix, stems, and pitch-shifted VC reference are
+generated from the public-domain JFK sample by
+`scripts/generate_audio_task_fixtures.py`. The derived test fixtures are
+dedicated to the public domain under CC0 1.0.

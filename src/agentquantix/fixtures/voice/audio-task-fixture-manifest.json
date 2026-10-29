@@ -1,0 +1,33 @@
+{
+  "files": {
+    "separation/accompaniment.wav": {
+      "bytes": 970244,
+      "sha256": "62daa16157039641efbe8636ce00b5778581f934cd0bfdcd4af0b00369518436"
+    },
+    "separation/mixture.wav": {
+      "bytes": 970244,
+      "sha256": "56600939efff343fceeb0d9140b95d2da8c9752dcc747f403e0389e89680f723"
+    },
+    "separation/speech.wav": {
+      "bytes": 970244,
+      "sha256": "444a73c261ffb5a876f98d23ea47b353ea04bb513e8685e463513a0ca6012a75"
+    },
+    "vc-reference.wav": {
+      "bytes": 128078,
+      "sha256": "0f64357b355f58ef3ec928b082c8c576828d45c674388dd800522ba56338b7e1"
+    }
+  },
+  "numpy": "2.2.6",
+  "separation": {
+    "accompaniment": "synthetic 220, 329.63 and 440 Hz chord",
+    "speech_source": "JFK public-domain speech"
+  },
+  "separation_sample_rate": 44100,
+  "source_audio": "jfk.wav",
+  "source_license": "public-domain",
+  "voice_conversion_reference": {
+    "duration_seconds": 4,
+    "method": "ffmpeg asetrate/aresample/atempo",
+    "pitch_shift_semitones": 4
+  }
+}

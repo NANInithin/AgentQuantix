@@ -450,14 +450,18 @@ def _start(arguments):
                                         publish=bool(arguments.get("publish", False)))
     if len(models) > 1:
         raise ValueError("voice releases run one model per call")
-    plan = actions.voice_plan(routes[0].repo_id, family=actions.voice_family(routes[0], arguments.get("family")),
-                              hunt_forks=arguments.get("hunt_forks", True), **_voice_args(arguments))
+    plan = actions.voice_plan(
+        routes[0].repo_id, task=routes[0].task,
+        family=actions.voice_family(routes[0], arguments.get("family")),
+        hunt_forks=arguments.get("hunt_forks", True), **_voice_args(arguments))
     if plan.get("status") != "ready":
         raise ValueError(f"voice release is blocked: {plan.get('blocker')}; "
                          f"fork leads: {plan.get('fork_leads', [])}")
     actions.prepare_voice_runtimes(plan, persist=True)
-    plan = actions.voice_plan(routes[0].repo_id, family=actions.voice_family(routes[0], arguments.get("family")),
-                              hunt_forks=arguments.get("hunt_forks", True), **_voice_args(arguments))
+    plan = actions.voice_plan(
+        routes[0].repo_id, task=routes[0].task,
+        family=actions.voice_family(routes[0], arguments.get("family")),
+        hunt_forks=arguments.get("hunt_forks", True), **_voice_args(arguments))
     return actions.run_voice(plan, publish=arguments.get("publish", True),
                              family=arguments.get("family"))
 

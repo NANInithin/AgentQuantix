@@ -120,7 +120,8 @@ must watch and listen. A video without audio cannot pass an audio-video recipe.
 
 TTS and ASR are different products. Qwen3-TTS and Pocket TTS run through \
 llama.cpp's `llama-tts`; Whisper ASR runs through the separate whisper.cpp \
-`whisper-cli`. A separately built, pinned audio.cpp supplies every TTS and ASR \
+`whisper-cli`. A separately built, pinned audio.cpp supplies every TTS, ASR, \
+separation, voice-conversion and forced-alignment family \
 family declared by that revision's `model_specs` catalog. Do not maintain or \
 describe a two-model audio.cpp allowlist: its catalog is the capability source \
 of truth, including tasks, packages, source tensor mappings, languages, \

@@ -52,8 +52,8 @@ convert = ["torch>=2.0", "transformers>=4.40", "sentencepiece", "protobuf"]
 # Voice conversion uses native llama.cpp/audio.cpp tooling for TTS and
 # whisper.cpp's HF converter for ASR. Runtime inference remains native C++.
 voice = ["torch>=2.0", "transformers>=4.40", "safetensors>=0.4",
-         "sentencepiece", "protobuf"]
-dev = ["pytest>=8.0"]
+         "sentencepiece", "protobuf", "numpy>=1.26"]
+dev = ["pytest>=8.0", "numpy>=1.26"]
 media = ["Pillow>=10", "numpy>=1.26"]
 # Evaluator runners are separately pinned by executable hash and model revision
 # in the reviewed family/task profile; these libraries are optional helpers.
@@ -80,7 +80,7 @@ version = { attr = "agentquantix.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-agentquantix = ["fixtures/voice/*", "fixtures/audio_cpp_model_specs/*.json", "fixtures/media/*", "fixtures/retrieval/*", "fixtures/multimodal/*", "fixtures/multimodal/video-frames/*.png", "fixtures/stable_diffusion_cpp_capabilities.json"]
+agentquantix = ["fixtures/voice/*", "fixtures/voice/separation/*", "fixtures/audio_cpp_model_specs/*.json", "fixtures/media/*", "fixtures/retrieval/*", "fixtures/multimodal/*", "fixtures/multimodal/video-frames/*.png", "fixtures/stable_diffusion_cpp_capabilities.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
