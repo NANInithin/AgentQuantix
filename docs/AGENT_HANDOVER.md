@@ -5,12 +5,13 @@
 The user approved the [0.5.1–0.6.0 implementation plan](RELEASE_0_6_0_PLAN.md).
 0.5.1 (shared runtime lifecycle) and **0.5.2 (shared task router, unified CLI
 and agent actions)** and **0.5.3 (retrieval)** are implemented in local source.
-The package version remains 0.4.5; no release, tag, or model publication has
-occurred. The clip.cpp native acceptance passed on Linux CPU for
-`openai/clip-vit-base-patch32`; llama.cpp native acceptance is pending. See
-[retrieval status](RETRIEVAL_STATUS.md) and its clearly marked
-`TODO(native-llama)` section. The next milestone is **0.5.4: libmtmd multimodal
-understanding**.
+The package version remains 0.4.5. Native acceptance for the tested 0.5.3
+model/precision matrix is complete on Linux CPU, including llama.cpp at
+`8642541b255bfb5dc39cd351a178be09013a55d6` with the llama-server-only runtime
+and clip.cpp. Remaining gaps are Windows/MSVC, GPU/Metal, and real Hub
+publication; acceptance runs used `--no-publish`. See
+[retrieval status](RETRIEVAL_STATUS.md) for the exact matrix. The next milestone
+is **0.5.4: libmtmd multimodal understanding**.
 
 0.5.2 summary: `agentquantix/tasks/` (registry + metadata router),
 `agentquantix/runs.py` (`text:`/`voice:`/`media:` run ids over existing records),
@@ -185,9 +186,10 @@ implemented.
 ## Native acceptance and upstream cautions
 
 - Preserve `docs/RELEASE_VALIDATION.md` and the original media release plan's
-  requirements. The 0.5.3 clip.cpp result below is limited to the recorded
-  Linux CPU model/precision matrix; it establishes neither Windows nor
-  accelerator support. llama.cpp native acceptance remains pending.
+  requirements. 0.5.3 native acceptance is complete for the recorded Linux CPU
+  model/precision matrix only. Windows/MSVC and GPU/Metal remain untested, and
+  real Hub publication was not exercised; the acceptance runs used
+  `--no-publish`.
 - Select exact upstream SHAs during new-engine audits; README support tables
   alone do not establish acceptance. Track engine revision × family × task ×
   precision × platform/backend.
@@ -205,17 +207,6 @@ implemented.
 - Keep code/model license provenance and complete bundle dependencies separate.
   A successful compile or package listing is not model-quality acceptance.
 
-### TODO(native-llama): native acceptance pending
-
-The user will fill this section after rerunning llama.cpp acceptance. Do not
-record a pass until the native results are available:
-
-| Model | F16 | Q8_0 | Q4_K_M |
-|---|---|---|---|
-| BAAI/bge-small-en-v1.5 | TODO | TODO | TODO |
-| sentence-transformers/all-MiniLM-L6-v2 | TODO | TODO | TODO |
-| BAAI/bge-reranker-base | TODO | TODO | TODO |
-
 No additional approval is needed to continue the already approved implementation
-roadmap. Actual release publication remains a separate operation. Do not push
-commits, publish models, or announce acceptance that has not been established.
+roadmap. Actual release publication remains a separate operation. Do not
+publish models or claim acceptance beyond the documented matrix.
