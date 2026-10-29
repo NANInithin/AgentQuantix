@@ -39,7 +39,7 @@ def _fixture_path(value):
 
 
 def _chat_request(base_url, prompt, *, image=None, audio=None):
-    content = [{"type": "text", "text": prompt}]
+    content = []
     if image is not None:
         mime = "image/png" if Path(image).suffix.lower() == ".png" else "image/jpeg"
         encoded = base64.b64encode(Path(image).read_bytes()).decode("ascii")
@@ -47,6 +47,7 @@ def _chat_request(base_url, prompt, *, image=None, audio=None):
     if audio is not None:
         encoded = base64.b64encode(Path(audio).read_bytes()).decode("ascii")
         content.append({"type": "input_audio", "input_audio": {"data": encoded, "format": "wav"}})
+    content.append({"type": "text", "text": prompt})
     body = json.dumps({"messages": [{"role": "user", "content": content}],
                        "temperature": 0, "seed": 42, "max_tokens": 96}).encode()
     request = Request(f"{base_url}/v1/chat/completions", body,

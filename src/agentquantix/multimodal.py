@@ -144,14 +144,16 @@ def runtime_commands(model_path, mmproj_path, modalities, *, video=True):
     if "vision" in modalities:
         commands.append(
             "curl -s http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/json' "
-            "-d '{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"What is in this image?\"},"
-            "{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,...\"}}]}],"
+            "-d '{\"messages\":[{\"role\":\"user\",\"content\":["
+            "{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,...\"}},"
+            "{\"type\":\"text\",\"text\":\"What is in this image?\"}]}],"
             "\"temperature\":0,\"seed\":42,\"max_tokens\":96}'")
     if "audio" in modalities:
         commands.append(
             "curl -s http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/json' "
-            "-d '{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Transcribe the audio.\"},"
-            "{\"type\":\"input_audio\",\"input_audio\":{\"data\":\"...\",\"format\":\"wav\"}}]}],"
+            "-d '{\"messages\":[{\"role\":\"user\",\"content\":["
+            "{\"type\":\"input_audio\",\"input_audio\":{\"data\":\"...\",\"format\":\"wav\"}},"
+            "{\"type\":\"text\",\"text\":\"Transcribe the audio.\"}]}],"
             "\"temperature\":0,\"seed\":42,\"max_tokens\":96}'")
     if video and "vision" in modalities:
         commands.append(

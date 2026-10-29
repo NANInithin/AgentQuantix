@@ -197,7 +197,7 @@ def test_video_answer_uses_verified_frame_rate_and_timestamp_interval(monkeypatc
     assert calls["kwargs"]["cwd"] == tmp_path
 
 
-def test_chat_requests_encode_image_and_audio_shapes(monkeypatch, tmp_path):
+def test_chat_requests_put_image_and_audio_before_text(monkeypatch, tmp_path):
     image, audio = tmp_path / "sample.png", tmp_path / "sample.wav"
     image.write_bytes(b"image-bytes")
     audio.write_bytes(b"audio-bytes")
@@ -219,11 +219,17 @@ def test_chat_requests_encode_image_and_audio_shapes(monkeypatch, tmp_path):
     monkeypatch.setattr(release, "urlopen", open_url)
     assert release._chat_request("http://localhost", "describe", image=image) == "ok"
     assert release._chat_request("http://localhost", "transcribe", audio=audio) == "ok"
-    image_part = requests[0]["messages"][0]["content"][1]
+    image_content = requests[0]["messages"][0]["content"]
+    assert [part["type"] for part in image_content] == ["image_url", "text"]
+    assert image_content[-1] == {"type": "text", "text": "describe"}
+    image_part = image_content[0]
     assert image_part["type"] == "image_url"
     assert image_part["image_url"]["url"] == (
         "data:image/png;base64," + base64.b64encode(b"image-bytes").decode())
-    audio_part = requests[1]["messages"][0]["content"][1]
+    audio_content = requests[1]["messages"][0]["content"]
+    assert [part["type"] for part in audio_content] == ["input_audio", "text"]
+    assert audio_content[-1] == {"type": "text", "text": "transcribe"}
+    audio_part = audio_content[0]
     assert audio_part == {"type": "input_audio", "input_audio": {
         "data": base64.b64encode(b"audio-bytes").decode(), "format": "wav"}}
     assert all((body["temperature"], body["seed"], body["max_tokens"]) == (0, 42, 96)
