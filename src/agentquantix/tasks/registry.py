@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
-TEXT, VOICE, MEDIA = "text", "voice", "media"
-PIPELINES = (TEXT, VOICE, MEDIA)
+TEXT, VOICE, MEDIA, RETRIEVAL = "text", "voice", "media", "retrieval"
+PIPELINES = (TEXT, VOICE, MEDIA, RETRIEVAL)
 
 
 @dataclass(frozen=True)
@@ -67,13 +67,17 @@ TASKS = {spec.id: spec for spec in (
       for task, (modality, review) in _MEDIA_TASKS.items()),
     # Recognised so they are routed honestly instead of falling into the text
     # imatrix pipeline. Each gains a pipeline when its milestone is accepted.
-    TaskSpec("embeddings", "retrieval", None, ("llama.cpp",),
-             ("feature-extraction", "sentence-similarity"), "0.5.3"),
-    TaskSpec("reranking", "retrieval", None, ("llama.cpp",), ("text-ranking",), "0.5.3"),
-    TaskSpec("zero-shot-image-classification", "retrieval", None, ("clip.cpp",),
-             ("zero-shot-image-classification",), "0.5.3"),
-    TaskSpec("image-feature-extraction", "retrieval", None, ("clip.cpp",),
-             ("image-feature-extraction",), "0.5.3"),
+    TaskSpec("embeddings", "retrieval", RETRIEVAL, ("llama.cpp",),
+             ("feature-extraction", "sentence-similarity"), "0.5.3", "none",
+             "one atomic bundle commit of passing quants after native inference parity and retrieval-quality gates"),
+    TaskSpec("reranking", "retrieval", RETRIEVAL, ("llama.cpp",), ("text-ranking",), "0.5.3", "none",
+             "one atomic bundle commit of passing quants after native inference parity and retrieval-quality gates"),
+    TaskSpec("zero-shot-image-classification", "retrieval", RETRIEVAL, ("clip.cpp",),
+             ("zero-shot-image-classification",), "0.5.3", "none",
+             "one atomic bundle commit of passing quants after native inference parity and retrieval-quality gates"),
+    TaskSpec("image-feature-extraction", "retrieval", RETRIEVAL, ("clip.cpp",),
+             ("image-feature-extraction",), "0.5.3", "none",
+             "one atomic bundle commit of passing quants after native inference parity and retrieval-quality gates"),
     TaskSpec("multimodal-understanding", "multimodal", None, ("llama.cpp",),
              ("visual-question-answering", "document-question-answering", "image-to-text",
               "video-text-to-text", "audio-text-to-text"), "0.5.4"),
@@ -143,6 +147,20 @@ def capabilities(engine=None, task=None):
                                 quantize=["llama-quantize table of the installed checkout"],
                                 evidence="probe",
                                 notes="architecture support is read per model from the installed converter"))
+        cells.extend((
+            Capability("llama.cpp", "sentence-transformers encoders", "embeddings", None,
+                       load=True, convert="convert_hf_to_gguf.py",
+                       quantize=["installed llama-quantize table"], evidence="probe"),
+            Capability("llama.cpp", "cross-encoders", "reranking", None,
+                       load=True, convert="convert_hf_to_gguf.py",
+                       quantize=["installed llama-quantize table"], evidence="probe"),
+        ))
+    if engine in (None, "clip.cpp"):
+        for retrieval_task in ("zero-shot-image-classification", "image-feature-extraction"):
+            cells.append(Capability("clip.cpp", "CLIPModel", retrieval_task, None, load=True,
+                                    convert="models/convert_hf_to_gguf.py",
+                                    quantize=["q8_0", "q5_1", "q5_0", "q4_1", "q4_0"],
+                                    evidence="catalog"))
     if engine in (None, "llama.cpp", "audio.cpp", "whisper.cpp"):
         from .. import voice
         catalog = voice.audio_cpp_catalog()

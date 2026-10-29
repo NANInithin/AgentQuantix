@@ -1,31 +1,34 @@
-# Agent handover — 25 October 2026
+# Agent handover — 29 October 2026
 
 ## Start here
 
 The user approved the [0.5.1–0.6.0 implementation plan](RELEASE_0_6_0_PLAN.md).
 0.5.1 (shared runtime lifecycle) and **0.5.2 (shared task router, unified CLI
-and agent actions)** are implemented in local source with offline tests. The
-user asked to stop after 0.5.2 and check in per milestone: **do not start
-0.5.3 without the user's go-ahead.** Read [ENGINE_AUDIT_0_5_2.md](ENGINE_AUDIT_0_5_2.md)
-first — none of the seven new engines builds unmodified with MSVC, which is a
-scope question for the user before 0.5.3.
+and agent actions)** and **0.5.3 (retrieval)** are implemented in local source.
+The package version remains 0.4.5. Native acceptance for the tested 0.5.3
+model/precision matrix is complete on Linux CPU, including llama.cpp at
+`8642541b255bfb5dc39cd351a178be09013a55d6` with the llama-server-only runtime
+and clip.cpp. Remaining gaps are Windows/MSVC, GPU/Metal, and real Hub
+publication; acceptance runs used `--no-publish`. See
+[retrieval status](RETRIEVAL_STATUS.md) for the exact matrix. The next milestone
+is **0.5.4: libmtmd multimodal understanding**.
 
 0.5.2 summary: `agentquantix/tasks/` (registry + metadata router),
-`agentquantix/runs.py` (`text:`/`voice:`/`media:` run ids over existing
-records), `agentquantix/actions.py` (shared inspect/plan/start/review/publish/
-verify). `aqx voice`/`aqx media` are removed without aliases; agent tools are
-`inspect_model`, `plan_release`, `start_release`, `record_review`,
-`publish_release`, `list_runs`, `verify_release`. New tasks get a pipeline by
-setting `TaskSpec.pipeline` in `tasks/registry.py` and adding an adapter branch
-in `actions.py`; until then the router blocks them with their milestone.
+`agentquantix/runs.py` (`text:`/`voice:`/`media:` run ids over existing records),
+and `agentquantix/actions.py` (shared inspect/plan/start/review/publish/verify).
+0.5.3 adds `retrieval:` run ids. `aqx voice`/`aqx media` are removed without
+aliases; agent tools are `inspect_model`, `plan_release`, `start_release`,
+`record_review`, `publish_release`, `list_runs`, `verify_release`. New tasks get
+a pipeline by setting `TaskSpec.pipeline` in `tasks/registry.py` and adding an
+adapter branch in `actions.py`; until then the router blocks them with their
+milestone.
 
-The sections below are the original 0.5.1 handover and remain accurate.
+The 0.5.1 and 0.5.2 implementation notes below are retained as historical
+context; the milestone state above is current.
 
 Read the approved plan and [runtime implementation status](RUNTIME_LIFECYCLE_STATUS.md)
-before editing. Source/package version is still **0.4.5**. No release, tag,
-publication, real runtime installation, or external runtime migration has been
-performed for this development milestone. This handover is included in the
-implementation commit on `main`; find that commit with `git log -1 --oneline`.
+before editing. The package version remains **0.4.5** until a release is
+approved.
 
 ## User decisions — do not ask again
 
@@ -58,9 +61,9 @@ implementation commit on `main`; find that commit with `git log -1 --oneline`.
   side-by-side builds; atomic activation; rollback; OS locks; leases; cleanup
   and pruning; complete-local-source offline setup; exact-SHA reconstruction
   of missing temporary installations; retained catalog resources.
-- `runtime_builders.py`: actual build/probe contracts for the **four existing
-  engines only**: llama.cpp, audio.cpp, whisper.cpp, stable-diffusion.cpp.
-  Captures toolchain, resources, shared libraries, binary hashes and catalogs.
+- `runtime_builders.py`: actual build/probe contracts for llama.cpp, audio.cpp,
+  whisper.cpp, stable-diffusion.cpp, and clip.cpp. Captures toolchain,
+  resources, shared libraries, binary hashes and catalogs.
 - `runtime_control.py`: interactive policy and per-execution binding; required
   binary scoping; existing media-cache discovery; voice runtime journals;
   explicit failed-update fallback and future-only updates for frozen resumes.
@@ -69,8 +72,21 @@ implementation commit on `main`; find that commit with `git log -1 --oneline`.
   never read terminal input. Runtime preparation requires an exact target SHA
   plus runtime-specific approval.
 
-Registry identities exist for all eleven planned engines. Seven new engine
-builders and their task pipelines **are not implemented yet**.
+Registry identities exist for all eleven planned engines. The remaining
+post-0.5.3 engine builders and task pipelines are not implemented yet.
+
+### Retrieval 0.5.3
+
+- Implemented tasks: embeddings and reranking on llama.cpp; image feature
+  extraction and zero-shot image classification on clip.cpp.
+- Embeddings and reranking use `llama-server`; clip.cpp uses `extract`, `zsl`,
+  and `quantize`. See [retrieval status](RETRIEVAL_STATUS.md) for the support
+  matrix and quality gates.
+- Focused offline verification on code commit `5d3471a`: 86 passed, 1 skipped;
+  Ruff and `git diff --check` passed. These checks are not native acceptance.
+- clip.cpp native acceptance passed on Linux x86_64 CPU for
+  `openai/clip-vit-base-patch32`. This is a model-specific Linux CPU result,
+  not a Windows, GPU, or Metal support claim.
 
 ### Existing pipeline integration
 
@@ -134,7 +150,7 @@ New focused tests are `test_runtime_manager.py`, `test_runtime_builders.py`,
 `test_runtime_voice_catalog.py`. Keep the regression cases for cancellation,
 frozen MCP resumes, read-only catalogs, early plan validation and offline use.
 
-## Next implementation slice: 0.5.2
+## 0.5.2 implementation slice (historical)
 
 1. Build a shared task/capability registry and typed component/release model.
    Preserve independent load/convert/quantize/package and platform facts.
@@ -153,17 +169,27 @@ frozen MCP resumes, read-only catalogs, early plan validation and offline use.
 6. Perform early feasibility/build/converter audits for all seven new engines,
    especially SAM3 and forecasting, so late upstream blockers are found early.
 
-The approved plan assigns later milestones to retrieval/CLIP (0.5.3), libmtmd
-understanding (0.5.4), expanded audio (0.5.5), vision.cpp (0.5.6), YOLO/RF-DETR
-(0.5.7), dedicated depth/SAM3 (0.5.8), forecasting/hardening (0.5.9), and the
-consolidated 0.6.0 release. Do not claim the full roadmap is implemented.
+## Next milestone: 0.5.4
+
+Implement libmtmd-backed multimodal understanding in llama.cpp: image, audio,
+video/frame, and document inputs for the model families the pinned runtime
+supports. Keep companion projectors, preprocessing, tokenizer/prompt behavior,
+and supported task boundaries explicit. The read-only feasibility spike and
+its report are under `/home/ubuntu/spike/0.5.4/`; do not treat the spike as
+pipeline implementation or general model acceptance.
+
+The approved plan continues with expanded audio (0.5.5), vision.cpp (0.5.6),
+YOLO/RF-DETR (0.5.7), dedicated depth/SAM3 (0.5.8), forecasting/hardening
+(0.5.9), and the consolidated 0.6.0 release. Do not claim the full roadmap is
+implemented.
 
 ## Native acceptance and upstream cautions
 
-- Real Windows/Linux clean installs, migration, update/recovery, conversion,
-  inference and quality acceptance remain outstanding for the existing engines,
-  including the earlier 0.5.0 media gates. Preserve
-  `docs/RELEASE_VALIDATION.md` and the original media release plan's requirements.
+- Preserve `docs/RELEASE_VALIDATION.md` and the original media release plan's
+  requirements. 0.5.3 native acceptance is complete for the recorded Linux CPU
+  model/precision matrix only. Windows/MSVC and GPU/Metal remain untested, and
+  real Hub publication was not exercised; the acceptance runs used
+  `--no-publish`.
 - Select exact upstream SHAs during new-engine audits; README support tables
   alone do not establish acceptance. Track engine revision × family × task ×
   precision × platform/backend.
@@ -182,5 +208,5 @@ consolidated 0.6.0 release. Do not claim the full roadmap is implemented.
   A successful compile or package listing is not model-quality acceptance.
 
 No additional approval is needed to continue the already approved implementation
-roadmap. Actual release publication remains a separate operation. Do not push
-commits, publish models, or announce acceptance that has not been established.
+roadmap. Actual release publication remains a separate operation. Do not
+publish models or claim acceptance beyond the documented matrix.

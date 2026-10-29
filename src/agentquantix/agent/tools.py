@@ -31,7 +31,7 @@ from .. import actions, card, config, hub, report, research, sysprobe, voice
 from . import runtime_tools
 from ..pipeline.job import Job
 from ..runtimes import RuntimeDecisionRequired
-from ..tasks import MEDIA, TASKS, TEXT, VOICE
+from ..tasks import MEDIA, RETRIEVAL, TASKS, TEXT, VOICE
 
 STRING = {"type": "string"}
 STRINGS = {"type": "array", "items": STRING}
@@ -55,7 +55,7 @@ TEXT_OPTIONS = {
 }
 BUNDLE_OPTIONS = {
     "target_repo": STRING,
-    "quants": {**STRINGS, "description": "Voice/media: quant policies. Defaults to every native type."},
+    "quants": {**STRINGS, "description": "Voice/media/retrieval: selected native quant types."},
     "language": STRING,
     "speaker": {"type": "string", "description": "Voice: consented speaker WAV when required."},
 }
@@ -161,8 +161,9 @@ TOOLS = [
             "Read-only. The exact plan for the named models, routed by task: "
             "text sweeps (targets, quants, imatrix sources, fork builds, totals, "
             "repriced for the requested concurrency), voice bundles (backend, "
-            "companions, quants, quality gate) and media plans (revisions, "
-            "components, policies, licenses, estimates, evaluator, blockers). "
+            "companions, quants, quality gate), media plans (revisions, components, "
+            "policies, licenses, estimates, evaluator, blockers), and retrieval "
+            "bundles (source contract, native quants, parity and quality gates). "
             "This is what you show the user at the approval gate. Always call it "
             "before start_release. Per-model options apply to one model at a time."),
         "input_schema": {
@@ -179,8 +180,10 @@ TOOLS = [
             "approved. Text: quantize and upload the named models smallest-first, "
             "deleting each quant once uploaded. Voice: convert, quantize, run the "
             "real runtime and quality gates; TTS publication also needs a recorded "
-            "listening review. Media: pass the exact `plan` from plan_release, "
-            "unchanged. This spends hours, uses the disk and writes to the Hub; it "
+            "listening review. Media and retrieval: pass the exact `plan` from "
+            "plan_release, unchanged; retrieval runs one model per call and only "
+            "publishes passing automated parity/quality candidates. This spends "
+            "hours, uses the disk and writes to the Hub; it "
             "requires that the user named these models (or saw this exact plan) and "
             "said to proceed. One pipeline per call. Results carry `run_id`."),
         "input_schema": {
@@ -188,7 +191,7 @@ TOOLS = [
             "properties": {
                 "models": STRINGS,
                 "plan": {"type": "object",
-                         "description": "Media: the unchanged plan the user approved."},
+                         "description": "Media/retrieval: the unchanged plan the user approved."},
                 "user_approved": {
                     "type": "boolean",
                     "description": "True only when the user has approved these "
@@ -202,7 +205,7 @@ TOOLS = [
                 **BUNDLE_OPTIONS,
                 "publish": {"type": "boolean",
                             "description": "Voice defaults to true (reviewed TTS quants only); "
-                                           "media defaults to false (reviewed candidates only)."},
+                                           "media/retrieval default to false (passing candidates only)."},
             },
             "required": ["user_approved"],
         },
@@ -231,7 +234,8 @@ TOOLS = [
     {
         "name": "publish_release",
         "description": (
-            "Publish a natively validated, human-reviewed voice or media candidate "
+            "Publish a natively validated, human-reviewed voice or media candidate, "
+            "or a retrieval quant that passed automated parity and quality gates, "
             "under its saved release policy, then verify remote sizes and hashes. "
             "Text quants publish during start_release and need no separate step. "
             "Requires user_approved=true after the review."),
@@ -396,6 +400,12 @@ def _start(arguments):
             "when the user has named these models (or seen this exact plan) and "
             "said to go ahead. Show them plan_release and ask.")
     if arguments.get("plan") is not None:
+        approved_plan = arguments["plan"]
+        task_spec = TASKS.get(approved_plan.get("task"))
+        if task_spec and task_spec.pipeline == RETRIEVAL:
+            return actions.start_retrieval(
+                approved_plan, user_approved=True,
+                publish=bool(arguments.get("publish", False)))
         return actions.start_media(arguments["plan"], user_approved=True,
                                    publish=bool(arguments.get("publish", False)))
     models = arguments.get("models") or []
@@ -416,6 +426,14 @@ def _start(arguments):
                                        arguments.get("quantize_threads"))
         events = []
         return actions.start_text(models, options, user_approved=True, on_event=events.append)
+    if pipeline == RETRIEVAL:
+        if len(models) > 1:
+            raise ValueError("retrieval releases run one model per call")
+        plan = actions.retrieval_plan(
+            routes[0].repo_id, task=routes[0].task, engine=routes[0].engine,
+            target_repo=arguments.get("target_repo"), quants=arguments.get("quants"))
+        return actions.start_retrieval(plan, user_approved=True,
+                                       publish=bool(arguments.get("publish", False)))
     if len(models) > 1:
         raise ValueError("voice releases run one model per call")
     plan = actions.voice_plan(routes[0].repo_id, family=actions.voice_family(routes[0], arguments.get("family")),
@@ -496,6 +514,8 @@ def _call(name, arguments=None):
         text = actions.text_options(arguments.get("sequential"), arguments.get("upload_workers"))
         return actions.plan(models, hunt_forks=arguments.get("hunt_forks", True), text=text,
                             voice_args=_voice_args(arguments), media_args=_media_args(arguments),
+                            retrieval_args={key: arguments[key] for key in ("target_repo", "quants")
+                                            if arguments.get(key) is not None},
                             **_routing(arguments))
 
     if name == "start_release":

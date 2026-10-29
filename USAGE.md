@@ -488,7 +488,7 @@ migration, frozen resume and development validation boundaries.
 | `aqx plan <model>...` | Read-only exact plan for any task. `--output` saves a voice/media plan. |
 | `aqx show <model or run>...` | Research detail, a recorded run, or a live inspection. |
 | `aqx run [model...]` | Plan, approve, build, validate, publish. `--dry-run`, `--yes`, `--resume RUN_ID`, `--plan FILE`. Option groups in `--help` say which task each applies to. |
-| `aqx runs` | Recorded `text:`, `voice:` and `media:` run ids. |
+| `aqx runs [--pipeline retrieval]` | Recorded `text:`, `voice:`, `media:` and `retrieval:` run ids; filter to retrieval runs with `--pipeline retrieval`. |
 | `aqx review RUN_ID --quant Q --accept/--reject --reviewer NAME` | Record a human review; `--listened-audio` and `--watched-video` attest playback. |
 | `aqx publish RUN_ID --quant Q` | Publish a validated, reviewed voice or media candidate. |
 | `aqx verify <target>...` | A published repo, a run's built bundles, or a local `bundle.json`/`manifest.json`. |

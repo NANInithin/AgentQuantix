@@ -58,6 +58,8 @@ media = ["Pillow>=10", "numpy>=1.26"]
 # Evaluator runners are separately pinned by executable hash and model revision
 # in the reviewed family/task profile; these libraries are optional helpers.
 media-quality = ["Pillow>=10", "numpy>=1.26", "torch>=2.0", "transformers>=4.40"]
+retrieval = ["torch>=2.0", "transformers>=4.40", "sentence-transformers>=3.0",
+             "safetensors>=0.4", "sentencepiece", "protobuf", "Pillow>=10", "numpy>=1.26"]
 all = ["hf_xet>=1.0", "ninja>=1.11"]
 # Everything, conversion included. Large.
 full = ["hf_xet>=1.0", "ninja>=1.11", "torch>=2.0",
@@ -76,7 +78,7 @@ version = { attr = "agentquantix.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-agentquantix = ["fixtures/voice/*", "fixtures/audio_cpp_model_specs/*.json", "fixtures/media/*", "fixtures/stable_diffusion_cpp_capabilities.json"]
+agentquantix = ["fixtures/voice/*", "fixtures/audio_cpp_model_specs/*.json", "fixtures/media/*", "fixtures/retrieval/*", "fixtures/stable_diffusion_cpp_capabilities.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

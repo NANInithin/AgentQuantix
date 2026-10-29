@@ -1,6 +1,7 @@
 """Offline build-adapter control-flow tests; these are not native acceptance."""
 import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -114,10 +115,24 @@ def test_adopted_media_pin_gets_shipped_catalog_without_writing_checkout(native,
 
 
 @pytest.mark.parametrize("diagnostic", ["value = NaN", "value = -inf", "assertion failed: weights"])
-def test_native_probe_rejects_nonfinite_and_assertions(native, diagnostic):
+def test_native_command_rejects_nonfinite_and_assertions(native, diagnostic):
     native.control["diagnostic"] = diagnostic
     with pytest.raises(builders.RuntimeBuildError, match="native command failed"):
-        builders._execute(["native", "--help"], help_probe=True)
+        builders._execute(["native", "inference"])
+
+
+def test_help_probe_accepts_infinity_documentation_but_inference_rejects_nan(tmp_path):
+    binary = tmp_path / "fake-native.py"
+    binary.write_text(
+        "import sys\n"
+        "if '--help' in sys.argv:\n"
+        "    print('(default: -1, -1 = infinity)')\n"
+        "else:\n"
+        "    print('nan')\n",
+        encoding="utf-8")
+    assert builders._execute([sys.executable, binary, "--help"], help_probe=True)["returncode"] == 0
+    with pytest.raises(builders.RuntimeBuildError, match="native command failed"):
+        builders._execute([sys.executable, binary, "inference"])
 
 
 def test_quantizer_usage_exit_is_accepted_but_other_failure_is_not(native):
@@ -139,6 +154,26 @@ def test_build_fingerprint_records_backend_targets_and_toolchain(monkeypatch):
     assert result["adapter_schema"] == 1
     with pytest.raises(builders.RuntimeBuildError, match="CUDA toolkit"):
         builders.fingerprint("audio.cpp", "cuda")
+
+
+def test_retrieval_runtime_targets_and_clip_cpp_cmake4_policy(native, monkeypatch):
+    monkeypatch.setattr(builders.native_build, "has_cuda_toolkit", lambda: False)
+    monkeypatch.setattr(builders.native_build, "find_tool",
+                        lambda name: "cmake" if name == "cmake" else None)
+    monkeypatch.setattr(builders.native_build, "msvc_env_bat", lambda: None)
+    monkeypatch.setattr(builders.subprocess, "run",
+                        lambda *args, **kwargs: SimpleNamespace(
+                            stdout="cmake version 4.0.0\n", returncode=0))
+    llama = builders.fingerprint(
+        "llama.cpp", required_targets=["llama-server", "llama-quantize"])
+    clip = builders.fingerprint("clip.cpp")
+    assert {"llama-server", "llama-quantize"} <= set(llama["targets"])
+    assert clip["compute_backend"] == "cpu"
+    assert {"extract", "zsl", "quantize"} <= set(clip["targets"])
+    assert "-DGGML_CUDA=OFF" not in clip["flags"]
+    assert "-DGGML_CUBLAS=OFF" in clip["flags"]
+    assert "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" in clip["flags"]
+    assert "-DCLIP_NATIVE=OFF" in clip["flags"]
 
 
 def test_msvc_configuration_and_build_share_developer_environment(native, monkeypatch):

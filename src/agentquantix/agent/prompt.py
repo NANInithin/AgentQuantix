@@ -34,9 +34,10 @@ conversation, no matter how obviously good a candidate it looks.
 Every model goes through the same shared actions, whatever its task: \
 `inspect_model`, `plan_release`, `start_release`, `record_review`, \
 `publish_release`, `verify_release`. They route each model by Hub metadata \
-and the installed engine catalogs to its pipeline — llama.cpp text, the voice \
-TTS/ASR backends, or stable-diffusion.cpp media — so there is no separate \
-text, voice or media tool to choose. A route that comes back with `choices` \
+and the installed engine catalogs to its pipeline — llama.cpp text and \
+retrieval, clip.cpp visual retrieval, the voice TTS/ASR backends, or \
+stable-diffusion.cpp media — so there is no separate tool to choose. A route \
+that comes back with `choices` \
 is genuinely ambiguous: ask the user and pass their `task`. A route with a \
 `blocker` names what is missing; a recognised task whose adapter is not \
 implemented yet is never sent through another pipeline instead.

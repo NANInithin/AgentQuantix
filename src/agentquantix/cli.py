@@ -27,7 +27,7 @@ from . import (actions, card, config, feasibility, media, report, research, runs
 from .pipeline import build as build_mod, run as run_mod, source as source_mod
 from .pipeline.job import Job
 from .runtimes import RuntimeDecisionRequired, RuntimeErrorBase
-from .tasks import MEDIA, TEXT, VOICE, TASKS
+from .tasks import MEDIA, RETRIEVAL, TEXT, VOICE, TASKS
 
 
 def _print(*args):
@@ -244,6 +244,7 @@ APPLICABLE = {
     TEXT: TEXT_OPTIONS | {"sequential"},
     VOICE: VOICE_OPTIONS | {"target", "quant", "publish", "output"},
     MEDIA: MEDIA_OPTIONS | {"target", "quant", "publish", "output", "sequential"},
+    RETRIEVAL: {"target", "quant", "publish", "output"},
 }
 
 
@@ -286,8 +287,12 @@ def cmd_run(args):
     if args.plan:
         if len(args.model) > 1:
             raise ValueError("a saved plan describes exactly one model")
-        _check_applicable(args, MEDIA)
         saved = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+        task_spec = TASKS.get(saved.get("task"))
+        if task_spec and task_spec.pipeline == RETRIEVAL:
+            _check_applicable(args, RETRIEVAL)
+            return _run_retrieval(args, saved=saved)
+        _check_applicable(args, MEDIA)
         return _run_media(args, args.model[0] if args.model else None, saved=saved)
     if not args.model:
         _check_applicable(args, TEXT)
@@ -315,6 +320,8 @@ def cmd_run(args):
         raise ValueError(f"{pipeline} releases run one model per invocation")
     elif pipeline == VOICE:
         code = _run_voice(args, ready[0][1].repo_id, family=actions.voice_family(ready[0][1], args.family))
+    elif pipeline == RETRIEVAL:
+        code = _run_retrieval(args, ready[0][1])
     else:
         code = _run_media(args, ready[0][1].repo_id, route=ready[0][1])
     return code or (1 if len(ready) < len(routes) else 0)
@@ -701,6 +708,30 @@ def _media_args(args, route=None):
                 "cfg_scale") if getattr(args, key) is not None}}
 
 
+def _run_retrieval(args, route=None, saved=None):
+    if saved is None:
+        if route is None:
+            raise ValueError("retrieval execution requires a resolved route")
+        plan = actions.retrieval_plan(
+            route.repo_id, task=route.task, engine=route.engine,
+            target_repo=args.target, quants=args.quant)
+    else:
+        plan = saved
+    if args.output:
+        media.atomic_json(args.output, plan)
+    _json(plan)
+    if args.dry_run:
+        return int(bool(plan.get("blockers")))
+    if plan.get("status") != "ready" or plan.get("blockers"):
+        raise ValueError("retrieval plan is blocked: " + "; ".join(plan.get("blockers", [])))
+    if not _confirm(args, "Run this retrieval release? This downloads, builds and validates. [y/N] "):
+        _print("Nothing started.")
+        return 0
+    result = actions.start_retrieval(plan, user_approved=True, publish=bool(args.publish))
+    _json(result)
+    return int(any(item.get("status") != "passed" for item in result.get("candidates", [])))
+
+
 def _run_media(args, repo, route=None, saved=None):
     def make_plan():
         return media.plan_release(repo, hunt_forks=not args.no_fork_hunt, **_media_args(args, route))
@@ -751,6 +782,8 @@ def _resume(args):
         saved = record.details.get("plan") or {}
         return _run_voice(args, record.repo_id, family=args.family or saved.get("family"),
                           saved=saved)
+    if record.pipeline == RETRIEVAL:
+        return _run_retrieval(args, saved=record.details["plan"])
     plan = json.loads((Path(record.location) / "plan.json").read_text(encoding="utf-8"))
     return _run_media(args, None, saved=plan)
 
@@ -763,10 +796,11 @@ def cmd_plan(args):
     media_args = _media_args(args, next((r for r in routes if r.pipeline == MEDIA), None))
     result = actions.plan(args.model, task=args.task, engine=args.engine, family=args.family,
                           hunt_forks=not args.no_fork_hunt, text=_text_run_options(args),
-                          voice_args=_voice_args(args), media_args=media_args)
+                          voice_args=_voice_args(args), media_args=media_args,
+                          retrieval_args={"target_repo": args.target, "quants": args.quant})
     if args.output:
         if len(result["releases"]) != 1:
-            raise ValueError("--output saves exactly one voice or media plan")
+            raise ValueError("--output saves exactly one release plan")
         media.atomic_json(args.output, result["releases"][0]["plan"])
     _json(result)
     blocked = bool(result["blocked"]) or bool((result["text"] or {}).get("blocked")) or any(
@@ -929,9 +963,9 @@ def _add_release_options(parser, *, execution):
     if execution:
         publication = bundle.add_mutually_exclusive_group()
         publication.add_argument("--publish", dest="publish", action="store_true", default=None,
-                                 help="media: publish candidates that already have a matching human review")
+                                 help="media: publish reviewed candidates; retrieval: publish passing candidates")
         publication.add_argument("--no-publish", dest="publish", action="store_false",
-                                 help="voice: build and score locally without writing to the Hub")
+                                 help="build and score locally without writing to the Hub (default)")
 
     voice_group = parser.add_argument_group("text-to-speech / speech recognition")
     voice_group.add_argument("--language")
@@ -1050,7 +1084,7 @@ def build_parser():
     publish.set_defaults(func=cmd_publish)
 
     runs_cmd = sub.add_parser("runs", help="list recorded runs and their ids")
-    runs_cmd.add_argument("--pipeline", choices=[TEXT, VOICE, MEDIA])
+    runs_cmd.add_argument("--pipeline", choices=[TEXT, VOICE, MEDIA, RETRIEVAL])
     runs_cmd.add_argument("--json", action="store_true")
     runs_cmd.set_defaults(func=cmd_runs)
 

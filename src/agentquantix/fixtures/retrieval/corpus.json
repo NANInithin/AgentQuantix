@@ -1,0 +1,30 @@
+{
+  "documents": [
+    {"id":"exercise-1","text":"A brisk walk improves cardiovascular fitness and mood."},
+    {"id":"exercise-2","text":"Strength training builds muscle and supports bone health."},
+    {"id":"bread-1","text":"Sourdough bread uses a fermented starter and a long rise."},
+    {"id":"bread-2","text":"Whole grain flour adds fiber and a nutty flavor to bread."},
+    {"id":"paris-1","text":"Paris is the capital of France, known for the Seine and the Eiffel Tower."},
+    {"id":"paris-2","text":"The Louvre is a major art museum in central Paris."},
+    {"id":"garden-1","text":"Tomatoes need warm weather, sunlight, and regular watering."},
+    {"id":"garden-2","text":"Compost improves garden soil by adding organic matter."},
+    {"id":"space-1","text":"Mars is a rocky planet with a thin carbon dioxide atmosphere."},
+    {"id":"space-2","text":"The James Webb Space Telescope observes distant galaxies in infrared."},
+    {"id":"music-1","text":"A piano produces sound when hammers strike stretched strings."},
+    {"id":"music-2","text":"Jazz improvisation often uses syncopated rhythms and extended chords."},
+    {"id":"weather-1","text":"A warm front brings rising temperatures and may produce steady rain."},
+    {"id":"weather-2","text":"Hurricanes form over warm ocean water and rotate around a calm eye."},
+    {"id":"coding-1","text":"A binary search repeatedly halves a sorted list to find a value."},
+    {"id":"coding-2","text":"Unit tests check small pieces of software against expected results."}
+  ],
+  "queries": [
+    {"query":"What are the health benefits of walking?","relevance":{"exercise-1":2,"exercise-2":1}},
+    {"query":"How is sourdough made?","relevance":{"bread-1":2,"bread-2":1}},
+    {"query":"Which river flows through Paris?","relevance":{"paris-1":2,"paris-2":1}},
+    {"query":"How do I improve garden soil?","relevance":{"garden-2":2,"garden-1":1}},
+    {"query":"What is Mars like?","relevance":{"space-1":2,"space-2":1}},
+    {"query":"How does a piano make sound?","relevance":{"music-1":2,"music-2":1}},
+    {"query":"What causes hurricanes?","relevance":{"weather-2":2,"weather-1":1}},
+    {"query":"How does binary search work?","relevance":{"coding-1":2,"coding-2":1}}
+  ]
+}

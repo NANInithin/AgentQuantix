@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {"image":"red-circle.png","labels":["a red circle","a blue square","a green triangle","a yellow star","black stripes"],"correct":0},
+    {"image":"blue-square.png","labels":["a red circle","a blue square","a green triangle","a yellow star","black stripes"],"correct":1},
+    {"image":"green-triangle.png","labels":["a red circle","a blue square","a green triangle","a yellow star","black stripes"],"correct":2},
+    {"image":"yellow-star.png","labels":["a red circle","a blue square","a green triangle","a yellow star","black stripes"],"correct":3},
+    {"image":"black-stripes.png","labels":["a red circle","a blue square","a green triangle","a yellow star","black stripes"],"correct":4}
+  ],
+  "tokenizer_parity_probe":"A red circle on a plain white background."
+}

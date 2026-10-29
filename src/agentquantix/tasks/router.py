@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
-from .registry import HUB_TAG_TASKS, MEDIA, TEXT, VOICE, TASKS, task_spec
+from .registry import HUB_TAG_TASKS, MEDIA, RETRIEVAL, TEXT, VOICE, TASKS, task_spec
 
 # transformers head-class conventions for a generative language model.
 GENERATIVE_HEADS = ("ForCausalLM", "ForConditionalGeneration", "LMHeadModel")
@@ -75,6 +75,8 @@ def _explicit(route, task, engine, family):
             route.engine = engine
     elif spec.pipeline == MEDIA:
         route.engine, route.family = "stable-diffusion.cpp", family
+    elif spec.pipeline == RETRIEVAL:
+        route.engine = spec.engines[0]
     else:
         route.engine = "llama.cpp"
     if engine and route.engine and engine != route.engine:
@@ -124,6 +126,9 @@ def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=
     architectures = result.metadata.get("architectures") or []
     tagged = HUB_TAG_TASKS.get(tag)
     evidence = f"Hub pipeline_tag is {tag}"
+    if tag == "feature-extraction" and "CLIPModel" in architectures:
+        tagged = "image-feature-extraction"
+        evidence = "Hub CLIPModel architecture with feature-extraction task"
     # sentence-transformers publishes cross-encoders as text-classification
     # and bi-encoders without a tag; its library contract names the task.
     if library == "sentence-transformers" and tag in (None, "text-classification"):
@@ -176,6 +181,8 @@ def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=
         (s[1] for s in implemented if s[1]), None)
     result.reasons = [s[2] for s in implemented]
     result.engine = {TEXT: "llama.cpp", MEDIA: "stable-diffusion.cpp"}.get(result.pipeline)
+    if result.pipeline == RETRIEVAL:
+        result.engine = TASKS[result.task].engines[0]
     if result.pipeline == VOICE:
         result.reasons.append("no installed voice catalog declares this source; the voice plan runs the fork hunt")
     return _engine_check(result, engine)
