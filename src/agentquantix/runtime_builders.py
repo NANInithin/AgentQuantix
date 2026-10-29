@@ -26,6 +26,7 @@ class RuntimeBuildError(RuntimeErrorBase):
 
 _TARGETS = {
     "llama.cpp": ("llama-quantize", "llama-imatrix"),
+    "clip.cpp": ("extract", "zsl", "quantize"),
     "audio.cpp": ("audiocpp_cli", "audiocpp_gguf"),
     "whisper.cpp": ("whisper-cli", "whisper-quantize"),
     "stable-diffusion.cpp": ("sd-cli",),
@@ -72,7 +73,10 @@ def fingerprint(engine, compute_backend="auto", required_targets=None):
         raise RuntimeBuildError(f"no native build adapter for {engine}")
     backend = compute_backend
     if backend == "auto":
-        backend = "cuda" if native_build.has_cuda_toolkit() else "cpu"
+        backend = ("cpu" if engine == "clip.cpp" else
+                   "cuda" if native_build.has_cuda_toolkit() else "cpu")
+    if engine == "clip.cpp" and backend != "cpu":
+        raise RuntimeBuildError("clip.cpp CUDA is not verified")
     if engine != "stable-diffusion.cpp" and backend not in ("cpu", "cuda"):
         raise RuntimeBuildError(f"{engine}: compute backend not yet verified: {backend}")
     if backend == "cuda" and not native_build.has_cuda_toolkit():
@@ -83,6 +87,18 @@ def fingerprint(engine, compute_backend="auto", required_targets=None):
         if not sysprobe.compute_backends().get(backend):
             raise RuntimeBuildError(f"compute toolchain not detected: {backend}")
         flags = cmake_flags(backend)
+    elif engine == "clip.cpp":
+        flags = ["-DCMAKE_BUILD_TYPE=Release", "-DCLIP_NATIVE=OFF", "-DGGML_CUBLAS=OFF"]
+        cmake = native_build.find_tool("cmake")
+        if cmake:
+            try:
+                version = subprocess.run([cmake, "--version"], capture_output=True,
+                                         text=True, timeout=10).stdout.splitlines()[0]
+                match = re.search(r"version\s+(\d+)", version)
+                if match and int(match.group(1)) >= 4:
+                    flags.append("-DCMAKE_POLICY_VERSION_MINIMUM=3.5")
+            except (OSError, subprocess.SubprocessError, IndexError):
+                pass
     elif engine == "audio.cpp":
         flags = ["-DCMAKE_BUILD_TYPE=Release", "-DAUDIOCPP_DEPLOYMENT_BUILD=ON",
                  "-DAUDIOCPP_MODEL_SET=full",
@@ -169,6 +185,7 @@ def _binary_contract(engine, source, targets):
 def _resources(engine, source, build_dir):
     paths = {
         "llama.cpp": ("convert_hf_to_gguf.py",),
+        "clip.cpp": ("models/convert_hf_to_gguf.py",),
         "whisper.cpp": ("models/convert-h5-to-ggml.py", "models/convert-pt-to-ggml.py"),
     }.get(engine, ())
     resources = {name: {"path": str(Path(source) / name), "sha256": _hash(Path(source) / name)}
@@ -252,7 +269,8 @@ def build_runtime(engine, source, build_dir, options=None):
     build_dir.mkdir(parents=True, exist_ok=True)
     logs = build_dir / "aqx-logs"
     submodules = (["ggml", "thirdparty/libwebp", "thirdparty/libwebm"]
-                  if engine == "stable-diffusion.cpp" else [])
+                  if engine == "stable-diffusion.cpp" else
+                  ["ggml"] if engine == "clip.cpp" else [])
     _execute(["git", "-c", "url.https://github.com/.insteadOf=git@github.com:",
               "-C", source, "submodule", "update", "--init", "--recursive", *submodules],
              logs / "submodules.json", timeout=900)

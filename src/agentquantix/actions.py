@@ -13,7 +13,7 @@ from pathlib import Path
 from . import card, config, feasibility, media, report, research, runs, sysprobe, voice
 from .pipeline import voice_release
 from .pipeline.job import Job
-from .tasks import MEDIA, TEXT, VOICE
+from .tasks import MEDIA, RETRIEVAL, TEXT, VOICE
 from .tasks.router import Route, is_short_name, route as route_model
 
 VOICE_RUN_DEFAULTS = {"language": None, "speaker": None, "pocket_language": "english",
@@ -302,6 +302,22 @@ def start_media(plan, *, user_approved, publish=False, preserve_failed=False):
     return {"pipeline": MEDIA, **result, "run_id": f"media:{result['run_id']}"}
 
 
+def retrieval_plan(model, *, task, engine, target_repo=None, quants=None):
+    from . import retrieval
+    return retrieval.plan_release(model, task=task, engine=engine,
+                                  target_repo=target_repo, quants=quants)
+
+
+def start_retrieval(plan, *, user_approved, publish=False):
+    if user_approved is not True:
+        raise ValueError("start_release requires approval of the exact retrieval plan")
+    if plan.get("blockers") or plan.get("status") != "ready":
+        raise ValueError("retrieval plan is blocked: " + "; ".join(plan.get("blockers", [])))
+    from .pipeline import retrieval_release
+    result = retrieval_release.run_release(plan, user_approved=True, publish=publish)
+    return {"pipeline": RETRIEVAL, **result, "run_id": f"retrieval:{result['run_id']}"}
+
+
 # =====================================================
 # shared actions
 # =====================================================
@@ -317,6 +333,8 @@ def inspect(model, *, task=None, engine=None, family=None, hunt_forks=True):
     elif item.pipeline == VOICE:
         result["voice"] = voice_plan(item.repo_id, family=voice_family(item, family),
                                      hunt_forks=hunt_forks)
+    elif item.pipeline == RETRIEVAL:
+        result["retrieval"] = retrieval_plan(item.repo_id, task=item.task, engine=item.engine)
     else:
         metadata = item.metadata if item.metadata.get("revision") else media.inspect_repository(item.repo_id)
         result.update(metadata=metadata, likely_media=media.looks_like_media(item.repo_id, metadata),
@@ -325,16 +343,19 @@ def inspect(model, *, task=None, engine=None, family=None, hunt_forks=True):
 
 
 def plan(models, *, task=None, engine=None, family=None, hunt_forks=True,
-         text=None, voice_args=None, media_args=None):
+         text=None, voice_args=None, media_args=None, retrieval_args=None):
     """Read-only plans for named models, grouped by their resolved pipeline."""
     if isinstance(models, str):
         models = [models]
     if not models:
         raise ValueError("name at least one model")
     routes = [route_named(name, task=task, engine=engine, family=family) for name in models]
+    if sum(route.pipeline == RETRIEVAL for route in routes) > 1:
+        raise ValueError("retrieval releases run one model per plan")
     per_model = ("target_repo", "quants", "speaker", "components", "contract",
                  "quality_profile", "conditioning", "settings")
-    single = {k: v for k, v in {**(voice_args or {}), **(media_args or {})}.items()
+    single = {k: v for k, v in {**(voice_args or {}), **(media_args or {}),
+                                **(retrieval_args or {})}.items()
               if k in per_model and v not in (None, [], {})}
     if single and len(models) > 1:
         raise ValueError("target, quant, speaker and media options apply to one model at a time")
@@ -357,6 +378,9 @@ def plan(models, *, task=None, engine=None, family=None, hunt_forks=True,
             args.setdefault("task", r.task if r.task in media.MEDIA_TASKS else task)
             args.setdefault("family", family or r.family)
             entry = media.plan_release(r.repo_id, hunt_forks=hunt_forks, **args)
+        elif r.pipeline == RETRIEVAL:
+            args = {k: v for k, v in (retrieval_args or {}).items() if v is not None}
+            entry = retrieval_plan(r.repo_id, task=r.task, engine=r.engine, **args)
         else:
             continue
         output["releases"].append({"pipeline": r.pipeline, "model": r.repo_id, "plan": entry})
@@ -367,10 +391,18 @@ def review(run_id, quant, *, accepted, reviewer, notes="", watched_video=False, 
     """Record a human decision about exact candidate artifacts."""
     from .pipeline import media_release
     if not str(reviewer or "").strip():
+        try:
+            record = runs.resolve(run_id)
+        except ValueError:
+            record = None
+        if record and record.pipeline == RETRIEVAL:
+            raise ValueError("retrieval releases are gated by automated parity and retrieval metrics; there is no human review")
         raise ValueError("a human reviewer name is required")
     record = runs.resolve(run_id)
     if record.pipeline == TEXT:
         raise ValueError("text-generation runs have no human review gate")
+    if record.pipeline == RETRIEVAL:
+        raise ValueError("retrieval releases are gated by automated parity and retrieval metrics; there is no human review")
     if record.pipeline == MEDIA:
         review_data = media_release.record_review(
             record.id.partition(":")[2], quant, reviewer, accepted, notes=notes,
@@ -401,6 +433,10 @@ def publish(run_id, quant, *, user_approved):
     if record.pipeline == TEXT:
         raise ValueError("text quants are uploaded while the run executes; resume it with "
                          f"`aqx run --resume {record.id}`")
+    if record.pipeline == RETRIEVAL:
+        from .pipeline import retrieval_release
+        return {"run_id": record.id,
+                **retrieval_release.publish_run(record.id.partition(":")[2], quant)}
     if record.pipeline == MEDIA:
         return {"run_id": record.id, **media_release.publish_run(record.id.partition(":")[2], quant)}
     saved = record.details.get("plan") or {}
@@ -423,6 +459,11 @@ def publish(run_id, quant, *, user_approved):
 
 def _verify_local(path, root=None):
     data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if data.get("pipeline") == "retrieval" and data.get("engine") in ("llama.cpp", "clip.cpp"):
+        from .pipeline.retrieval_release import verify_manifest
+        problems = verify_manifest(data, root or Path(path).parent)
+        return {"target": str(path), "kind": "retrieval-bundle",
+                "valid": not problems, "problems": problems}
     if isinstance(data, dict) and data.get("engine") == "stable-diffusion.cpp":
         from .pipeline import media_release
         problems = media_release.load_bundle(path).problems(Path(root or Path(path).parent))
@@ -457,6 +498,12 @@ def verify(target, *, root=None):
         return {"run_id": record.id, "kind": f"{record.pipeline}-run", "bundles": bundles,
                 "valid": bool(bundles) and all(b["valid"] for b in bundles),
                 "problems": [] if bundles else ["no built bundle manifests in this run yet"]}
+    if record and record.pipeline == RETRIEVAL:
+        manifests = sorted(Path(record.location).glob("publication/manifest.json"))
+        bundles = [_verify_local(p) for p in manifests]
+        return {"run_id": record.id, "kind": "retrieval-run", "bundles": bundles,
+                "valid": bool(bundles) and all(item["valid"] for item in bundles),
+                "problems": [] if bundles else ["no published retrieval manifest in this run"]}
     return verify_remote(our_repo(target))
 
 
@@ -489,6 +536,19 @@ def verify_remote(repo_id):
                 elif actual.get("sha256") and actual["sha256"] != component["sha256"]:
                     problems.append(f"remote checksum mismatch: {component['output_path']}")
             return {"repo_id": repo_id, "kind": "media-bundle", "valid": not problems, "problems": problems}
+        if data.get("pipeline") == "retrieval" and data.get("engine") in ("llama.cpp", "clip.cpp"):
+            from .pipeline.retrieval_release import (_hash, _remote_member_mismatches)
+            manifest_path = Path(hf_hub_download(repo_id, "manifest.json", token=config.TOKEN))
+            expected_manifest = {"path": "manifest.json",
+                                 "bytes": manifest_path.stat().st_size,
+                                 "sha256": _hash(manifest_path)}
+            expected_files = [*data.get("members", []), *data.get("published_files", []),
+                              expected_manifest]
+            problems = _remote_member_mismatches(
+                expected_files, remote,
+                download=lambda name: hf_hub_download(repo_id, name, token=config.TOKEN))
+            return {"repo_id": repo_id, "kind": "retrieval-bundle",
+                    "valid": not problems, "problems": problems}
     return card.verify(repo_id)
 
 

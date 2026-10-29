@@ -141,6 +141,26 @@ def test_build_fingerprint_records_backend_targets_and_toolchain(monkeypatch):
         builders.fingerprint("audio.cpp", "cuda")
 
 
+def test_retrieval_runtime_targets_and_clip_cpp_cmake4_policy(native, monkeypatch):
+    monkeypatch.setattr(builders.native_build, "has_cuda_toolkit", lambda: False)
+    monkeypatch.setattr(builders.native_build, "find_tool",
+                        lambda name: "cmake" if name == "cmake" else None)
+    monkeypatch.setattr(builders.native_build, "msvc_env_bat", lambda: None)
+    monkeypatch.setattr(builders.subprocess, "run",
+                        lambda *args, **kwargs: SimpleNamespace(
+                            stdout="cmake version 4.0.0\n", returncode=0))
+    llama = builders.fingerprint(
+        "llama.cpp", required_targets=["llama-embedding", "llama-server"])
+    clip = builders.fingerprint("clip.cpp")
+    assert {"llama-embedding", "llama-server", "llama-quantize"} <= set(llama["targets"])
+    assert clip["compute_backend"] == "cpu"
+    assert {"extract", "zsl", "quantize"} <= set(clip["targets"])
+    assert "-DGGML_CUDA=OFF" not in clip["flags"]
+    assert "-DGGML_CUBLAS=OFF" in clip["flags"]
+    assert "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" in clip["flags"]
+    assert "-DCLIP_NATIVE=OFF" in clip["flags"]
+
+
 def test_msvc_configuration_and_build_share_developer_environment(native, monkeypatch):
     monkeypatch.setattr(builders.sys, "platform", "win32")
     run = builders.subprocess.run

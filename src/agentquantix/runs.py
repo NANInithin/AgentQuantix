@@ -19,7 +19,7 @@ import re
 import time
 
 from . import config
-from .tasks import MEDIA, PIPELINES, TEXT, VOICE
+from .tasks import MEDIA, PIPELINES, RETRIEVAL, TEXT, VOICE
 
 
 class AmbiguousRun(ValueError):
@@ -52,6 +52,10 @@ def voice_root():
 
 def media_root():
     return config.TEMP_DIR / "aqx-media-runs"
+
+
+def retrieval_root():
+    return config.TEMP_DIR / "aqx-retrieval-runs"
 
 
 def _read(path):
@@ -104,8 +108,22 @@ def _media_runs():
                         details={"quants": plan.get("quants", []), "reviews": reviews})
 
 
+def _retrieval_runs():
+    root = retrieval_root()
+    for directory in sorted(root.iterdir()) if root.is_dir() else ():
+        data = _read(directory / "run.json")
+        journal = _read(directory / "journal.json") or {}
+        plan = data.get("plan") if isinstance(data, dict) else None
+        if not isinstance(plan, dict) or not plan.get("model"):
+            continue
+        yield RunRecord(f"retrieval:{directory.name}", RETRIEVAL, plan["model"],
+                        str(directory), target=plan.get("target_repo"), task=plan.get("task"),
+                        engine=plan.get("engine"), created=data.get("created"),
+                        details={"plan": plan, "journal": journal})
+
+
 def discover(pipeline=None):
-    found = [*_text_runs(), *_voice_runs(), *_media_runs()]
+    found = [*_text_runs(), *_voice_runs(), *_media_runs(), *_retrieval_runs()]
     return [item for item in found if pipeline in (None, item.pipeline)]
 
 

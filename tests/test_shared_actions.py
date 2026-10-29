@@ -31,9 +31,21 @@ def test_hub_task_metadata_routes_text_and_media():
     assert image.ready and image.pipeline == "media" and image.task == "text-to-image"
 
 
+def test_retrieval_hub_routes_are_ready_and_clip_architecture_overrides_tag():
+    embed = route("org/embed", metadata={"pipeline_tag": "feature-extraction",
+                                         "library_name": "transformers"})
+    rerank = route("org/reranker", metadata={"pipeline_tag": "text-ranking"})
+    clip = route("org/clip", metadata={"pipeline_tag": "feature-extraction",
+                                        "architectures": ["CLIPModel"]})
+    assert (embed.pipeline, embed.task, embed.engine, embed.ready) == (
+        "retrieval", "embeddings", "llama.cpp", True)
+    assert (rerank.pipeline, rerank.task, rerank.engine, rerank.ready) == (
+        "retrieval", "reranking", "llama.cpp", True)
+    assert (clip.pipeline, clip.task, clip.engine, clip.ready) == (
+        "retrieval", "image-feature-extraction", "clip.cpp", True)
+
+
 @pytest.mark.parametrize("tag,task,milestone", [
-    ("feature-extraction", "embeddings", "0.5.3"),
-    ("text-ranking", "reranking", "0.5.3"),
     ("object-detection", "object-detection", "0.5.7"),
     ("time-series-forecasting", "time-series-forecasting", "0.5.9"),
 ])
@@ -52,7 +64,7 @@ def test_recognised_tasks_without_adapters_are_blocked_not_misrouted(tag, task, 
 ])
 def test_sentence_transformers_contracts_name_their_task(metadata, task):
     item = route("org/encoder", metadata=metadata)
-    assert item.task == task and not item.ready
+    assert item.task == task and item.ready and item.pipeline == "retrieval"
 
 
 @pytest.mark.parametrize("metadata", [
@@ -75,8 +87,10 @@ def test_retrieval_models_never_enter_text_assessment(monkeypatch):
     monkeypatch.setattr("agentquantix.tasks.router.hub_metadata",
                         lambda repo: {"pipeline_tag": "sentence-similarity", "tags": []})
     monkeypatch.setattr(actions, "assessments_for", lambda models: pytest.fail("entered text"))
+    monkeypatch.setattr(actions, "retrieval_plan",
+                        lambda model, **kwargs: {"model": model, "status": "ready"})
     result = actions.plan(["org/embedder"])
-    assert result["text"] is None and result["blocked"][0]["model"] == "org/embedder"
+    assert result["text"] is None and result["releases"][0]["pipeline"] == "retrieval"
 
 
 def test_conflicting_evidence_is_a_short_choice():
@@ -109,7 +123,12 @@ def test_offline_naming_falls_back_to_the_text_assessment():
 
 def test_task_registry_and_capability_cells():
     assert TASKS["text-to-speech"].pipeline == "voice"
-    assert not TASKS["embeddings"].implemented
+    assert TASKS["embeddings"].implemented
+    retrieval_cells = capabilities()
+    assert {cell.task for cell in retrieval_cells if cell.engine == "llama.cpp"} >= {
+        "embeddings", "reranking"}
+    assert {cell.task for cell in retrieval_cells if cell.engine == "clip.cpp"} >= {
+        "zero-shot-image-classification", "image-feature-extraction"}
     cells = capabilities(engine="audio.cpp")
     assert cells and all(cell.engine == "audio.cpp" for cell in cells)
     assert all(cell.acceptance == "pending" for cell in capabilities())
@@ -133,8 +152,15 @@ def recorded(tmp_path):
 
 
 def test_existing_records_of_every_pipeline_are_discovered(recorded):
+    retrieval_dir = runs.retrieval_root() / "org-embedder"
+    retrieval_dir.mkdir(parents=True)
+    (retrieval_dir / "run.json").write_text(json.dumps({
+        "plan": {"model": "org/embedder", "task": "embeddings", "engine": "llama.cpp"}}),
+        encoding="utf-8")
     ids = {item.id for item in runs.discover()}
-    assert {"text:Demo", "voice:Qwen--Qwen3-TTS-12Hz-1.7B-Base", f"media:{recorded}"} <= ids
+    assert {"text:Demo", "voice:Qwen--Qwen3-TTS-12Hz-1.7B-Base",
+            f"media:{recorded}", "retrieval:org-embedder"} <= ids
+    assert runs.resolve("retrieval:org-embedder").task == "embeddings"
 
 
 def test_resolution_is_deterministic_and_migrates_voice_workspaces(recorded):

@@ -112,6 +112,17 @@ def test_no_stable_release_falls_back_to_actual_default_branch(lifecycle):
     assert lifecycle.upstream.calls[-1].endswith("/commits/trunk")
 
 
+def test_clip_runtime_installs_from_default_branch_when_no_release_exists(lifecycle):
+    lifecycle.upstream.no_release = True
+    handle = lifecycle.manager.prepare("clip.cpp", builder=build, persistent=True)
+    assert handle.manifest["repository"] == "monatis/clip.cpp"
+    assert handle.revision == NEW
+    assert lifecycle.upstream.calls[-1].endswith("/commits/trunk")
+    assert any(command[1] == "clone" and
+               any("monatis/clip.cpp.git" in arg for arg in command)
+               for command in lifecycle.git.calls)
+
+
 def test_failed_update_check_keeps_last_success_separately(lifecycle):
     lifecycle.manager.check_update("llama.cpp")
     lifecycle.upstream.offline = True
