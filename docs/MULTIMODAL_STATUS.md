@@ -10,8 +10,8 @@ the user selects `--task multimodal-understanding`.
 
 | Task | Native route | Acceptance |
 |---|---|---|
-| Vision VQA and document OCR | `llama-server --mmproj --jinja`, `/v1/chat/completions` with `image_url` | SmolVLM2 F16 evaluated on Linux CPU; rejected by VQA and OCR gates |
-| Video order | `llama-mtmd-cli --video`; ffmpeg required | CLI-only; SmolVLM2 F16 passed frame order at 1 fps |
+| Vision VQA and document OCR | `llama-server --mmproj --jinja`, `/v1/chat/completions` with `image_url` | SmolVLM2 F16, Q8_0, Q6_K, Q5_K_M and Q4_K_M passed on Linux CPU |
+| Video order | `llama-mtmd-cli --video`; ffmpeg required | CLI-only; SmolVLM2 F16 and all four text quants passed frame order at 1 fps |
 | Audio transcription | `llama-server --mmproj --jinja`, `/v1/chat/completions` with `input_audio` | Qwen3-ASR F16 and Q8_0/Q6_K/Q5_K_M/Q4_K_M passed on Linux CPU |
 | Projector | F16 `mmproj` GGUF | F16 only; projector quantization is unaccepted |
 
@@ -44,20 +44,30 @@ see `fixtures/multimodal/LICENSE.md`.
 
 ## Revisions and native acceptance
 
-Both models were run sequentially on Linux CPU with llama.cpp revision
-`8642541b255bfb5dc39cd351a178be09013a55d6`. Runtime update lookup returned
-HTTP 403 during inference; the already-installed runtime at that exact revision
-was used. Runs used `--no-publish`; no Hub publication was exercised.
+Both models were rerun sequentially on Linux CPU with llama.cpp revision
+`8642541b255bfb5dc39cd351a178be09013a55d6`. The reruns reused the installed
+runtime and cached conversions; only evaluation journal entries were
+invalidated. Runs used `--no-publish`; no Hub publication was exercised.
 
 The video CLI supports `--video`. Acceptance uses
 `--video-fps 1 --video-timestamp-interval 1000`; the CLI defaults of 4 fps and
 5000 ms produced an excessive media batch and a memory-slot failure on this
 fixture. The reduced sampling completed and retained the video-order gate.
 
+Server requests now put `image_url` or `input_audio` before the text part.
+SmolVLM2 VQA requests took 16.113-20.947 seconds and OCR requests took
+8.263-10.475 seconds; Qwen3-ASR requests took 1.166-1.765 seconds. These are
+not approximately five times the corresponding feasibility-spike timings, so
+no server thread override was added. The previous run's CPU-heavy post-run
+parser was stopped before this sequential rerun.
+
 The authoritative result files are
 `/home/ubuntu/spike/acceptance/smolvlm2-results.json` and
 `/home/ubuntu/spike/acceptance/qwen3asr-results.json`. The separate 0.5.4b
-feasibility spike is not used as implementation acceptance.
+feasibility spike is not used as implementation acceptance. The prior result
+files are preserved as
+`/home/ubuntu/spike/acceptance/smolvlm2-results-pre-order-fix.json` and
+`/home/ubuntu/spike/acceptance/qwen3asr-results-pre-order-fix.json`.
 
 ### HuggingFaceTB/SmolVLM2-500M-Video-Instruct
 
@@ -71,17 +81,34 @@ and patch size 16. The Transformers VQA reference was available at accuracy
 
 | Text quant | Status | Bytes | VQA accuracy | OCR CER/WER | Video order |
 |---|---|---:|---:|---:|---|
-| F16 | quality-rejected | 820421760 | 0.6 | 0.5681818181818182 / 0.5714285714285714 | true |
-| Q8_0 | not evaluated | — | — | — | — |
-| Q6_K | not evaluated | — | — | — | — |
-| Q5_K_M | not evaluated | — | — | — | — |
-| Q4_K_M | not evaluated | — | — | — | — |
+| F16 | passed | 820421760 | 1.0 | 0.0 / 0.0 | true |
+| Q8_0 | passed | 436805760 | 1.0 | 0.0 / 0.0 | true |
+| Q6_K | passed | 417759360 | 1.0 | 0.0 / 0.0 | true |
+| Q5_K_M | passed | 325560960 | 1.0 | 0.0 / 0.0 | true |
+| Q4_K_M | passed | 303250560 | 0.8 | 0.0 / 0.0 | true |
 
-F16 failed the absolute VQA (`0.8`) and OCR CER (`0.05`) gates. Its video
-answer correctly described a red circle followed by a blue square. The run
-stopped before quantization because there was no passing F16 baseline for the
-relative quant gates. The stored OCR answer was `Invoice 4821 is due on
-2026-11-30.`, which omitted invoice text.
+F16 VQA accuracy was 1.0 versus the Transformers reference's 0.8. Its stored
+OCR answer was ` INVOICE 4821 Total: 37.50 EUR Due 2026-11-30`; CER and WER were
+both 0.0 after whitespace normalization. Every candidate passed video order.
+Q4_K_M missed only the black-stripes VQA case and passed at the 0.8 threshold.
+The F16 video answer was `First, the video shows a red circle on a white
+background, which is a common symbol for Japan. Then, it transitions to a blue
+square on the same white background, which is also a symbol for Japan.`
+
+Per-request elapsed seconds are recorded below. VQA times follow the order
+red-circle, blue-square, green-triangle, yellow-star, black-stripes; values
+are rounded to three decimals.
+
+| Text quant | VQA requests (seconds) | OCR | Video |
+|---|---|---:|---:|
+| F16 | 18.904, 18.185, 19.180, 20.947, 17.799 | 9.997 | 72.404 |
+| Q8_0 | 18.973, 18.934, 16.611, 16.113, 20.367 | 10.475 | 59.562 |
+| Q6_K | 17.526, 19.970, 16.637, 17.970, 17.785 | 8.960 | 66.723 |
+| Q5_K_M | 18.155, 17.983, 16.939, 17.577, 19.503 | 8.834 | 61.488 |
+| Q4_K_M | 20.083, 18.169, 17.046, 17.035, 16.562 | 8.263 | 60.507 |
+
+The native invocation wall time was 14m12.091s. It reused F16 text/projector
+conversion and quantized/evaluated the text candidates.
 
 ### Qwen/Qwen3-ASR-0.6B
 
@@ -101,5 +128,14 @@ Source revision `5eb144179a02acc5e5ba31e748d22b0cf3e303b0`; licence
 
 All candidates returned the transcript
 `And so, my fellow Americans, ask not what your country can do for you; ask
-what you can do for your country.` after generic ASR markup removal. Audio QA
-was not evaluated.
+what you can do for your country.` after generic ASR markup removal. The raw
+answer began `language English<asr_text>`. Audio QA was not evaluated. The
+native invocation wall time was 42.256s.
+
+| Text quant | ASR request seconds |
+|---|---:|
+| F16 | 1.765 |
+| Q8_0 | 1.420 |
+| Q6_K | 1.211 |
+| Q5_K_M | 1.166 |
+| Q4_K_M | 1.254 |

@@ -12,12 +12,11 @@ and clip.cpp. Remaining gaps are Windows/MSVC, GPU/Metal, and real Hub
 publication; acceptance runs used `--no-publish`. See
 [retrieval status](RETRIEVAL_STATUS.md) for the exact matrix. **0.5.4
 multimodal understanding is implemented, and sequential Linux CPU native
-evaluation is complete. Qwen3-ASR-0.6B passed F16 and all four configured text
-quants. SmolVLM2-500M-Video-Instruct passed video order, but its F16 candidate
-was quality-rejected on VQA and OCR; text quants were not evaluated without a
-passing baseline. See [multimodal status](MULTIMODAL_STATUS.md). Remaining
-gaps include Windows/MSVC, GPU/Metal and real Hub publication. The next
-milestone is **0.5.5: expanded audio**.
+evaluation is complete for the tested models. SmolVLM2-500M-Video-Instruct
+passed F16 and all four configured text quants; Qwen3-ASR-0.6B also passed its
+full evaluated matrix. See [multimodal status](MULTIMODAL_STATUS.md).
+Remaining gaps include Windows/MSVC, GPU/Metal and real Hub publication. The
+next milestone is **0.5.5: expanded audio**.
 
 0.5.2 summary: `agentquantix/tasks/` (registry + metadata router),
 `agentquantix/runs.py` (`text:`/`voice:`/`media:` run ids over existing records),
@@ -105,10 +104,12 @@ post-0.5.3 engine builders and task pipelines are not implemented yet.
 - Qwen3-ASR-0.6B passed F16, Q8_0, Q6_K, Q5_K_M and Q4_K_M on Linux CPU with
   WER 0.0 and CER 0.018691588785046728. This is ASR-style understanding only;
   no audio QA or audio reference was evaluated.
-- SmolVLM2-500M-Video-Instruct F16 passed video order using `--video-fps 1
-  --video-timestamp-interval 1000` but failed VQA (0.6 vs the 0.8 gate) and
-  OCR CER (0.5681818181818182 vs the 0.05 gate). Its text quants were not
-  evaluated without a passing F16 baseline; the model is not accepted.
+- SmolVLM2-500M-Video-Instruct passed F16, Q8_0, Q6_K, Q5_K_M and Q4_K_M.
+  F16 VQA accuracy was 1.0, OCR CER/WER were 0.0, and all five candidates
+  passed video order at `--video-fps 1 --video-timestamp-interval 1000`.
+- Server request payloads put image/audio before prompt text. The corrected
+  reruns passed the native gates; request timings were near or faster than the
+  feasibility-spike samples, so no server thread override was needed.
 - A native ASR answer exposed an ASR-prefix markup scoring bug. `strip_markup`
   now removes the prefix generically, and the corrected Qwen rerun is
   authoritative. Result JSONs and logs are preserved in
@@ -222,9 +223,8 @@ implemented.
   real Hub publication was not exercised; the acceptance runs used
   `--no-publish`.
 - 0.5.4 native results are model-specific Linux CPU evidence transcribed from
-  the implementation result JSONs. SmolVLM2 failed its F16 quality gates;
-  Qwen3-ASR passed its evaluated matrix. The feasibility spike is not
-  implementation acceptance.
+  the implementation result JSONs. Both tested models passed their evaluated
+  text-quant matrices. The feasibility spike is not implementation acceptance.
 - Select exact upstream SHAs during new-engine audits; README support tables
   alone do not establish acceptance. Track engine revision × family × task ×
   precision × platform/backend.
