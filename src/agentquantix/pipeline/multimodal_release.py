@@ -11,7 +11,6 @@ import shutil
 import subprocess
 import sys
 import time
-import hashlib
 from urllib.request import Request, urlopen
 
 from huggingface_hub import snapshot_download
@@ -174,12 +173,17 @@ def read_projector_metadata(runtime_source, projector_path):
     package = gguf_path / "gguf"
     if not (package / "__init__.py").is_file():
         raise RuntimeError(f"runtime checkout does not contain gguf-py: {gguf_path}")
-    module_name = "aqx_runtime_gguf_" + hashlib.sha1(str(gguf_path.resolve()).encode()).hexdigest()[:12]
-    spec = importlib.util.spec_from_file_location(
-        module_name, package / "__init__.py", submodule_search_locations=[str(package)])
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
+    package_modules = {
+        name: module for name, module in sys.modules.items()
+        if name == "gguf" or name.startswith("gguf.")
+    }
+    for name in package_modules:
+        sys.modules.pop(name, None)
     try:
+        spec = importlib.util.spec_from_file_location(
+            "gguf", package / "__init__.py", submodule_search_locations=[str(package)])
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["gguf"] = module
         spec.loader.exec_module(module)
         reader = module.GGUFReader(str(projector_path))
         keys = (
@@ -191,8 +195,9 @@ def read_projector_metadata(runtime_source, projector_path):
         )
         metadata = {key: _field_value(reader, key) for key in keys}
     finally:
-        for name in [key for key in sys.modules if key == module_name or key.startswith(module_name + ".")]:
+        for name in [key for key in sys.modules if key == "gguf" or key.startswith("gguf.")]:
             sys.modules.pop(name, None)
+        sys.modules.update(package_modules)
     if metadata.get("general.type") != "mmproj":
         raise RuntimeError(
             f"projector GGUF general.type must be 'mmproj', got {metadata.get('general.type')!r}")

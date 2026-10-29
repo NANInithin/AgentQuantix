@@ -4,7 +4,7 @@ import io
 import json
 from pathlib import Path
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -291,6 +291,37 @@ def test_projector_metadata_sets_actual_modalities_and_requires_mmproj_type(tmp_
         encoding="utf-8")
     with pytest.raises(RuntimeError, match="general.type must be 'mmproj'"):
         release.read_projector_metadata(tmp_path / "runtime", "/missing/projector.gguf")
+
+
+def test_projector_metadata_prefers_runtime_gguf_over_installed_package(tmp_path, monkeypatch):
+    installed_package = ModuleType("gguf")
+    installed_constants = ModuleType("gguf.constants")
+    installed_constants.RUNTIME_TYPE = b"installed"
+    monkeypatch.setitem(sys.modules, "gguf", installed_package)
+    monkeypatch.setitem(sys.modules, "gguf.constants", installed_constants)
+
+    package = tmp_path / "runtime" / "gguf-py" / "gguf"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        "from .gguf_reader import GGUFReader\n", encoding="utf-8")
+    (package / "constants.py").write_text(
+        "RUNTIME_TYPE = b'mmproj'\n", encoding="utf-8")
+    (package / "gguf_reader.py").write_text(
+        "from gguf.constants import RUNTIME_TYPE\n"
+        "class Field:\n"
+        "    def contents(self): return RUNTIME_TYPE\n"
+        "class GGUFReader:\n"
+        "    def __init__(self, path): pass\n"
+        "    def get_field(self, key):\n"
+        "        return Field() if key == 'general.type' else None\n",
+        encoding="utf-8")
+
+    metadata = release.read_projector_metadata(
+        tmp_path / "runtime", "/missing/projector.gguf")
+
+    assert metadata["general.type"] == "mmproj"
+    assert sys.modules["gguf"] is installed_package
+    assert sys.modules["gguf.constants"] is installed_constants
 
 
 def test_reference_unavailable_is_cached(monkeypatch, tmp_path):
