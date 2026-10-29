@@ -1,6 +1,7 @@
 """Offline build-adapter control-flow tests; these are not native acceptance."""
 import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -114,10 +115,24 @@ def test_adopted_media_pin_gets_shipped_catalog_without_writing_checkout(native,
 
 
 @pytest.mark.parametrize("diagnostic", ["value = NaN", "value = -inf", "assertion failed: weights"])
-def test_native_probe_rejects_nonfinite_and_assertions(native, diagnostic):
+def test_native_command_rejects_nonfinite_and_assertions(native, diagnostic):
     native.control["diagnostic"] = diagnostic
     with pytest.raises(builders.RuntimeBuildError, match="native command failed"):
-        builders._execute(["native", "--help"], help_probe=True)
+        builders._execute(["native", "inference"])
+
+
+def test_help_probe_accepts_infinity_documentation_but_inference_rejects_nan(tmp_path):
+    binary = tmp_path / "fake-native.py"
+    binary.write_text(
+        "import sys\n"
+        "if '--help' in sys.argv:\n"
+        "    print('(default: -1, -1 = infinity)')\n"
+        "else:\n"
+        "    print('nan')\n",
+        encoding="utf-8")
+    assert builders._execute([sys.executable, binary, "--help"], help_probe=True)["returncode"] == 0
+    with pytest.raises(builders.RuntimeBuildError, match="native command failed"):
+        builders._execute([sys.executable, binary, "inference"])
 
 
 def test_quantizer_usage_exit_is_accepted_but_other_failure_is_not(native):

@@ -42,6 +42,10 @@ def source_contract(repo_id, files, read_json):
         modules = read_json("modules.json")
         classes = [str(item.get("type", "")).rsplit(".", 1)[-1]
                    for item in modules if isinstance(item, dict)]
+        contract["module_directories"] = list(dict.fromkeys(
+            str(item["path"]).strip("/") for item in modules
+            if isinstance(item, dict) and item.get("path")
+            and ".." not in str(item["path"]).split("/")))
         pooling = None
         if "Pooling" in classes:
             if "1_Pooling/config.json" in names:
@@ -79,7 +83,7 @@ def source_contract(repo_id, files, read_json):
 
 
 def cosine(a, b):
-    if len(a) != len(b) or not a:
+    if len(a) != len(b) or len(a) == 0:
         raise ValueError("cosine inputs must have the same nonzero dimension")
     dot = sum(float(x) * float(y) for x, y in zip(a, b))
     na = math.sqrt(sum(float(x) ** 2 for x in a))
@@ -111,7 +115,7 @@ def ndcg_at_k(ranked, gains, k):
 
 
 def top1_agreement(left, right):
-    return sum(bool(a) and bool(b) and a[0] == b[0] for a, b in zip(left, right)) / max(
+    return sum(len(a) > 0 and len(b) > 0 and a[0] == b[0] for a, b in zip(left, right)) / max(
         len(left), 1)
 
 
@@ -145,6 +149,28 @@ class RetrievalBundle:
                 "source_license": self.source_license, "target_repo": self.target_repo}
 
 
+def runtime_commands(engine, task, contract, model_path):
+    if engine == "clip.cpp":
+        return [f"extract -m {model_path} -t 4 --image image.png --text 'a red circle'",
+                f"zsl -m {model_path} -t 4 --image image.png --text 'a red circle' "
+                "--text 'a blue square'"]
+    if task == "reranking":
+        return [f"llama-server --reranking -m {model_path} --host 127.0.0.1 --port 8080",
+                "curl -s http://127.0.0.1:8080/v1/rerank -H 'Content-Type: application/json' "
+                "-d '{\"query\":\"query\",\"documents\":[\"document\"]}'"]
+    pooling = contract.get("pooling") or "mean"
+    return [f"llama-embedding -m {model_path} -p 'query text' --pooling {pooling} "
+            "--embd-normalize 2 --embd-output-format array"]
+
+
+def _literal_prompt_prefix(template):
+    value = str(template)
+    for marker in ("{query}", "{document}", "{text}"):
+        if marker in value:
+            return value.split(marker, 1)[0]
+    return value
+
+
 def render_card(bundle):
     manifest = bundle.manifest() if isinstance(bundle, RetrievalBundle) else bundle
     metrics = manifest.get("quality_results", {})
@@ -155,18 +181,15 @@ def render_card(bundle):
     download = "\n".join(
         f"hf download {target_repo} {member['path']} --local-dir ./retrieval-model"
         for member in members)
-    if engine == "clip.cpp":
-        example = (f"extract -m {model_path} -t 4 --image image.png --text 'a red circle'\n"
-                   f"zsl -m {model_path} -t 4 --image image.png --text 'a red circle' "
-                   "--text 'a blue square'")
-    elif task == "reranking":
-        example = (f"llama-server --reranking -m {model_path} --host 127.0.0.1 --port 8080\n"
-                   "curl -s http://127.0.0.1:8080/v1/rerank -H 'Content-Type: application/json' "
-                   "-d '{\"query\":\"query\",\"documents\":[\"document\"]}'")
-    else:
-        pooling = manifest.get("contract", {}).get("pooling") or "mean"
-        example = (f"llama-embedding -m {model_path} -p 'query text' --pooling {pooling} "
-                   "--embd-normalize 2 --embd-output-format array")
+    contract = manifest.get("contract", {})
+    example = "\n".join(runtime_commands(engine, task, contract, model_path))
+    prompts = contract.get("prompts") or {}
+    prompt_text = "\n".join(
+        f"- {role.title()} prompt prefix to prepend: "
+        f"`{_literal_prompt_prefix(prompts[role])}`"
+        for role in ("query", "document") if role in prompts and prompts[role] is not None)
+    if prompt_text:
+        prompt_text = "\n\nPrompt templates:\n\n" + prompt_text + "\n"
     probes = [entry.get("tokenizer_parity_probe") for entry in metrics.values()
               if isinstance(entry, dict) and entry.get("tokenizer_parity_probe")]
     probe_text = ""
@@ -181,6 +204,8 @@ def render_card(bundle):
         f"SHA-256 `{member['sha256']}`)"
         for member in members)
     license_text = manifest.get("source_license") or "unspecified"
+    reranking_note = ("\n\nThe endpoint's `relevance_score` is a raw, unbounded logit, "
+                      "not a probability." if task == "reranking" else "")
     return (f"# {manifest.get('family', 'Retrieval model')} — {engine}\n\n"
             f"- Task: `{task}`\n- Source: `{source.get('repo_id', 'unknown')}` "
             f"(revision `{source.get('revision', 'unknown')}`)\n"
@@ -188,7 +213,7 @@ def render_card(bundle):
             f"- Architecture: `{manifest.get('architecture', 'unknown')}`\n"
             f"- Source model license: `{license_text}`\n\n"
             f"## Bundle files\n\n{member_text}\n\n"
-            f"## Usage\n\n```sh\n{download}\n{example}\n```\n\n"
+            f"## Usage\n\n```sh\n{download}\n{example}\n```\n{prompt_text}{reranking_note}\n\n"
             f"## Measured quality\n\n```json\n{json.dumps(metrics, indent=2)}\n```\n\n"
             "CLIP text inputs are lowercased, stripped of punctuation, and whitespace-collapsed; "
             "the tokenizer-parity measurement above documents the raw-text limitation. llama.cpp "
@@ -235,12 +260,13 @@ def plan_release(repo_id, *, task, engine, target_repo=None, quants=None):
         blockers.append("reranker must have one classification label")
     engine_revision = None
     architecture_support = "not-applicable" if engine == "clip.cpp" else "unknown"
-    if engine == "llama.cpp":
-        try:
-            from .runtimes import RuntimeManager
-            handle = RuntimeManager().inspect(engine, verify=False)
+    try:
+        from .runtimes import RuntimeManager
+        handle = RuntimeManager().inspect(engine, verify=False)
+        if handle:
+            engine_revision = handle.revision
+        if engine == "llama.cpp":
             if handle:
-                engine_revision = handle.revision
                 from .archsupport import supported_architectures
                 supported = supported_architectures(handle.source)
                 architectures = source["contract"].get("architectures", [])
@@ -249,7 +275,8 @@ def plan_release(repo_id, *, task, engine, target_repo=None, quants=None):
                     "known": sorted(set(architectures) & set(supported))}
                 if architectures and not architecture_support["supported"]:
                     blockers.append("unsupported architecture by installed llama.cpp converter")
-        except Exception:
+    except Exception:
+        if engine == "llama.cpp":
             architecture_support = "unknown"
     fixture_root = Path(__file__).resolve().parent / "fixtures" / "retrieval"
     fixtures = {}
@@ -260,6 +287,7 @@ def plan_release(repo_id, *, task, engine, target_repo=None, quants=None):
                     path.read_bytes()).hexdigest()
     return {"model": repo_id, "status": "blocked" if blockers else "ready",
             "blockers": blockers, "task": task, "engine": engine,
+            "files": files,
             "engine_revision": engine_revision, "architecture_support": architecture_support,
             "source_revision": getattr(info, "sha", None),
             "source_bytes": sum(getattr(item, "size", 0) or 0 for item in info.siblings or []),

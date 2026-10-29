@@ -151,7 +151,7 @@ def _execute(command, log_path=None, *, cwd=None, timeout=3600, help_probe=False
     diagnostics = record["stdout"] + "\n" + record["stderr"]
     usage_exit = (help_probe and result.returncode == 1
                   and re.search(r"\b(?:usage|options|help)\b", diagnostics, re.I))
-    if (result.returncode and not usage_exit) or _NONFINITE.search(diagnostics):
+    if (result.returncode and not usage_exit) or (not help_probe and _NONFINITE.search(diagnostics)):
         tail = next((line for line in reversed(diagnostics.splitlines()) if line.strip()), "no diagnostics")
         raise RuntimeBuildError(f"native command failed ({result.returncode}): {tail}; log: {log_path}")
     return record

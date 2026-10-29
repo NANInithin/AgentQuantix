@@ -401,10 +401,8 @@ def _start(arguments):
             "said to go ahead. Show them plan_release and ask.")
     if arguments.get("plan") is not None:
         approved_plan = arguments["plan"]
-        if approved_plan.get("engine") in ("llama.cpp", "clip.cpp") and \
-                approved_plan.get("task") in ("embeddings", "reranking",
-                                               "zero-shot-image-classification",
-                                               "image-feature-extraction"):
+        task_spec = TASKS.get(approved_plan.get("task"))
+        if task_spec and task_spec.pipeline == RETRIEVAL:
             return actions.start_retrieval(
                 approved_plan, user_approved=True,
                 publish=bool(arguments.get("publish", False)))

@@ -13,13 +13,14 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from urllib.request import Request, urlopen
 
 from huggingface_hub import snapshot_download
 
 from .. import config
 from ..retrieval import (CLIP_QUANT_TYPES, RetrievalBundle, cosine, mrr, ndcg_at_k,
-                         recall_at_k, render_card, top1_agreement)
+                         recall_at_k, render_card, runtime_commands, top1_agreement)
 from ..runtime_control import require_binaries
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "retrieval"
@@ -141,11 +142,8 @@ def _embedding_quality(plan, model, ref, binary):
     queries = corpus["queries"]
     native_docs = [_embed(binary, model, _template(item["text"], dprompt), pooling) for item in docs]
     native_queries = [_embed(binary, model, _template(item["query"], qprompt), pooling) for item in queries]
-    st = ref["sentence_transformer"]
-    reference_docs = st.encode([_template(item["text"], dprompt) for item in docs],
-                               normalize_embeddings=True, convert_to_numpy=True)
-    reference_queries = st.encode([_template(item["query"], qprompt) for item in queries],
-                                  normalize_embeddings=True, convert_to_numpy=True)
+    reference_docs = ref["reference_document_vectors"]
+    reference_queries = ref["reference_query_vectors"]
     ranked, reference_ranked, gains = [], [], []
     for qi, query in enumerate(queries):
         scores = [cosine(native_queries[qi], vector) for vector in native_docs]
@@ -177,7 +175,8 @@ def _free_port():
         return server.getsockname()[1]
 
 
-def _rerank(binary, model, query, documents, root):
+@contextmanager
+def _rerank(binary, model, root):
     port = _free_port()
     process = subprocess.Popen([str(binary), "--reranking", "-m", str(model),
                                 "--host", "127.0.0.1", "--port", str(port)],
@@ -195,11 +194,14 @@ def _rerank(binary, model, query, documents, root):
                 time.sleep(0.25)
         else:
             raise RuntimeError("llama-server health check timed out")
-        body = json.dumps({"query": query, "documents": documents}).encode()
-        request = Request(f"http://127.0.0.1:{port}/v1/rerank", body,
-                          {"Content-Type": "application/json"})
-        with urlopen(request, timeout=120) as response:
-            return json.load(response)["results"]
+        def score(query, documents):
+            body = json.dumps({"query": query, "documents": documents}).encode()
+            request = Request(f"http://127.0.0.1:{port}/v1/rerank", body,
+                              {"Content-Type": "application/json"})
+            with urlopen(request, timeout=120) as response:
+                return json.load(response)["results"]
+
+        yield score
     finally:
         process.terminate()
         try:
@@ -230,11 +232,8 @@ def _zsl_label(output):
 
 def _clip_quality(plan, model, binaries, root, ref):
     import numpy as np
-    from PIL import Image
-    from transformers import CLIPProcessor
     cases = json.loads((FIXTURES / "zsl.json").read_text(encoding="utf-8"))
-    processor = CLIPProcessor.from_pretrained(str(ref["source"]), local_files_only=True)
-    image_cosines, text_cosines, correct, reference_correct, zsl_agreement = [], [], 0, 0, 0
+    image_cosines, text_cosines, correct, zsl_agreement = [], [], 0, 0
     native_images, native_texts = [], []
     for index, case in enumerate(cases["cases"]):
         image_path = FIXTURES / case["image"]
@@ -251,18 +250,9 @@ def _clip_quality(plan, model, binaries, root, ref):
                                *sum((["--text", text] for text in labels), [])], cwd=work)
         zsl_label = _zsl_label(zsl_output)
         zsl_agreement += int(zsl_label == labels[max(range(len(scores)), key=scores.__getitem__)])
-        image = Image.open(image_path).convert("RGB")
-        inputs = processor(text=labels, images=image, return_tensors="pt", padding=True)
-        import torch
-        with torch.inference_mode():
-            hf = ref["model"].get_image_features(pixel_values=inputs["pixel_values"])
-            hf_text = ref["model"].get_text_features(input_ids=inputs["input_ids"],
-                                                       attention_mask=inputs.get("attention_mask"))
-        hf_image = hf[0].cpu().numpy()
-        hf_text = hf_text.cpu().numpy()
+        hf_image = np.asarray(ref["image_vectors"][index])
+        hf_text = np.asarray(ref["text_vectors"][index])
         reference_scores = [cosine(hf_image, vector) for vector in hf_text]
-        reference_correct += int(max(range(len(reference_scores)),
-                                     key=reference_scores.__getitem__) == case["correct"])
         image_cosines.append(cosine(image_vec, hf_image))
         text_cosines.extend(cosine(native, target) for native, target in zip(text_vecs, hf_text))
         native_images.append(image_vec.tolist())
@@ -274,15 +264,10 @@ def _clip_quality(plan, model, binaries, root, ref):
               "--text", normalised_probe, "--text", probe], cwd=probe_work)
     native_normalised = np.load(probe_work / "text_vec_0.npy").reshape(-1)
     native_raw = np.load(probe_work / "text_vec_1.npy").reshape(-1)
-    probe_inputs = processor(text=[normalised_probe, probe], return_tensors="pt", padding=True)
-    import torch
-    with torch.inference_mode():
-        probe_features = ref["model"].get_text_features(
-            input_ids=probe_inputs["input_ids"],
-            attention_mask=probe_inputs.get("attention_mask")).cpu().numpy()
+    probe_features = np.asarray(ref["probe_features"])
     return {"image_cosine_min": min(image_cosines), "text_cosine_min": min(text_cosines),
             "accuracy": correct / len(cases["cases"]),
-            "reference_accuracy": reference_correct / len(cases["cases"]),
+            "reference_accuracy": ref["reference_accuracy"],
             "zsl_agreement": zsl_agreement / len(cases["cases"]),
             "tokenizer_parity_probe": {
                 "normalized_text": normalised_probe,
@@ -296,23 +281,21 @@ def _reranking_quality(model, server, reference):
     corpus = json.loads((FIXTURES / "corpus.json").read_text(encoding="utf-8"))
     docs, queries = corpus["documents"], corpus["queries"]
     rankings, ref_rankings, gains, scores, reference_scores = [], [], [], [], []
-    for item in queries:
-        document_texts = [doc["text"] for doc in docs]
-        result = _rerank(server, model, item["query"], document_texts, server.parent)
-        row = [0.0] * len(document_texts)
-        for entry in result:
-            row[entry["index"]] = float(entry["relevance_score"])
-        reference_row = reference["cross_encoder"].predict(
-            [(item["query"], text) for text in document_texts],
-            activation_fn=reference["identity"], convert_to_numpy=True,
-            show_progress_bar=False).reshape(-1).tolist()
-        rankings.append([docs[index]["id"] for index in sorted(
-            range(len(docs)), key=lambda index: row[index], reverse=True)])
-        ref_rankings.append([docs[index]["id"] for index in sorted(
-            range(len(docs)), key=lambda index: reference_row[index], reverse=True)])
-        scores.append(row)
-        reference_scores.append(list(map(float, reference_row)))
-        gains.append(item["relevance"])
+    with _rerank(server, model, server.parent) as score:
+        for query_index, item in enumerate(queries):
+            document_texts = [doc["text"] for doc in docs]
+            result = score(item["query"], document_texts)
+            row = [0.0] * len(document_texts)
+            for entry in result:
+                row[entry["index"]] = float(entry["relevance_score"])
+            reference_row = reference["reference_scores"][query_index]
+            rankings.append([docs[index]["id"] for index in sorted(
+                range(len(docs)), key=lambda index: row[index], reverse=True)])
+            ref_rankings.append([docs[index]["id"] for index in sorted(
+                range(len(docs)), key=lambda index: reference_row[index], reverse=True)])
+            scores.append(row)
+            reference_scores.append(list(map(float, reference_row)))
+            gains.append(item["relevance"])
     return {"ranked": rankings, "reference_ranked": ref_rankings, "scores": scores,
             "reference_scores": reference_scores, "gains": gains,
             "max_reference_logit_error": max(abs(a - b) for left, right in
@@ -352,16 +335,91 @@ def _references(plan, source):
         return None
 
 
-def _evaluate(plan, model, binaries, root, source):
-    ref = _references(plan, source)
-    if ref is None:
+def _reference_outputs(plan, reference):
+    try:
+        if plan["engine"] == "clip.cpp":
+            import torch
+            from PIL import Image
+            from transformers import CLIPProcessor
+
+            cases = json.loads((FIXTURES / "zsl.json").read_text(encoding="utf-8"))
+            processor = CLIPProcessor.from_pretrained(str(reference["source"]),
+                                                      local_files_only=True)
+            image_vectors, text_vectors, correct = [], [], 0
+            for case in cases["cases"]:
+                labels = [_normalise_clip(label) for label in case["labels"]]
+                image = Image.open(FIXTURES / case["image"]).convert("RGB")
+                inputs = processor(text=labels, images=image, return_tensors="pt", padding=True)
+                with torch.inference_mode():
+                    image_features = reference["model"].get_image_features(
+                        pixel_values=inputs["pixel_values"])
+                    text_features = reference["model"].get_text_features(
+                        input_ids=inputs["input_ids"],
+                        attention_mask=inputs.get("attention_mask"))
+                image_vector = image_features[0].cpu().numpy()
+                text_vectors_for_case = text_features.cpu().numpy()
+                scores = [cosine(image_vector, vector) for vector in text_vectors_for_case]
+                correct += int(max(range(len(scores)), key=scores.__getitem__) == case["correct"])
+                image_vectors.append(image_vector.tolist())
+                text_vectors.append(text_vectors_for_case.tolist())
+            probe = cases["tokenizer_parity_probe"]
+            normalised_probe = _normalise_clip(probe)
+            inputs = processor(text=[normalised_probe, probe], return_tensors="pt", padding=True)
+            with torch.inference_mode():
+                probe_features = reference["model"].get_text_features(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs.get("attention_mask")).cpu().numpy()
+            return {"image_vectors": image_vectors, "text_vectors": text_vectors,
+                    "reference_accuracy": correct / len(cases["cases"]),
+                    "probe_features": probe_features.tolist()}
+
+        corpus = json.loads((FIXTURES / "corpus.json").read_text(encoding="utf-8"))
+        docs, queries = corpus["documents"], corpus["queries"]
+        if plan["task"] == "embeddings":
+            prompts = plan.get("contract", {}).get("prompts", {})
+            document_texts = [_template(item["text"], prompts.get("document", ""))
+                              for item in docs]
+            query_texts = [_template(item["query"], prompts.get("query", ""))
+                           for item in queries]
+            model = reference["sentence_transformer"]
+            reference_docs = model.encode(document_texts, normalize_embeddings=True,
+                                          convert_to_numpy=True)
+            reference_queries = model.encode(query_texts, normalize_embeddings=True,
+                                              convert_to_numpy=True)
+            return {"reference_document_vectors": reference_docs,
+                    "reference_query_vectors": reference_queries}
+
+        pairs = [(item["query"], doc["text"]) for item in queries for doc in docs]
+        logits = reference["cross_encoder"].predict(
+            pairs, activation_fn=reference["identity"], convert_to_numpy=True,
+            show_progress_bar=False)
+        return {"reference_scores": logits.reshape(len(queries), len(docs)).tolist()}
+    except ImportError:
+        return None
+
+
+def _evaluate(plan, model, binaries, root, references):
+    if references is None:
         return {"structural_only": True,
                 "blocker": "reference libraries not installed: pip install agentquantix[retrieval]"}
     if plan["engine"] == "clip.cpp":
-        return _clip_quality(plan, model, binaries, root, ref)
+        return _clip_quality(plan, model, binaries, root, references)
     if plan["task"] == "embeddings":
-        return _embedding_quality(plan, model, ref, binaries["llama-embedding"])
-    return _reranking_quality(model, binaries["llama-server"], ref)
+        return _embedding_quality(plan, model, references, binaries["llama-embedding"])
+    return _reranking_quality(model, binaries["llama-server"], references)
+
+
+def _snapshot_patterns(plan):
+    patterns = ["*.json", "*.txt", "*.model", "*.safetensors", "tokenizer*",
+                "vocab*", "merges*", "spiece*", "sentencepiece*"]
+    modules = (plan.get("contract") or {}).get("module_directories") or []
+    for directory in dict.fromkeys(("1_Pooling", *modules)):
+        patterns.append(f"{directory.rstrip('/')}/*")
+    if not any(name.lower().endswith(".safetensors") for name in plan.get("files", [])):
+        patterns.append("*.bin")
+    ignored = ["onnx/*", "onnx/**", "openvino/*", "openvino/**", "*.h5",
+               "**/*.h5", "*.msgpack", "**/*.msgpack", "*.ot", "**/*.ot"]
+    return patterns, ignored
 
 
 def run_release(plan, *, user_approved, publish=False):
@@ -382,8 +440,12 @@ def run_release(plan, *, user_approved, publish=False):
     if handle is None:
         raise RuntimeError(f"no execution runtime session for {plan['engine']}")
     binaries = dict(zip(required, require_binaries(handle, *required)))
-    source = Path(snapshot_download(plan["model"], revision=plan.get("source_revision"),
-                                    token=config.TOKEN))
+    allow_patterns, ignore_patterns = _snapshot_patterns(plan)
+    source = Path(snapshot_download(
+        plan["model"], revision=plan.get("source_revision"), token=config.TOKEN,
+        allow_patterns=allow_patterns, ignore_patterns=ignore_patterns))
+    reference = _references(plan, source)
+    references = _reference_outputs(plan, reference) if reference is not None else None
     journal = json.loads(journal_path.read_text(encoding="utf-8")) if journal_path.is_file() else {}
     run = {"plan": plan, "runtime_snapshot": handle.snapshot(),
            "created": saved.get("created") or time.strftime("%Y-%m-%dT%H:%M:%SZ")}
@@ -398,7 +460,7 @@ def run_release(plan, *, user_approved, publish=False):
     for quant in quants:
         model = f16 if quant.casefold() == "f16" else \
             _quantize(plan, f16, binaries, root, journal, journal_path, quant)
-        quality = _evaluate(plan, model, binaries, root, source)
+        quality = _evaluate(plan, model, binaries, root, references)
         if quant.casefold() == "f16":
             baseline = quality
             if plan["engine"] == "clip.cpp" and not quality.get("structural_only"):
@@ -474,9 +536,10 @@ def publish_bundle(root, plan, candidates, api=None):
     publication_root = root / "publication"
     publication_root.mkdir(parents=True, exist_ok=True)
     members = []
+    model_name = plan.get("model", "retrieval-model").rsplit("/", 1)[-1]
     for item in passing:
         path = Path(item["path"])
-        destination = f"{path.name}"
+        destination = f"{model_name}-{item['quant'].upper()}.gguf"
         shutil.copy2(path, publication_root / destination)
         members.append({"path": destination, "quant": item["quant"],
                         "sha256": item["sha256"], "bytes": item["bytes"]})
@@ -488,17 +551,7 @@ def publish_bundle(root, plan, candidates, api=None):
     saved_run = json.loads((root / "run.json").read_text(encoding="utf-8"))
     snapshot = saved_run.get("runtime_snapshot", {})
     model_path = f"./retrieval-model/{members[0]['path']}"
-    if plan["engine"] == "clip.cpp":
-        commands = [f"extract -m {model_path} -t 4 --image image.png --text 'a red circle'",
-                    f"zsl -m {model_path} -t 4 --image image.png --text 'a red circle' --text 'a blue square'"]
-    elif plan["task"] == "reranking":
-        commands = [f"llama-server --reranking -m {model_path} --host 127.0.0.1 --port 8080",
-                    "curl -s http://127.0.0.1:8080/v1/rerank -H 'Content-Type: application/json' "
-                    "-d '{\"query\":\"query\",\"documents\":[\"document\"]}'"]
-    else:
-        pooling = plan["contract"].get("pooling") or "mean"
-        commands = [f"llama-embedding -m {model_path} -p 'query text' --pooling {pooling} "
-                    "--embd-normalize 2 --embd-output-format array"]
+    commands = runtime_commands(plan["engine"], plan["task"], plan["contract"], model_path)
     public_quality = {
         item["quant"]: {key: value for key, value in item["quality"].items()
                         if "vectors" not in key}

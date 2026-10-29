@@ -50,8 +50,10 @@ def test_plan_includes_revision_size_license_contract_and_fixture_hashes(monkeyp
     config_file = tmp_path / "config.json"
     config_file.write_text(json.dumps({"architectures": ["BertModel"]}), encoding="utf-8")
     modules_file = tmp_path / "modules.json"
-    modules_file.write_text(json.dumps([{"type": "sentence_transformers.models.Pooling"}]),
-                            encoding="utf-8")
+    modules_file.write_text(json.dumps([
+        {"type": "sentence_transformers.models.Transformer", "path": "0_Transformer"},
+        {"type": "sentence_transformers.models.Pooling", "path": "1_Pooling"}]),
+        encoding="utf-8")
     pooling_file = tmp_path / "pooling.json"
     pooling_file.write_text(json.dumps({"pooling_mode_mean_tokens": True}), encoding="utf-8")
     files = {"config.json": config_file, "modules.json": modules_file,
@@ -81,6 +83,7 @@ def test_plan_includes_revision_size_license_contract_and_fixture_hashes(monkeyp
     plan = retrieval.plan_release("org/encoder", task="embeddings", engine="llama.cpp",
                                   quants=["F16"])
     assert metadata_requests == [True]
+    assert plan["files"] == ["config.json", "modules.json", "1_Pooling/config.json"]
     assert plan["source_bytes"] == 120
     assert plan["source_revision"] == "a" * 40
     assert plan["license"] == "apache-2.0"
@@ -90,6 +93,50 @@ def test_plan_includes_revision_size_license_contract_and_fixture_hashes(monkeyp
     assert plan["publication"] == (
         "one atomic bundle commit of passing quants after native inference parity and retrieval-quality gates")
     assert plan["review"] == "none"
+    assert plan["contract"]["module_directories"] == ["0_Transformer", "1_Pooling"]
+
+
+def test_clip_plan_records_installed_runtime_revision(monkeypatch):
+    import huggingface_hub
+
+    info = SimpleNamespace(
+        sha="a" * 40, siblings=[SimpleNamespace(rfilename="config.json", size=10)],
+        gated=False, card_data=SimpleNamespace(license="apache-2.0"))
+
+    class Api:
+        def __init__(self, token=None):
+            pass
+
+        def model_info(self, repo_id, *, files_metadata):
+            return info
+
+    inspect_calls = []
+
+    def inspect(self, engine, verify=False):
+        inspect_calls.append((engine, verify))
+        return SimpleNamespace(revision="d" * 40)
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", Api)
+    monkeypatch.setattr(retrieval, "source_contract", lambda *args: {
+        "contract": {"architectures": ["CLIPModel"]}, "blockers": []})
+    monkeypatch.setattr("agentquantix.runtimes.RuntimeManager.inspect", inspect)
+    plan = retrieval.plan_release("org/clip", task="zero-shot-image-classification",
+                                  engine="clip.cpp", quants=["F16"])
+    assert plan["engine_revision"] == "d" * 40
+    assert inspect_calls == [("clip.cpp", False)]
+
+
+def test_snapshot_patterns_use_safetensors_when_available_and_exclude_optional_formats():
+    plan = {"files": ["model.safetensors", "pytorch_model.bin"],
+            "contract": {"module_directories": ["0_Transformer", "1_Pooling"]}}
+    allow, ignore = release._snapshot_patterns(plan)
+    assert "*.safetensors" in allow and "*.bin" not in allow
+    assert "1_Pooling/*" in allow and "0_Transformer/*" in allow
+    assert {"onnx/**", "openvino/**", "*.h5", "**/*.h5", "*.msgpack",
+            "**/*.msgpack", "*.ot", "**/*.ot"} <= set(ignore)
+    fallback, _ = release._snapshot_patterns(
+        {"files": ["pytorch_model.bin"], "contract": {"module_directories": []}})
+    assert "*.bin" in fallback
 
 
 @pytest.mark.parametrize("settings", [
@@ -105,12 +152,21 @@ def test_unsupported_pooling_is_blocked_without_guessing(settings):
 
 
 def test_metrics_match_hand_calculated_values():
+    import numpy as np
+
     assert retrieval.cosine([1, 0], [1, 0]) == 1
+    assert retrieval.cosine(np.array([1, 0]), np.array([1, 0])) == 1
     assert retrieval.recall_at_k(["a", "b"], {"b", "c"}, 1) == 0
+    assert retrieval.recall_at_k(np.array(["a", "b"]), np.array(["b", "c"]), 1) == 0
     assert retrieval.mrr([(["x", "a"], {"a"})]) == 0.5
+    assert retrieval.mrr([(np.array(["x", "a"]), np.array(["a"]))]) == 0.5
     expected = (1 + 3 / 1.584962500721156) / (3 + 1 / 1.584962500721156)
     assert retrieval.ndcg_at_k(["b", "a"], {"a": 2, "b": 1}, 2) == pytest.approx(expected)
+    assert retrieval.ndcg_at_k(np.array(["b", "a"]), {"a": 2, "b": 1}, 2) == \
+        pytest.approx(expected)
     assert retrieval.top1_agreement([["a"], ["b"]], [["a"], ["c"]]) == 0.5
+    assert retrieval.top1_agreement(np.array([["a"], ["b"]]),
+                                    np.array([["a"], ["c"]])) == 0.5
 
 
 def test_clip_text_normalization_and_rank_correlation():
@@ -165,10 +221,9 @@ def test_authored_fixtures_are_cc0_and_stable_224px_pngs():
         assert struct.unpack(">II", image[16:24]) == (224, 224)
 
 
-def test_reference_missing_is_structural_only(monkeypatch, tmp_path):
-    monkeypatch.setattr(release, "_references", lambda *args: None)
+def test_reference_missing_is_structural_only(tmp_path):
     result = release._evaluate({"engine": "llama.cpp", "task": "embeddings"},
-                               tmp_path / "model.gguf", {}, tmp_path, tmp_path)
+                               tmp_path / "model.gguf", {}, tmp_path, None)
     assert result == {
         "structural_only": True,
         "blocker": "reference libraries not installed: pip install agentquantix[retrieval]"}
@@ -215,8 +270,13 @@ def test_stubbed_run_resumes_with_frozen_runtime_and_approved_plan(monkeypatch, 
     monkeypatch.setattr(runtime_control, "ensure_runtime", ensure_runtime)
     monkeypatch.setattr(release, "require_binaries",
                         lambda runtime, *names: ["/native/" + name for name in names])
-    monkeypatch.setattr(release, "snapshot_download",
-                        lambda *args, **kwargs: str(source))
+    download_requests = []
+
+    def snapshot(*args, **kwargs):
+        download_requests.append(kwargs)
+        return str(source)
+
+    monkeypatch.setattr(release, "snapshot_download", snapshot)
 
     def convert(plan, source, runtime, root, journal, journal_path):
         output = root / "model-f16.gguf"
@@ -224,19 +284,58 @@ def test_stubbed_run_resumes_with_frozen_runtime_and_approved_plan(monkeypatch, 
         return output
 
     monkeypatch.setattr(release, "_convert", convert)
-    monkeypatch.setattr(release, "_evaluate", lambda *args: {
-        "reference_cosine_min": 1.0, "dimension": 2, "reference_dimension": 2,
-        "vectors_finite": True, "vectors_unit_norm": True, "mrr": 1.0,
-        "ndcg_at_5": 1.0})
+
+    def quantize(plan, f16, binaries, root, journal, journal_path, quant):
+        output = root / f"model-{quant}.gguf"
+        output.write_bytes(quant.encode())
+        return output
+
+    monkeypatch.setattr(release, "_quantize", quantize)
+    reference_calls, prepared_references, evaluation_references = [], [], []
+
+    def reference_factory(plan, source):
+        reference = object()
+        reference_calls.append(reference)
+        return reference
+
+    def prepare_reference(plan, reference):
+        prepared = {"source_reference": reference}
+        prepared_references.append(prepared)
+        return prepared
+
+    def evaluate(plan, model, binaries, root, references):
+        evaluation_references.append(references)
+        return {"reference_cosine_min": 1.0, "dimension": 2, "reference_dimension": 2,
+                "vectors_finite": True, "vectors_unit_norm": True, "mrr": 1.0,
+                "ndcg_at_5": 1.0, "document_vectors": [[1.0, 0.0]],
+                "query_vectors": [[1.0, 0.0]]}
+
+    monkeypatch.setattr(release, "_references", reference_factory)
+    monkeypatch.setattr(release, "_reference_outputs", prepare_reference)
+    monkeypatch.setattr(release, "_evaluate", evaluate)
     plan = {"model": "org/embed", "task": "embeddings", "engine": "llama.cpp",
             "status": "ready", "blockers": [], "source_revision": "c" * 40,
-            "quants": ["F16"], "quality_profile": {}}
+            "quants": ["F16", "Q8_0"], "quality_profile": {},
+            "files": ["config.json", "model.safetensors", "pytorch_model.bin",
+                      "onnx/model.onnx", "openvino/config.json", "model.h5",
+                      "model.msgpack", "model.ot"],
+            "contract": {"module_directories": ["0_Transformer"]}}
     first = release.run_release(plan, user_approved=True)
     second = release.run_release(plan, user_approved=True)
-    assert first["candidates"][0]["status"] == "passed"
-    assert second["candidates"][0]["status"] == "passed"
+    assert all(item["status"] == "passed" for item in first["candidates"])
+    assert all(item["status"] == "passed" for item in second["candidates"])
     assert frozen_inputs[0] is None
     assert frozen_inputs[1]["revision"] == handle.revision
+    assert len(reference_calls) == len(prepared_references) == 2
+    assert evaluation_references[0] is evaluation_references[1]
+    assert evaluation_references[2] is evaluation_references[3]
+    assert evaluation_references[0] is not evaluation_references[2]
+    assert len(download_requests) == 2
+    for request in download_requests:
+        assert "*.safetensors" in request["allow_patterns"]
+        assert "*.bin" not in request["allow_patterns"]
+        assert "0_Transformer/*" in request["allow_patterns"]
+        assert "onnx/**" in request["ignore_patterns"]
 
 
 def test_rerank_server_is_always_terminated(monkeypatch, tmp_path):
@@ -280,8 +379,38 @@ def test_rerank_server_is_always_terminated(monkeypatch, tmp_path):
 
     monkeypatch.setattr(release, "urlopen", request)
     with pytest.raises(OSError, match="request failed"):
-        release._rerank("llama-server", "model.gguf", "query", ["doc"], tmp_path)
+        with release._rerank("llama-server", "model.gguf", tmp_path) as score:
+            score("query", ["doc"])
     assert process.terminated
+
+
+def test_rerank_quality_uses_one_server_for_all_fixture_queries(monkeypatch, tmp_path):
+    from contextlib import contextmanager
+
+    starts, requests = [], []
+
+    @contextmanager
+    def server(binary, model, root):
+        starts.append((binary, model, root))
+
+        def score(query, documents):
+            requests.append((query, len(documents)))
+            return [{"index": index, "relevance_score": float(len(documents) - index)}
+                    for index in range(len(documents))]
+
+        yield score
+
+    monkeypatch.setattr(release, "_rerank", server)
+    corpus = json.loads((Path(retrieval.__file__).resolve().parent /
+                         "fixtures/retrieval/corpus.json").read_text(encoding="utf-8"))
+    references = {"reference_scores": [
+        [float(len(corpus["documents"]) - index) for index in range(len(corpus["documents"]))]
+        for _ in corpus["queries"]]}
+    quality = release._reranking_quality(
+        Path("model.gguf"), Path("llama-server"), references)
+    assert len(starts) == 1
+    assert len(requests) == len(corpus["queries"])
+    assert quality["scores"]
 
 
 def test_local_manifest_verifies_member_hash_and_size(tmp_path):
@@ -325,6 +454,66 @@ def test_card_contains_commands_metrics_and_license_distinction():
     assert "0.9036" in card and "runtime code license" in card
 
 
+def test_reranking_card_describes_raw_unbounded_logits():
+    card = retrieval.render_card(retrieval.RetrievalBundle(
+        engine="llama.cpp", task="reranking", family="bge-reranker",
+        architecture="XLMRobertaForSequenceClassification", source_repo="org/reranker",
+        source_revision="abc", engine_revision="def", members=[], contract={}))
+    assert "`relevance_score` is a raw, unbounded logit, not a probability." in card
+
+
+def test_publish_bundle_uses_shared_commands_prompts_and_model_quant_names(
+        monkeypatch, tmp_path):
+    from agentquantix.pipeline import voice_release
+
+    class Api:
+        operations = []
+
+        def create_repo(self, **kwargs):
+            pass
+
+        def create_commit(self, *, operations, **kwargs):
+            self.operations = operations
+
+    api = Api()
+
+    def remote_files(api, repo_id):
+        return {
+            operation.path_in_repo: {
+                "bytes": Path(operation.path_or_fileobj).stat().st_size,
+                "sha256": release._hash(operation.path_or_fileobj)}
+            for operation in api.operations}
+
+    monkeypatch.setattr(voice_release, "_remote_files", remote_files)
+    root = tmp_path / "run"
+    root.mkdir()
+    model = root / "converted_ggml-model-f16.gguf"
+    model.write_bytes(b"quantized model")
+    (root / "run.json").write_text(json.dumps({
+        "runtime_snapshot": {"revision": "b" * 40}}), encoding="utf-8")
+    plan = {"engine": "llama.cpp", "task": "embeddings",
+            "model": "BAAI/bge-small-en-v1.5", "target_repo": "owner/bge-small-en-v1.5",
+            "source_revision": "a" * 40, "architectures": ["BertModel"],
+            "contract": {"pooling": "mean",
+                         "prompts": {"query": "query: {query}", "document": "passage: "}},
+            "quality_profile": {}, "fixtures": {}, "license": "apache-2.0"}
+    candidate = {"status": "passed", "path": str(model), "quant": "Q8_0",
+                 "sha256": release._hash(model), "bytes": model.stat().st_size,
+                 "quality": {"reference_cosine_min": 1.0}}
+    result = release.publish_bundle(root, plan, [candidate], api=api)
+    manifest = json.loads((root / "publication/manifest.json").read_text(encoding="utf-8"))
+    card = (root / "publication/README.md").read_text(encoding="utf-8")
+    expected_member = "bge-small-en-v1.5-Q8_0.gguf"
+    assert result["verified"]
+    assert manifest["members"][0]["path"] == expected_member
+    assert (root / "publication" / expected_member).is_file()
+    assert manifest["runtime_commands"] == retrieval.runtime_commands(
+        "llama.cpp", "embeddings", plan["contract"],
+        f"./retrieval-model/{expected_member}")
+    assert "Query prompt prefix to prepend: `query: `" in card
+    assert "Document prompt prefix to prepend: `passage: `" in card
+
+
 def test_cli_parser_accepts_retrieval_run_contract():
     args = cli.build_parser().parse_args([
         "run", "org/embed", "--task", "embeddings", "--target", "owner/embed",
@@ -332,6 +521,29 @@ def test_cli_parser_accepts_retrieval_run_contract():
     assert args.task == "embeddings"
     assert args.target == "owner/embed" and args.quant == ["Q8_0"]
     assert args.publish is True
+
+
+def test_saved_plan_routing_uses_retrieval_pipeline_registry(monkeypatch, tmp_path):
+    from agentquantix.agent import tools
+
+    task_name = "future-retrieval-task"
+    task_spec = SimpleNamespace(pipeline="retrieval")
+    monkeypatch.setitem(cli.TASKS, task_name, task_spec)
+    monkeypatch.setitem(tools.TASKS, task_name, task_spec)
+    plan = {"task": task_name, "engine": "future-engine"}
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    monkeypatch.setattr(cli, "_check_applicable", lambda *args: None)
+    monkeypatch.setattr(cli, "_run_retrieval",
+                        lambda args, route=None, saved=None: ("retrieval", saved))
+    assert cli.cmd_run(cli.build_parser().parse_args(
+        ["run", "--plan", str(plan_path), "--yes"])) == ("retrieval", plan)
+
+    monkeypatch.setattr(tools.actions, "start_retrieval",
+                        lambda approved, **kwargs: (approved, kwargs))
+    started, options = tools._start({"user_approved": True, "plan": plan})
+    assert started is plan
+    assert options == {"user_approved": True, "publish": False}
 
 
 @pytest.mark.parametrize("reviewer", ["Reviewer", ""])

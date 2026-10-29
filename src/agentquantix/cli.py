@@ -288,10 +288,8 @@ def cmd_run(args):
         if len(args.model) > 1:
             raise ValueError("a saved plan describes exactly one model")
         saved = json.loads(Path(args.plan).read_text(encoding="utf-8"))
-        if saved.get("engine") in ("llama.cpp", "clip.cpp") and \
-                saved.get("task") in ("embeddings", "reranking",
-                                      "zero-shot-image-classification",
-                                      "image-feature-extraction"):
+        task_spec = TASKS.get(saved.get("task"))
+        if task_spec and task_spec.pipeline == RETRIEVAL:
             _check_applicable(args, RETRIEVAL)
             return _run_retrieval(args, saved=saved)
         _check_applicable(args, MEDIA)
