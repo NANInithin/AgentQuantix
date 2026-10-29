@@ -170,6 +170,7 @@ def test_cli_runtime_update_reuses_storage_and_approved_exact_target(surface, mo
 
 
 def test_cli_install_revision_passes_exact_sha_to_prepare(surface, monkeypatch):
+    surface.manager.installed = True
     monkeypatch.setattr(runtime_cli.sys, "stdin", SimpleNamespace(isatty=lambda: False))
     revision = "4af143229384fb6da3f373dc87de145ae954609b"
     args = parser().parse_args([
@@ -183,6 +184,7 @@ def test_cli_install_revision_passes_exact_sha_to_prepare(surface, monkeypatch):
         "repository": "0xShug0/audio.cpp",
     }
     assert kwargs["persistent"] is True
+    assert kwargs["update"] is True
 
 
 def test_cli_install_revision_rejects_tags_before_upstream_check(surface, capsys):

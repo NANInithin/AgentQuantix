@@ -112,7 +112,8 @@ def command(args):
                 return 0
         result = runtime_tools.call("prepare_runtime", {
             "engine": args.engine, "persistent": persistent, "user_approved": True,
-            "update_approved": action == "update", "target_revision": target,
+            "update_approved": action == "update" or (action == "install" and revision is not None),
+            "target_revision": target,
             "compute_backend": args.compute_backend, "targets": args.target,
         })
         _print(result)
