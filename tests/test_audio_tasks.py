@@ -292,13 +292,22 @@ def test_generic_conversion_release_records_source_and_alignment_role(
         lambda *_args: (backend, source, "source-revision", Path("cli"),
                         Path("converter"), audio_dir, models))
 
+    conversion_options = []
+
     def convert(_source, _backend, _converter, _audio_dir, _models, quant):
         output = models / f"{quant}.gguf"
         output.write_bytes(b"converted")
         return output
 
+    def convert_with_options(_source, _backend, _converter, _audio_dir,
+                             _models, quant, **kwargs):
+        conversion_options.append(kwargs)
+        return convert(_source, _backend, _converter, _audio_dir, _models,
+                       quant)
+
     captured = []
-    monkeypatch.setattr(voice_release, "convert_audiocpp_model", convert)
+    monkeypatch.setattr(
+        voice_release, "convert_audiocpp_model", convert_with_options)
     monkeypatch.setattr(
         voice_release, "score_audiocpp_align",
         lambda _backend, model, *_args: {
@@ -314,6 +323,10 @@ def test_generic_conversion_release_records_source_and_alignment_role(
             quants=["F16", "Q8_0"], publish=False,
             family="qwen3_forced_aligner"))
     assert result["baseline_quant"] == "F16"
+    assert conversion_options == [
+        {"match_gguf_namespaces": True},
+        {"match_gguf_namespaces": True},
+    ]
     assert all(item["quality"]["task_gate"]["passed"]
                for item in result["results"].values())
     assert captured[0].primary.role == "alignment-model"

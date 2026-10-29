@@ -526,7 +526,8 @@ def _audiocpp_spec(audio_dir: Path, family: str) -> tuple[Path, dict]:
     return path, spec
 
 
-def _audiocpp_tensor_inputs(source: Path, spec: dict) -> list[str]:
+def _audiocpp_tensor_inputs(source: Path, spec: dict, *,
+                            match_gguf_namespaces: bool = False) -> list[str]:
     """Resolve the generic safetensors input contract from a model spec."""
     source_contract = next((item for item in spec.get("sources", [])
                             if item.get("format") == "safetensors"), None)
@@ -534,6 +535,13 @@ def _audiocpp_tensor_inputs(source: Path, spec: dict) -> list[str]:
         raise voice.VoiceValidationError(
             f"audio.cpp {spec['family']} has no safetensors conversion contract; "
             "use one of the GGUF packages declared by that backend catalog")
+    gguf_contract = next((item for item in spec.get("sources", [])
+                          if item.get("format") == "gguf"), None)
+    if match_gguf_namespaces and gguf_contract is None:
+        raise voice.VoiceValidationError(
+            f"audio.cpp {spec['family']} has no GGUF conversion contract")
+    output_tensors = (gguf_contract.get("tensors", {})
+                      if gguf_contract is not None else {})
     roots = source_contract.get("roots", {})
     inputs = []
     missing = []
@@ -551,7 +559,21 @@ def _audiocpp_tensor_inputs(source: Path, spec: dict) -> list[str]:
         path = (source / root_value / relative).resolve()
         if not path.is_file():
             missing.append(f"{namespace}={path}")
-        inputs.append(f"{namespace}={path}")
+        output_namespace = namespace
+        if match_gguf_namespaces:
+            output_tensor = output_tensors.get(namespace)
+            if output_tensor is None:
+                raise voice.VoiceValidationError(
+                    f"audio.cpp {spec['family']} safetensors input "
+                    f"{namespace!r} has no GGUF tensor mapping")
+            output_namespace = (output_tensor.get("prefix", "")
+                                if isinstance(output_tensor, dict) else "")
+            if not isinstance(output_namespace, str):
+                raise voice.VoiceValidationError(
+                    f"audio.cpp {spec['family']} has an invalid GGUF prefix "
+                    f"for {namespace!r}")
+        inputs.append(
+            f"{output_namespace}={path}" if output_namespace else str(path))
     if missing:
         raise voice.VoiceValidationError(
             f"{spec['family']} source is missing audio.cpp-declared tensor "
@@ -562,8 +584,9 @@ def _audiocpp_tensor_inputs(source: Path, spec: dict) -> list[str]:
     return inputs
 
 
-def _prepare_audiocpp_tensor_sources(source: Path, spec: dict,
-                                     audio_dir: Path) -> list[str]:
+def _prepare_audiocpp_tensor_sources(
+        source: Path, spec: dict, audio_dir: Path, *,
+        match_gguf_namespaces: bool = False) -> list[str]:
     """Adapt source formats through audio.cpp's own pinned utilities.
 
     Some official repositories use a safe PyTorch weights-only checkpoint for
@@ -580,7 +603,8 @@ def _prepare_audiocpp_tensor_sources(source: Path, spec: dict,
     source_contract = next((item for item in spec.get("sources", [])
                             if item.get("format") == "safetensors"), None)
     if source_contract is None:
-        return _audiocpp_tensor_inputs(source, spec)
+        return _audiocpp_tensor_inputs(
+            source, spec, match_gguf_namespaces=match_gguf_namespaces)
 
     roots = source_contract.get("roots", {})
     for namespace, value in source_contract.get("tensors", {}).items():
@@ -616,12 +640,14 @@ def _prepare_audiocpp_tensor_sources(source: Path, spec: dict,
                 f"audio.cpp preparation package {package_id} did not produce "
                 f"a valid {expected.name}")
 
-    return _audiocpp_tensor_inputs(source, spec)
+    return _audiocpp_tensor_inputs(
+        source, spec, match_gguf_namespaces=match_gguf_namespaces)
 
 
 def convert_audiocpp_model(source: Path, backend: voice.VoiceBackend,
                            converter: Path, audio_dir: Path, output_dir: Path,
-                           quant: str) -> Path:
+                           quant: str, *,
+                           match_gguf_namespaces: bool = False) -> Path:
     """Create and inspect one self-contained audio.cpp-native GGUF."""
     quant = quant.upper()
     if quant not in voice.AUDIOCPP_QUANTS:
@@ -634,7 +660,8 @@ def convert_audiocpp_model(source: Path, backend: voice.VoiceBackend,
         command = [converter]
         spec_path, spec = _audiocpp_spec(audio_dir, backend.family)
         for tensor_input in _prepare_audiocpp_tensor_sources(
-                source, spec, audio_dir):
+                source, spec, audio_dir,
+                match_gguf_namespaces=match_gguf_namespaces):
             command += ["--input", tensor_input]
         command += [
             "--root", source,
@@ -1731,8 +1758,12 @@ def _run_audiocpp_release(repo_id: str, target_repo: str,
         started = time.perf_counter()
         if not package_mode:
             assert source is not None
+            conversion_options = (
+                {"match_gguf_namespaces": True}
+                if track in (voice.SEP, voice.VC, voice.ALIGN) else {})
             model = convert_audiocpp_model(
-                source, backend, converter, audio_dir, models, quant)
+                source, backend, converter, audio_dir, models, quant,
+                **conversion_options)
             return model, (model,), None, time.perf_counter() - started
         runtime_model, paths, package_id = install_audiocpp_package(
             audio_dir, backend, repo_id, models, quant)
