@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.3 — unreleased development
+
+- Add retrieval tasks for embeddings and reranking on llama.cpp, plus image
+  feature extraction and zero-shot image classification on clip.cpp. Use
+  `--task` to resolve a task explicitly when metadata is ambiguous; list saved
+  retrieval runs with `aqx runs --pipeline retrieval`.
+- Use `llama-server --embedding` with `/v1/embeddings` for embeddings and
+  `llama-server --reranking` with `/v1/rerank` for reranking. clip.cpp uses
+  `extract`, `zsl` and `quantize`. Reranking `relevance_score` values are raw,
+  unbounded logits, not probabilities.
+- Normalize CLIP text prompts to lowercase and remove punctuation before
+  encoding. The `llama-embedding` CLI is not used: `--pooling rank` produces
+  broken output at the pinned llama.cpp revision, and its async logger can
+  truncate stdout nondeterministically. The server embedding endpoint avoids
+  that CLI path.
+- Add the optional `retrieval` extra for reference evaluation dependencies:
+  `pip install "agentquantix[retrieval]"`.
+
 ## 0.5.2 — unreleased development
 
 - Add a shared task/capability registry (`agentquantix.tasks`) and metadata

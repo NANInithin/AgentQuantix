@@ -71,12 +71,13 @@ aqx inspect <model>  # task, engine and full detail for any repo, read-only
 aqx run <model>   # steps 4-5 for any supported task, asks before starting
 ```
 
-One set of commands covers every task. `aqx run org/model` routes the model by
-its Hub metadata and the installed engine catalogs to llama.cpp text, the voice
-TTS/ASR backends, or stable-diffusion.cpp media; `--task` is only needed when
-the route reports a genuine ambiguity. Recognised tasks whose adapters are still
-on the roadmap (embeddings, reranking, vision, forecasting, ...) are reported as
-blocked rather than sent through the text pipeline.
+One set of commands covers every task. `aqx run org/model` routes by Hub
+metadata and installed engine catalogs to llama.cpp text, embeddings, or
+reranking; clip.cpp image-feature extraction or zero-shot image classification;
+the voice TTS/ASR backends; or stable-diffusion.cpp media. Use `--task` when the
+route reports a genuine ambiguity. Retrieval tasks are implemented in 0.5.3;
+tasks still on the roadmap, such as multimodal understanding, vision, and
+forecasting, are reported as blocked rather than sent through another pipeline.
 
 On a bare VM with no Python at all, `install.sh` / `install.ps1` install uv
 first and then the above. Or drive it with a model instead of by hand — see
