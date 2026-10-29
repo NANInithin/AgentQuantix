@@ -165,9 +165,9 @@ def test_retrieval_runtime_targets_and_clip_cpp_cmake4_policy(native, monkeypatc
                         lambda *args, **kwargs: SimpleNamespace(
                             stdout="cmake version 4.0.0\n", returncode=0))
     llama = builders.fingerprint(
-        "llama.cpp", required_targets=["llama-embedding", "llama-server"])
+        "llama.cpp", required_targets=["llama-server", "llama-quantize"])
     clip = builders.fingerprint("clip.cpp")
-    assert {"llama-embedding", "llama-server", "llama-quantize"} <= set(llama["targets"])
+    assert {"llama-server", "llama-quantize"} <= set(llama["targets"])
     assert clip["compute_backend"] == "cpu"
     assert {"extract", "zsl", "quantize"} <= set(clip["targets"])
     assert "-DGGML_CUDA=OFF" not in clip["flags"]

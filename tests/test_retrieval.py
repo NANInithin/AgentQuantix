@@ -94,19 +94,6 @@ def test_two_label_id2label_remains_blocked_for_reranking(monkeypatch, tmp_path)
     assert "reranker must have one classification label" in plan["blockers"]
 
 
-def test_embed_parses_stdout_without_trailing_newline_or_stderr_logs(tmp_path):
-    binary = tmp_path / "llama-embedding"
-    binary.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys\n"
-        "sys.stdout.write('[[0.6,0.8]]')\n"
-        "sys.stderr.write('llama log line\\n')\n",
-        encoding="utf-8")
-    binary.chmod(0o755)
-
-    assert release._embed(binary, "model.gguf", "text", "mean") == [0.6, 0.8]
-
-
 def test_plan_includes_revision_size_license_contract_and_fixture_hashes(monkeypatch, tmp_path):
     import huggingface_hub
 
@@ -318,14 +305,14 @@ def test_stubbed_run_resumes_with_frozen_runtime_and_approved_plan(monkeypatch, 
 
         def snapshot(self):
             return {"revision": self.revision, "source": str(tmp_path / "runtime"),
-                    "provenance": {"binary_sha256": {"llama-embedding": "b" * 64}}}
+                    "provenance": {"binary_sha256": {"llama-server": "b" * 64}}}
 
     handle = Handle()
 
     def ensure_runtime(engine, *, required_targets, frozen=None):
         frozen_inputs.append(frozen)
         assert engine == "llama.cpp"
-        assert {"llama-embedding", "llama-server", "llama-quantize"} <= set(required_targets)
+        assert set(required_targets) == {"llama-server", "llama-quantize"}
         return handle
 
     source = tmp_path / "source"
@@ -474,6 +461,200 @@ def test_rerank_quality_uses_one_server_for_all_fixture_queries(monkeypatch, tmp
     assert len(starts) == 1
     assert len(requests) == len(corpus["queries"])
     assert quality["scores"]
+    assert "full_ranking_identical" in quality
+    assert "reference_relevant_order_agreement" in quality
+    assert "reference_ndcg_at_5" in quality
+
+
+def test_embedder_uses_embeddings_endpoint_and_configured_server_options(monkeypatch, tmp_path):
+    class Process:
+        terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            raise AssertionError("server should terminate gracefully")
+
+    class Response:
+        status = 200
+
+        def __init__(self, body=b'{"data":[{"embedding":[0.6,0.8]}]}'):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return self.body
+
+    process = Process()
+    started, requests = [], []
+
+    def start(argv, **kwargs):
+        started.append((argv, kwargs))
+        return process
+
+    def open_request(url, **kwargs):
+        if isinstance(url, str):
+            assert url.endswith("/health")
+            return Response()
+        requests.append(url)
+        return Response()
+
+    monkeypatch.setattr(release.subprocess, "Popen", start)
+    monkeypatch.setattr(release, "_free_port", lambda: 12345)
+    monkeypatch.setattr(release, "urlopen", open_request)
+
+    with release._embedder("/native/llama-server", "model.gguf", tmp_path, "cls", 64) as embed:
+        assert embed("query text") == [0.6, 0.8]
+
+    assert started[0][0] == [
+        "/native/llama-server", "-m", "model.gguf", "--embedding", "--pooling", "cls",
+        "-c", "64", "-b", "64", "-ub", "64", "--host", "127.0.0.1", "--port", "12345"]
+    assert started[0][1]["cwd"] == tmp_path
+    assert requests[0].full_url == "http://127.0.0.1:12345/v1/embeddings"
+    assert json.loads(requests[0].data) == {
+        "input": ["query text"], "embd_normalize": 2}
+    assert process.terminated
+
+
+def test_embedding_quality_uses_one_server_for_all_fixture_texts(monkeypatch, tmp_path):
+    from contextlib import contextmanager
+
+    started, texts = [], []
+
+    @contextmanager
+    def embedder(binary, model, root, pooling, ctx):
+        started.append((binary, model, root, pooling, ctx))
+        yield lambda text: texts.append(text) or [1.0, 0.0]
+
+    class Matrix(list):
+        @property
+        def shape(self):
+            return len(self), len(self[0])
+
+        def tolist(self):
+            return [list(row) for row in self]
+
+    monkeypatch.setattr(release, "_embedder", embedder)
+    corpus = json.loads((release.FIXTURES / "corpus.json").read_text(encoding="utf-8"))
+    documents = Matrix([[1.0, 0.0] for _ in corpus["documents"]])
+    queries = Matrix([[1.0, 0.0] for _ in corpus["queries"]])
+    quality = release._embedding_quality(
+        {"contract": {"pooling": "cls", "max_seq_length": 128,
+                      "prompts": {"document": "D: ", "query": "Q: "}}},
+        Path("model.gguf"),
+        {"reference_document_vectors": documents, "reference_query_vectors": queries},
+        Path("/native/llama-server"), tmp_path)
+
+    assert started == [
+        (Path("/native/llama-server"), Path("model.gguf"), tmp_path, "cls", 128)]
+    assert len(texts) == len(corpus["documents"]) + len(corpus["queries"])
+    assert texts[0].startswith("D: ")
+    assert texts[-1].startswith("Q: ")
+    assert quality["dimension"] == 2
+
+
+@pytest.mark.parametrize("body", [
+    b"not json",
+    b"{}",
+    b'{"data":[]}',
+    b'{"data":[{}]}',
+    b'{"data":[{"embedding":[1,"nan"]}]}',
+    json.dumps({"data": [{"embedding": [10 ** 400]}]}).encode(),
+])
+def test_embedder_rejects_malformed_response_and_terminates_server(monkeypatch, tmp_path, body):
+    class Process:
+        terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            raise AssertionError("server should terminate gracefully")
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return body
+
+    process = Process()
+    monkeypatch.setattr(release.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(release, "_free_port", lambda: 12345)
+    monkeypatch.setattr(release, "urlopen", lambda *args, **kwargs: Response())
+
+    with pytest.raises(RuntimeError, match="llama-server embeddings response"):
+        with release._embedder("llama-server", "model.gguf", tmp_path, "mean", 512) as embed:
+            embed("text")
+    assert process.terminated
+
+
+def _reranking_quality_for_scores(monkeypatch, tmp_path, relevance, reference_scores, scores):
+    from contextlib import contextmanager
+
+    documents = [{"id": f"doc-{index}", "text": f"document {index}"} for index in range(len(scores))]
+    corpus = {"documents": documents,
+              "queries": [{"query": "query", "relevance": relevance}]}
+    (tmp_path / "corpus.json").write_text(json.dumps(corpus), encoding="utf-8")
+    monkeypatch.setattr(release, "FIXTURES", tmp_path)
+
+    @contextmanager
+    def rerank(binary, model, root):
+        yield lambda query, texts: [
+            {"index": index, "relevance_score": value} for index, value in enumerate(scores)]
+
+    monkeypatch.setattr(release, "_rerank", rerank)
+    return release._reranking_quality(
+        Path("model.gguf"), Path("/native/llama-server"),
+        {"reference_scores": [reference_scores]})
+
+
+def test_reranker_f16_gate_ignores_irrelevant_tail_reordering(monkeypatch, tmp_path):
+    quality = _reranking_quality_for_scores(
+        monkeypatch, tmp_path, {"doc-0": 2, "doc-1": 1},
+        [10.0, 9.0, -10.190, -10.191],
+        [10.0, 9.0, -10.191, -10.190])
+
+    assert quality["full_ranking_identical"] is False
+    assert quality["max_reference_logit_error"] <= 0.1
+    assert quality["reference_relevant_order_agreement"] == 1.0
+    assert quality["ndcg_at_5"] >= quality["reference_ndcg_at_5"] - 1e-6
+    assert release._reranking_f16_passes(quality)
+
+
+def test_reranker_f16_gate_rejects_relevant_top_k_swap(monkeypatch, tmp_path):
+    quality = _reranking_quality_for_scores(
+        monkeypatch, tmp_path, {"doc-0": 1, "doc-1": 1},
+        [10.01, 10.00, -10.190, -10.191],
+        [10.00, 10.01, -10.191, -10.190])
+
+    assert quality["max_reference_logit_error"] <= 0.1
+    assert quality["ndcg_at_5"] == pytest.approx(quality["reference_ndcg_at_5"])
+    assert quality["reference_relevant_order_agreement"] == 0.0
+    assert not release._reranking_f16_passes(quality)
 
 
 def test_local_manifest_verifies_member_hash_and_size(tmp_path):
@@ -503,6 +684,31 @@ def test_remote_publication_downloads_git_files_without_lfs_hash(tmp_path):
     assert release._remote_member_mismatches(
         members, {"README.md": {"bytes": path.stat().st_size, "sha256": None}},
         download=lambda _: path) == []
+
+
+def test_embedding_card_uses_server_api_and_preserves_prompt_prefixes():
+    card = retrieval.render_card({
+        "engine": "llama.cpp",
+        "task": "embeddings",
+        "family": "embedding model",
+        "source": {"repo_id": "org/model", "revision": "a" * 40},
+        "engine_revision": "b" * 40,
+        "members": [{"path": "model-F16.gguf", "quant": "F16", "bytes": 1,
+                     "sha256": "c" * 64}],
+        "contract": {
+            "pooling": "cls",
+            "max_seq_length": 128,
+            "prompts": {"query": "query: {query}", "document": "passage: {document}"}},
+        "quality_results": {},
+        "source_license": "mit",
+    })
+
+    assert ("llama-server -m ./retrieval-model/model-F16.gguf --embedding --pooling cls "
+            "-c 128 -b 128 -ub 128 --host 127.0.0.1 --port 8080") in card
+    assert "http://127.0.0.1:8080/v1/embeddings" in card
+    assert '{"input":["query text"],"embd_normalize":2}' in card
+    assert "Query prompt prefix to prepend: `query: `" in card
+    assert "Document prompt prefix to prepend: `passage: `" in card
 
 
 def test_card_contains_commands_metrics_and_license_distinction():

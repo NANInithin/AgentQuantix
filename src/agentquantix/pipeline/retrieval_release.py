@@ -47,13 +47,13 @@ def _write(path, value):
     os.replace(pending, path)
 
 
-def _command(argv, *, cwd=None, env=None, stdout_only=False):
+def _command(argv, *, cwd=None, env=None):
     result = subprocess.run([str(value) for value in argv], cwd=cwd, capture_output=True,
                             text=True, errors="replace", stdin=subprocess.DEVNULL, env=env)
     if result.returncode:
         raise RuntimeError(f"native command failed ({result.returncode}): {' '.join(map(str, argv))}\n"
                            f"{result.stdout}\n{result.stderr}")
-    return result.stdout if stdout_only else result.stdout + result.stderr
+    return result.stdout + result.stderr
 
 
 def _record_stage(journal_path, journal, key, path):
@@ -112,21 +112,6 @@ def _quantize(plan, f16, binaries, root, journal, journal_path, quant):
     return output
 
 
-def _embed(binary, model, text, pooling):
-    output = _command([binary, "-m", model, "-p", text, "--pooling", pooling,
-                       "--embd-normalize", "2", "--embd-output-format", "array"],
-                      stdout_only=True)
-    for line in reversed(output.splitlines()):
-        if line.lstrip().startswith("["):
-            try:
-                values = json.loads(line)
-                if isinstance(values, list):
-                    return values[0] if values and isinstance(values[0], list) else values
-            except ValueError:
-                continue
-    raise RuntimeError("llama-embedding output did not contain a JSON vector")
-
-
 def _template(text, template):
     value = str(template)
     if any(marker in value for marker in ("{text}", "{query}", "{document}")):
@@ -134,15 +119,17 @@ def _template(text, template):
     return value + text
 
 
-def _embedding_quality(plan, model, ref, binary):
+def _embedding_quality(plan, model, ref, binary, root):
     corpus = json.loads((FIXTURES / "corpus.json").read_text(encoding="utf-8"))
     pooling = plan["contract"]["pooling"]
     prompts = plan["contract"].get("prompts", {})
     qprompt, dprompt = prompts.get("query", ""), prompts.get("document", "")
     docs = corpus["documents"]
     queries = corpus["queries"]
-    native_docs = [_embed(binary, model, _template(item["text"], dprompt), pooling) for item in docs]
-    native_queries = [_embed(binary, model, _template(item["query"], qprompt), pooling) for item in queries]
+    ctx = plan["contract"].get("max_seq_length") or 512
+    with _embedder(binary, model, root, pooling, ctx) as embed:
+        native_docs = [embed(_template(item["text"], dprompt)) for item in docs]
+        native_queries = [embed(_template(item["query"], qprompt)) for item in queries]
     reference_docs = ref["reference_document_vectors"]
     reference_queries = ref["reference_query_vectors"]
     ranked, reference_ranked, gains = [], [], []
@@ -177,9 +164,10 @@ def _free_port():
 
 
 @contextmanager
-def _rerank(binary, model, root):
+def _server(binary, model, root, arguments):
     port = _free_port()
-    process = subprocess.Popen([str(binary), "--reranking", "-m", str(model),
+    base_url = f"http://127.0.0.1:{port}"
+    process = subprocess.Popen([str(binary), "-m", str(model), *map(str, arguments),
                                 "--host", "127.0.0.1", "--port", str(port)],
                                cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
@@ -188,21 +176,14 @@ def _rerank(binary, model, root):
             if process.poll() is not None:
                 raise RuntimeError("llama-server exited before becoming healthy")
             try:
-                with urlopen(f"http://127.0.0.1:{port}/health", timeout=1) as response:
+                with urlopen(f"{base_url}/health", timeout=1) as response:
                     if response.status == 200:
                         break
             except Exception:
                 time.sleep(0.25)
         else:
             raise RuntimeError("llama-server health check timed out")
-        def score(query, documents):
-            body = json.dumps({"query": query, "documents": documents}).encode()
-            request = Request(f"http://127.0.0.1:{port}/v1/rerank", body,
-                              {"Content-Type": "application/json"})
-            with urlopen(request, timeout=120) as response:
-                return json.load(response)["results"]
-
-        yield score
+        yield base_url
     finally:
         process.terminate()
         try:
@@ -210,6 +191,50 @@ def _rerank(binary, model, root):
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+
+
+@contextmanager
+def _rerank(binary, model, root):
+    with _server(binary, model, root, ["--reranking"]) as base_url:
+        def score(query, documents):
+            body = json.dumps({"query": query, "documents": documents}).encode()
+            request = Request(f"{base_url}/v1/rerank", body,
+                              {"Content-Type": "application/json"})
+            with urlopen(request, timeout=120) as response:
+                return json.load(response)["results"]
+
+        yield score
+
+
+@contextmanager
+def _embedder(binary, model, root, pooling, ctx):
+    arguments = ["--embedding", "--pooling", pooling, "-c", ctx, "-b", ctx, "-ub", ctx]
+    with _server(binary, model, root, arguments) as base_url:
+        def embed(text):
+            body = json.dumps({"input": [text], "embd_normalize": 2}).encode()
+            request = Request(f"{base_url}/v1/embeddings", body,
+                              {"Content-Type": "application/json"})
+            with urlopen(request, timeout=120) as response:
+                try:
+                    result = json.load(response)
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError("llama-server embeddings response is not valid JSON") from exc
+            try:
+                vector = result["data"][0]["embedding"]
+            except (IndexError, KeyError, TypeError) as exc:
+                raise RuntimeError(
+                    "llama-server embeddings response is missing data[0].embedding") from exc
+            if not isinstance(vector, list) or not vector:
+                raise RuntimeError("llama-server embeddings response has no embedding vector")
+            try:
+                values = [float(value) for value in vector]
+            except (OverflowError, TypeError, ValueError) as exc:
+                raise RuntimeError("llama-server embeddings response has an invalid vector") from exc
+            if not all(math.isfinite(value) for value in values):
+                raise RuntimeError("llama-server embeddings response contains non-finite values")
+            return values
+
+        yield embed
 
 
 def _normalise_clip(text):
@@ -282,6 +307,7 @@ def _reranking_quality(model, server, reference):
     corpus = json.loads((FIXTURES / "corpus.json").read_text(encoding="utf-8"))
     docs, queries = corpus["documents"], corpus["queries"]
     rankings, ref_rankings, gains, scores, reference_scores = [], [], [], [], []
+    relevant_counts = []
     with _rerank(server, model, server.parent) as score:
         for query_index, item in enumerate(queries):
             document_texts = [doc["text"] for doc in docs]
@@ -296,16 +322,31 @@ def _reranking_quality(model, server, reference):
                 range(len(docs)), key=lambda index: reference_row[index], reverse=True)])
             scores.append(row)
             reference_scores.append(list(map(float, reference_row)))
-            gains.append(item["relevance"])
+            gain = item["relevance"]
+            gains.append(gain)
+            relevant_counts.append(max(1, sum(value > 0 for value in gain.values())))
+    ndcg = sum(ndcg_at_k(rank, gain, 5) for rank, gain in zip(rankings, gains)) / len(gains)
+    reference_ndcg = sum(ndcg_at_k(rank, gain, 5)
+                         for rank, gain in zip(ref_rankings, gains)) / len(gains)
+    relevant_order_agreement = sum(
+        ranking[:count] == reference_ranking[:count]
+        for ranking, reference_ranking, count in zip(rankings, ref_rankings, relevant_counts)
+    ) / len(gains)
     return {"ranked": rankings, "reference_ranked": ref_rankings, "scores": scores,
             "reference_scores": reference_scores, "gains": gains,
             "max_reference_logit_error": max(abs(a - b) for left, right in
                                              zip(scores, reference_scores)
                                              for a, b in zip(left, right)),
-            "identical_reference_ranking": rankings == ref_rankings,
+            "full_ranking_identical": rankings == ref_rankings,
+            "reference_relevant_order_agreement": relevant_order_agreement,
             "mrr": mrr(list(zip(rankings, gains))),
-            "ndcg_at_5": sum(ndcg_at_k(rank, gain, 5)
-                             for rank, gain in zip(rankings, gains)) / len(gains)}
+            "ndcg_at_5": ndcg, "reference_ndcg_at_5": reference_ndcg}
+
+
+def _reranking_f16_passes(quality):
+    return (quality["max_reference_logit_error"] <= 0.1
+            and quality["reference_relevant_order_agreement"] == 1.0
+            and quality["ndcg_at_5"] >= quality["reference_ndcg_at_5"] - 1e-6)
 
 
 def _spearman(left, right):
@@ -406,7 +447,7 @@ def _evaluate(plan, model, binaries, root, references):
     if plan["engine"] == "clip.cpp":
         return _clip_quality(plan, model, binaries, root, references)
     if plan["task"] == "embeddings":
-        return _embedding_quality(plan, model, references, binaries["llama-embedding"])
+        return _embedding_quality(plan, model, references, binaries["llama-server"], root)
     return _reranking_quality(model, binaries["llama-server"], references)
 
 
@@ -434,7 +475,7 @@ def run_release(plan, *, user_approved, publish=False):
     saved = json.loads(run_path.read_text(encoding="utf-8")) if run_path.is_file() else {}
     frozen = saved.get("runtime_snapshot")
     required = (("extract", "zsl", "quantize") if plan["engine"] == "clip.cpp"
-                else ("llama-embedding", "llama-server", "llama-quantize"))
+                else ("llama-server", "llama-quantize"))
     from .. import runtime_control
     handle = runtime_control.ensure_runtime(plan["engine"], required_targets=required,
                                             frozen=frozen)
@@ -473,8 +514,7 @@ def run_release(plan, *, user_approved, publish=False):
                           and quality["dimension"] == quality["reference_dimension"]
                           and quality["vectors_finite"] and quality["vectors_unit_norm"])
             elif plan["task"] == "reranking" and not quality.get("structural_only"):
-                passed = (quality["max_reference_logit_error"] <= 0.1
-                          and quality["identical_reference_ranking"])
+                passed = _reranking_f16_passes(quality)
             else:
                 passed = False
             passed = passed and not quality.get("blocker")

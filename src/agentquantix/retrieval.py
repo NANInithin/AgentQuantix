@@ -163,8 +163,11 @@ def runtime_commands(engine, task, contract, model_path):
                 "curl -s http://127.0.0.1:8080/v1/rerank -H 'Content-Type: application/json' "
                 "-d '{\"query\":\"query\",\"documents\":[\"document\"]}'"]
     pooling = contract.get("pooling") or "mean"
-    return [f"llama-embedding -m {model_path} -p 'query text' --pooling {pooling} "
-            "--embd-normalize 2 --embd-output-format array"]
+    ctx = contract.get("max_seq_length") or 512
+    return [f"llama-server -m {model_path} --embedding --pooling {pooling} "
+            f"-c {ctx} -b {ctx} -ub {ctx} --host 127.0.0.1 --port 8080",
+            "curl -s http://127.0.0.1:8080/v1/embeddings -H 'Content-Type: application/json' "
+            "-d '{\"input\":[\"query text\"],\"embd_normalize\":2}'"]
 
 
 def _literal_prompt_prefix(template):
