@@ -11,11 +11,13 @@ model/precision matrix is complete on Linux CPU, including llama.cpp at
 and clip.cpp. Remaining gaps are Windows/MSVC, GPU/Metal, and real Hub
 publication; acceptance runs used `--no-publish`. See
 [retrieval status](RETRIEVAL_STATUS.md) for the exact matrix. **0.5.4
-multimodal understanding is implemented locally and its offline suite passes
-(533 passed, 1 skipped); Linux CPU native acceptance is pending.** The
-acceptance preflight found zero GitHub API requests remaining, resetting at
-2026-10-29 15:07:25 UTC; runtime installation and inference have not started.
-After native acceptance, the next milestone is **0.5.5: expanded audio**.
+multimodal understanding is implemented, and sequential Linux CPU native
+evaluation is complete. Qwen3-ASR-0.6B passed F16 and all four configured text
+quants. SmolVLM2-500M-Video-Instruct passed video order, but its F16 candidate
+was quality-rejected on VQA and OCR; text quants were not evaluated without a
+passing baseline. See [multimodal status](MULTIMODAL_STATUS.md). Remaining
+gaps include Windows/MSVC, GPU/Metal and real Hub publication. The next
+milestone is **0.5.5: expanded audio**.
 
 0.5.2 summary: `agentquantix/tasks/` (registry + metadata router),
 `agentquantix/runs.py` (`text:`/`voice:`/`media:` run ids over existing records),
@@ -100,12 +102,19 @@ post-0.5.3 engine builders and task pipelines are not implemented yet.
 - Text quants are evaluated against F16 with a shared F16 projector.
   Server image/audio cases and CLI video cases are journaled; passing text
   quants plus the projector are published as one bundle.
-- Offline verification: `pytest -q` passed with 533 passed and 1 skipped;
-  Ruff and `git diff --check` passed. Linux CPU native acceptance is not yet
-  run; see [multimodal status](MULTIMODAL_STATUS.md).
-- Keep the implementation unaccepted for native release until the sequential
-  SmolVLM2 and Qwen3-ASR acceptance runs complete. Do not infer acceptance
-  from the separate read-only 0.5.4b feasibility spike.
+- Qwen3-ASR-0.6B passed F16, Q8_0, Q6_K, Q5_K_M and Q4_K_M on Linux CPU with
+  WER 0.0 and CER 0.018691588785046728. This is ASR-style understanding only;
+  no audio QA or audio reference was evaluated.
+- SmolVLM2-500M-Video-Instruct F16 passed video order using `--video-fps 1
+  --video-timestamp-interval 1000` but failed VQA (0.6 vs the 0.8 gate) and
+  OCR CER (0.5681818181818182 vs the 0.05 gate). Its text quants were not
+  evaluated without a passing F16 baseline; the model is not accepted.
+- A native ASR answer exposed an ASR-prefix markup scoring bug. `strip_markup`
+  now removes the prefix generically, and the corrected Qwen rerun is
+  authoritative. Result JSONs and logs are preserved in
+  `/home/ubuntu/spike/acceptance/`.
+- Windows/MSVC, GPU/Metal and real Hub publication remain untested. See
+  [multimodal status](MULTIMODAL_STATUS.md).
 
 ### Existing pipeline integration
 
@@ -198,8 +207,9 @@ read-only feasibility spike and its report are under
 `/home/ubuntu/spike/0.5.4b/`; do not treat the spike as pipeline
 implementation or native acceptance.
 
-Native acceptance remains pending. After it completes, the approved plan
-continues with expanded audio (0.5.5), vision.cpp (0.5.6),
+The sequential Linux CPU results are recorded in
+[multimodal status](MULTIMODAL_STATUS.md). The approved plan continues with
+expanded audio (0.5.5), vision.cpp (0.5.6),
 YOLO/RF-DETR (0.5.7), dedicated depth/SAM3 (0.5.8), forecasting/hardening
 (0.5.9), and the consolidated 0.6.0 release. Do not claim the full roadmap is
 implemented.
@@ -211,8 +221,10 @@ implemented.
   model/precision matrix only. Windows/MSVC and GPU/Metal remain untested, and
   real Hub publication was not exercised; the acceptance runs used
   `--no-publish`.
-- 0.5.4 native acceptance is pending. Its feasibility spike is not acceptance;
-  record per-quant results only from the implementation's `result.json` files.
+- 0.5.4 native results are model-specific Linux CPU evidence transcribed from
+  the implementation result JSONs. SmolVLM2 failed its F16 quality gates;
+  Qwen3-ASR passed its evaluated matrix. The feasibility spike is not
+  implementation acceptance.
 - Select exact upstream SHAs during new-engine audits; README support tables
   alone do not establish acceptance. Track engine revision × family × task ×
   precision × platform/backend.
