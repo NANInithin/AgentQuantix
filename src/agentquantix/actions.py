@@ -421,7 +421,22 @@ def vision_plan(model, *, task, family=None, target_repo=None, quants=None):
                 "blockers": [str(error)]}
 
 
-def start_vision(plan, *, user_approved, publish=False):
+def vision_run_id(plan):
+    engine = plan.get("engine")
+    if engine in ("ultralytics-ggml", "rf-detr.cpp"):
+        from .pipeline import detection_release
+        root = detection_release.work_dir(
+            plan["model"], plan["family"], plan["source"]["sha256"])
+    elif engine == "depth-anything.cpp":
+        from .pipeline import depth_release
+        root = depth_release.work_dir(plan["family"], plan["source"]["sha256"])
+    else:
+        from .pipeline import vision_release
+        root = vision_release.work_dir(plan["model"])
+    return f"vision:{root.name}"
+
+
+def start_vision(plan, *, user_approved, publish=False, runtime_snapshot=None):
     if user_approved is not True:
         raise ValueError("start_release requires approval of the exact vision plan")
     from .pipeline import vision_release
@@ -435,6 +450,7 @@ def start_vision(plan, *, user_approved, publish=False):
         handle = runtime_control.ensure_runtime(
             engine, revision={"revision": revision, "ref": revision, "channel": "pinned",
                               "repository": plan["runtime_repository"]},
+            frozen=runtime_snapshot or plan.get("runtime_snapshot"),
             required_targets=("yolo-cli" if engine == "ultralytics-ggml" else "rfdetr-cli",))
         result = detection_release.run_release(
             plan, user_approved=True, publish=publish, runtime=handle)
@@ -446,6 +462,7 @@ def start_vision(plan, *, user_approved, publish=False):
             "depth-anything.cpp",
             revision={"revision": revision, "ref": revision, "channel": "pinned",
                       "repository": plan["runtime_repository"]},
+            frozen=runtime_snapshot or plan.get("runtime_snapshot"),
             required_targets=("da3-cli",))
         result = depth_release.run_release(
             plan, user_approved=True, publish=publish, runtime=handle)
@@ -454,6 +471,7 @@ def start_vision(plan, *, user_approved, publish=False):
         "vision.cpp", revision={"revision": vision_release.REVISION,
                                 "ref": vision_release.REVISION, "channel": "pinned",
                                 "repository": "Acly/vision.cpp"},
+        frozen=runtime_snapshot or plan.get("runtime_snapshot"),
         required_targets=("vision-cli",))
     result = vision_release.run_release(plan, user_approved=True, publish=publish,
                                         runtime=handle)

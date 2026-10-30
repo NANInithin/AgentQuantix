@@ -391,7 +391,34 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
         raise DepthValidationError("saved depth family no longer matches the catalog")
     root = work_dir(plan["family"], plan["source"]["sha256"])
     root.mkdir(parents=True, exist_ok=True)
-    _write(root / "run.json", {"plan": plan, "created": time.time()})
+    run_path, result_path = root / "run.json", root / "result.json"
+    progress = json.loads(run_path.read_text(encoding="utf-8")) if run_path.is_file() else {}
+    result_saved = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else {}
+    saved = result_saved if result_saved.get("candidates") else progress
+    old = saved.get("plan") or {}
+    runtime_snapshot = runtime.snapshot()
+    same_run = all(old.get(key) == plan.get(key) for key in (
+        "model", "task", "family", "source", "quants", "runtime_revision")) and (
+            saved.get("runtime_snapshot") or {}).get("identity") == runtime_snapshot.get("identity")
+    candidates = []
+    if same_run:
+        candidates = [
+            item for item in saved.get("candidates", [])
+            if item.get("status") != "conversion-or-evaluation-failed"
+            and Path(item.get("path", "")).is_file()
+            and item.get("sha256") == _hash(item["path"])]
+    if (result_saved and same_run and all(
+            item.casefold() in {candidate["precision"].casefold() for candidate in candidates}
+            for item in plan["quants"])):
+        if publish and not result_saved.get("published"):
+            result_saved["publication"] = publish_bundle(
+                root, old, result_saved["candidates"], result_saved["runtime_snapshot"],
+                result_saved["converter"])
+            result_saved["published"] = True
+            _write(result_path, result_saved)
+        return result_saved
+    _write(run_path, {"plan": plan, "created": progress.get("created") or time.time(),
+                      "runtime_snapshot": runtime_snapshot, "candidates": candidates})
     if download_source:
         source_dir, checkpoint = download_source(plan["source"])
     else:
@@ -424,12 +451,14 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
     reference_npz, metadata = _load_reference(reference_path)
     binary = runtime.binaries["da3-cli"]
     f32_path = root / "models" / "f32.gguf"
-    candidates = []
-    baseline_quality = None
-    baseline_failed = False
-    baseline_failures = []
+    baseline_quality = next((item.get("quality") for item in candidates
+                             if item["precision"].casefold() == "f32"), None)
+    baseline_failed = bool(baseline_quality is not None and not baseline_quality.get("passed"))
+    baseline_failures = list(baseline_quality.get("gate_failures", [])) if baseline_quality else []
     producer = plan["precision_producers"]
     for precision in PRECISIONS:
+        if any(item["precision"].casefold() == precision.casefold() for item in candidates):
+            continue
         model_path = root / "models" / f"{precision.casefold()}.gguf"
         model_path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -507,9 +536,9 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
         plan["baseline_failures"] = baseline_failures
         _write(root / "run.json", {
             "plan": plan, "baseline_failed": baseline_failed,
-            "baseline_failures": baseline_failures, "candidates": candidates,
+            "baseline_failures": baseline_failures, "runtime_snapshot": runtime_snapshot,
+            "created": progress.get("created") or time.time(), "candidates": candidates,
         })
-    runtime_snapshot = runtime.snapshot()
     result = {
         "pipeline": "vision", "engine": "depth-anything.cpp",
         "run_id": root.name, "plan": plan, "runtime_snapshot": runtime_snapshot,
@@ -523,11 +552,11 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
     }
     if not any(item["status"] == "passed" for item in candidates):
         result["status"] = "rejected"
-    _write(root / "result.json", result)
+    _write(result_path, result)
     if publish and any(item["status"] == "passed" for item in candidates):
         result["publication"] = publish_bundle(root, plan, candidates, runtime_snapshot, provenance)
         result["published"] = True
-        _write(root / "result.json", result)
+        _write(result_path, result)
     return result
 
 

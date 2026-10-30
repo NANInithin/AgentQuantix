@@ -12,10 +12,11 @@ import time
 from pathlib import Path
 
 from .. import config, detection, vision
+from ..package_data import package_path
 from ..runtimes.spec import RUNTIMES
 
 
-FIXTURES = Path(__file__).parents[1] / "fixtures" / "detection"
+FIXTURES = package_path("fixtures/detection")
 
 
 class DetectionValidationError(RuntimeError):
@@ -192,33 +193,38 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
     root = work_dir(plan["model"], plan["family"], plan["source"]["sha256"])
     root.mkdir(parents=True, exist_ok=True)
     result_path = root / "result.json"
-    saved = {}
-    if result_path.is_file():
-        saved = json.loads(result_path.read_text(encoding="utf-8"))
-        old = saved.get("plan") or {}
-        same_run = all(old.get(key) == plan.get(key) for key in (
-            "model", "task", "family", "source", "quants", "runtime_revision",
-            "evaluation_version"))
-        if same_run and all(
-                item.get("status") == "conversion-or-evaluation-failed"
-                or (Path(item["path"]).is_file() and
-                    item.get("sha256") == _hash(item["path"]))
-                for item in saved.get("candidates", [])):
-            if publish and not saved.get("published"):
-                saved["publication"] = publish_bundle(
-                    root, old, saved["candidates"], provenance=saved.get("converter"))
-                saved["published"] = True
-                _write(result_path, saved)
-            if all(precision in {
-                    saved_item["precision"] for saved_item in saved.get("candidates", [])}
-                   for precision in plan["quants"]):
-                return saved
-    else:
-        same_run = False
+    run_path = root / "run.json"
+    progress = json.loads(run_path.read_text(encoding="utf-8")) if run_path.is_file() else {}
+    result_saved = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else {}
+    saved = result_saved if result_saved.get("candidates") else progress
+    old = saved.get("plan") or {}
+    runtime_snapshot = runtime.snapshot()
+    saved_runtime_identity = (saved.get("runtime_snapshot") or {}).get("identity")
+    same_run = all(old.get(key) == plan.get(key) for key in (
+        "model", "task", "family", "source", "quants", "runtime_revision",
+        "evaluation_version")) and saved_runtime_identity == runtime_snapshot.get("identity")
+    candidates = []
+    if same_run:
+        candidates = [
+            item for item in saved.get("candidates", [])
+            if item.get("status") != "conversion-or-evaluation-failed"
+            and Path(item.get("path", "")).is_file()
+            and item.get("sha256") == _hash(item["path"])]
+    if (result_saved and same_run and len(candidates) == len(result_saved.get("candidates", []))
+            and all(item.casefold() in {
+                saved_item["precision"].casefold() for saved_item in candidates}
+                    for item in plan["quants"])):
+        if publish and not result_saved.get("published"):
+            result_saved["publication"] = publish_bundle(
+                root, old, result_saved["candidates"], provenance=result_saved.get("converter"))
+            result_saved["published"] = True
+            _write(result_path, result_saved)
+        return result_saved
     plan["baseline_failed"] = False
     plan["baseline_failures"] = []
-    run_created = time.time()
-    _write(root / "run.json", {"created": run_created, "plan": plan})
+    run_created = progress.get("created", time.time())
+    _write(run_path, {"created": run_created, "plan": plan,
+                      "runtime_snapshot": runtime_snapshot, "candidates": candidates})
     if download:
         source_path = Path(download(family, config.TEMP_DIR))
     else:
@@ -238,14 +244,14 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
         raise DetectionValidationError(f"pinned converter not found: {converter}")
     binary_name = "yolo-cli" if engine == "ultralytics-ggml" else "rfdetr-cli"
     binary = runtime.binaries[binary_name]
-    candidates = list(saved.get("candidates", [])) if same_run else []
     baseline = next((item.get("quality") for item in candidates
                      if item["precision"].casefold() == "f32"), None)
     baseline_failed = bool(baseline is not None and not baseline.get("passed"))
     baseline_failures = list(baseline.get("gate_failures", [])) if baseline else []
     plan["baseline_failed"] = baseline_failed
     plan["baseline_failures"] = baseline_failures
-    _write(root / "run.json", {"created": run_created, "plan": plan})
+    _write(run_path, {"created": run_created, "plan": plan,
+                      "runtime_snapshot": runtime_snapshot, "candidates": candidates})
     for precision in (item.casefold() for item in plan["quants"]):
         previous = next((item for item in candidates
                          if item["precision"].casefold() == precision), None)
@@ -305,7 +311,8 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
         if baseline_failed:
             for item in candidates:
                 item["status"] = "quality-rejected"
-        _write(root / "run.json", {"created": run_created, "plan": plan})
+        _write(run_path, {"created": run_created, "plan": plan,
+                          "runtime_snapshot": runtime_snapshot, "candidates": candidates})
         _write(result_path, {
             "pipeline": "vision", "engine": engine, "run_id": root.name,
             "plan": plan, "runtime_snapshot": runtime.snapshot(),

@@ -126,7 +126,8 @@ TASKS = {spec.id: spec for spec in (
              ("mask-generation",), "0.5.8 (blocked)", "none",
              "official facebook/sam3 weights are gated under the SAM License; no ungated source with verifiable conversion provenance; sam3cpp not accepted"),
     TaskSpec("time-series-forecasting", "timeseries", None, ("timeseries.cpp",),
-             ("time-series-forecasting",), "0.5.9"),
+             ("time-series-forecasting",), "post-0.6.0",
+             note="timeseries.cpp declares no licence and the pinned revision cannot run Chronos (GGUF tensor name > 64 chars) or convert TimesFM; not offered pending a licence and upstream fixes"),
 )}
 
 HUB_TAG_TASKS = {tag: spec.id for spec in TASKS.values() for tag in spec.hub_tags}

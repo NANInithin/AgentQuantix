@@ -167,6 +167,7 @@ jobs:
           /tmp/fresh/bin/pip install --quiet dist/*.whl
           /tmp/fresh/bin/aqx --help
           /tmp/fresh/bin/python -c "import agentquantix; print('version', agentquantix.__version__)"
+          HF_HUB_OFFLINE=1 /tmp/fresh/bin/python scripts/check_installed_fixtures.py
 
       - name: The tag matches the package version
         # A v0.3.0 tag shipping a 0.2.0 wheel is the kind of mistake nobody
@@ -185,6 +186,7 @@ jobs:
           python -m venv /tmp/sdist
           /tmp/sdist/bin/pip install --quiet dist/*.tar.gz
           /tmp/sdist/bin/aqx --help
+          HF_HUB_OFFLINE=1 /tmp/sdist/bin/python scripts/check_installed_fixtures.py
 
       - uses: actions/upload-artifact@v4
         with:

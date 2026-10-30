@@ -26,6 +26,7 @@ import unicodedata
 import wave
 
 from . import archsupport, config
+from .package_data import package_path
 
 
 TTS = "tts"
@@ -49,8 +50,7 @@ WHISPER_QUANTS = (
     "q2_k", "q3_k", "q4_k", "q5_k", "q6_k",
 )
 QWEN3_TTS_SOURCE_REPOS = ("Qwen/Qwen3-TTS-12Hz-1.7B-Base",)
-AUDIOCPP_SPECS_DIR = (Path(__file__).parent / "fixtures"
-                      / "audio_cpp_model_specs")
+AUDIOCPP_SPECS_DIR = package_path("fixtures/audio_cpp_model_specs")
 
 
 class VoiceValidationError(RuntimeError):

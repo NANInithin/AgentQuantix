@@ -7,6 +7,8 @@ import json
 import math
 from pathlib import Path
 
+from .package_data import package_path
+
 TEXT_QUANTS = ("F16", "Q8_0", "Q6_K", "Q5_K_M", "Q5_0", "Q4_K_M", "Q4_0")
 CLIP_QUANTS = ("f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0")
 CLIP_QUANT_TYPES = {"q4_0": 2, "q4_1": 3, "q5_0": 6, "q5_1": 7, "q8_0": 8}
@@ -285,7 +287,7 @@ def plan_release(repo_id, *, task, engine, target_repo=None, quants=None):
     except Exception:
         if engine == "llama.cpp":
             architecture_support = "unknown"
-    fixture_root = Path(__file__).resolve().parent / "fixtures" / "retrieval"
+    fixture_root = package_path("fixtures/retrieval")
     fixtures = {}
     if fixture_root.is_dir():
         for path in sorted(fixture_root.rglob("*")):

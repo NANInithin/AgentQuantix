@@ -308,7 +308,8 @@ def test_depth_cli_and_agent_tool_dispatch(monkeypatch):
         repo_id="depth-anything.cpp:da3-small", task="depth-estimation",
         family="da3-small")
     plan = {"engine": "depth-anything.cpp", "task": "depth-estimation",
-            "status": "ready", "blockers": []}
+            "model": "depth-anything.cpp:da3-small", "family": "da3-small",
+            "source": {"sha256": "a" * 64}, "status": "ready", "blockers": []}
     calls = []
     monkeypatch.setattr(cli, "_confirm", lambda *_args: True)
     monkeypatch.setattr(cli, "_json", lambda value: calls.append(value))

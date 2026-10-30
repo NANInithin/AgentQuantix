@@ -13,8 +13,9 @@ import urllib.request
 
 from . import config
 from .media_catalog import (ENGINE_REVISION, ROLE_FLAGS, catalog_runtime, load_catalog, selected_catalog_path)
+from .package_data import package_path
 
-FIXTURES = Path(__file__).parent / "fixtures/media"
+FIXTURES = package_path("fixtures/media")
 MEDIA_TASKS = {"text-to-image", "image-to-image", "image-editing", "text-to-video",
                "image-to-video", "text-to-audio-video", "image-to-audio-video",
                "first-last-to-audio-video", "reference-to-audio-video"}

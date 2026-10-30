@@ -19,11 +19,12 @@ from huggingface_hub import snapshot_download
 from .. import config
 from ..retrieval import (CLIP_QUANT_TYPES, RetrievalBundle, cosine, mrr, ndcg_at_k,
                          recall_at_k, render_card, runtime_commands, top1_agreement)
+from ..package_data import package_path
 from ..runtime_control import require_binaries
 from .native_common import (_command, _free_port, _hash, _record_stage, _server as _shared_server,
                             _slug, _valid_stage, _write)
 
-FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "retrieval"
+FIXTURES = package_path("fixtures/retrieval")
 
 
 def _convert(plan, source, handle, root, journal, journal_path):

@@ -8,13 +8,15 @@ import re
 import unicodedata
 from pathlib import Path
 
+from .package_data import package_path
+
 TEXT_QUANTS = ("Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M")
 QUALITY_PROFILE = {
     "f16": {"vqa_accuracy": 0.8, "ocr_cer": 0.05, "asr_wer": 0.10},
     "quant": {"vqa_accuracy_regression": 0.2, "ocr_cer_regression": 0.05,
               "asr_wer_regression": 0.05},
 }
-FIXTURES = Path(__file__).resolve().parent / "fixtures" / "multimodal"
+FIXTURES = package_path("fixtures/multimodal")
 
 
 def source_contract(repo_id, files, read_json, *, license=None):
@@ -244,7 +246,7 @@ def plan_release(repo_id, *, task="multimodal-understanding", engine="llama.cpp"
     except Exception:
         pass
     fixture_hashes = {}
-    fixture_root = Path(__file__).resolve().parent / "fixtures"
+    fixture_root = package_path("fixtures")
     for directory in (FIXTURES, fixture_root / "retrieval", fixture_root / "voice"):
         if directory.is_dir():
             for path in sorted(directory.rglob("*")):
