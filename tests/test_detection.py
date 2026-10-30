@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -111,9 +112,13 @@ def test_map_wrapper_and_detection_gate_boundaries():
     }
     lower["f32"]["mask"] = {"map_50": 0.50}
     assert detection.detection_gate(
-        lower, baseline=False, segmentation=True, pose=True)["passed"]
+        lower, baseline=False, baseline_passed=True, segmentation=True, pose=True)["passed"]
+    rejected = detection.detection_gate(lower, baseline=False, baseline_passed=False)
+    assert not rejected["passed"]
+    assert "baseline F32 failed reference parity" in rejected["failures"]
     lower["d25_vs_f32"]["class_agreement"] = 0.97
-    assert not detection.detection_gate(lower, baseline=False)["passed"]
+    assert not detection.detection_gate(
+        lower, baseline=False, baseline_passed=True)["passed"]
 
 
 def test_classification_gate_edges():
@@ -124,11 +129,19 @@ def test_classification_gate_edges():
     assert not detection.classification_gate({
         "top1_agreement": 1.0, "mean_top5_overlap": 1.0,
         "f32": {}, "f32_top1_agreement": 0.94,
-        "f32_mean_top5_overlap": 1.0})["passed"]
+        "f32_mean_top5_overlap": 1.0}, baseline_passed=True)["passed"]
     assert detection.classification_gate({
         "top1_agreement": 0.80, "mean_top5_overlap": 0.80,
         "f32": {}, "f32_top1_agreement": 0.95,
-        "f32_mean_top5_overlap": 0.90})["passed"]
+        "f32_mean_top5_overlap": 0.90}, baseline_passed=True)["passed"]
+    candidate = {
+        "top1_agreement": 1.0, "mean_top5_overlap": 1.0,
+        "f32": {}, "f32_top1_agreement": 1.0, "f32_mean_top5_overlap": 1.0,
+    }
+    failed_baseline = detection.classification_gate(candidate, baseline_passed=False)
+    assert not failed_baseline["passed"]
+    assert "baseline F32 failed reference parity" in failed_baseline["failures"]
+    assert detection.classification_gate(candidate, baseline_passed=True)["passed"]
 
 
 def test_runtime_pins_guards_and_converter_argv():
@@ -264,3 +277,22 @@ def test_partial_precision_publish_is_atomic_and_resumable(monkeypatch, tmp_path
                                    convert=lambda *_: pytest.fail("resume reconverted"),
                                    evaluate=lambda *_: pytest.fail("resume reevaluated"))
     assert resumed["published"] is True
+
+    failed_plan = {**plan, "model": "unmatched-repo"}
+    def baseline_failure(_plan, _family, path, _binary, _root, _baseline, _python):
+        if path.stem == "f32":
+            return {"passed": False, "gate_failures": ["ref_recall<0.95"]}
+        return {"passed": True}
+    failed = release.run_release(
+        failed_plan, user_approved=True, runtime=runtime, convert=convert,
+        evaluate=baseline_failure)
+    assert failed["status"] == "rejected"
+    assert failed["baseline_failed"] is True
+    assert failed["baseline_failures"] == ["ref_recall<0.95"]
+    assert failed["plan"]["baseline_failed"] is True
+    assert {item["status"] for item in failed["candidates"]} == {"quality-rejected"}
+    run_record = json.loads((release.work_dir(
+        failed_plan["model"], failed_plan["family"], failed_plan["source"]["sha256"]) /
+        "run.json").read_text())
+    assert run_record["plan"]["baseline_failed"] is True
+    assert run_record["plan"]["baseline_failures"] == ["ref_recall<0.95"]

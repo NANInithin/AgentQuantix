@@ -13,6 +13,8 @@ RUNTIME_REVISIONS = {
     "rf-detr.cpp": "98d0f381b832ef08a608b65c7dd78db066ed8b9a",
 }
 
+EVALUATION_VERSION = 2
+
 ULTRALYTICS_PRECISIONS = ("f32", "f16", "q8_0")
 RFDETR_PRECISIONS = ("f32", "f16", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0")
 
@@ -220,7 +222,8 @@ def coco_map50(metrics):
     raise ValueError("COCO metrics do not contain mAP50")
 
 
-def detection_gate(metrics, *, baseline, segmentation=False, pose=False):
+def detection_gate(metrics, *, baseline, baseline_passed=None,
+                   segmentation=False, pose=False):
     bars = {
         "ref_recall": 0.95,
         "native_precision": 0.95,
@@ -242,6 +245,8 @@ def detection_gate(metrics, *, baseline, segmentation=False, pose=False):
             failures.append("keypoint_error_px>2")
     else:
         failures = []
+        if baseline_passed is not True:
+            failures.append("baseline F32 failed reference parity")
         f32 = metrics["f32"]
         comparison = metrics.get("d25_vs_f32", metrics)
         for field in ("ref_recall", "native_precision", "class_agreement", "mean_box_iou"):
@@ -259,9 +264,11 @@ def detection_gate(metrics, *, baseline, segmentation=False, pose=False):
     return {"passed": not failures, "failures": failures}
 
 
-def classification_gate(metrics):
+def classification_gate(metrics, *, baseline_passed=None):
     failures = []
     if "f32" in metrics:
+        if baseline_passed is not True:
+            failures.append("baseline F32 failed reference parity")
         if metrics.get("f32_top1_agreement", 0.0) < 0.95:
             failures.append("f32_top1_agreement<0.95")
         if metrics.get("f32_mean_top5_overlap", 0.0) < 0.90:

@@ -95,6 +95,7 @@ def plan_release(model, *, task, family=None, engine=None, target_repo=None,
         "status": "ready",
         "blockers": [],
         "quality_profile": "detection-0.5.7-d25-fixed-coco-sample",
+        "evaluation_version": detection.EVALUATION_VERSION,
     }
 
 
@@ -196,7 +197,8 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
         saved = json.loads(result_path.read_text(encoding="utf-8"))
         old = saved.get("plan") or {}
         same_run = all(old.get(key) == plan.get(key) for key in (
-            "model", "task", "family", "source", "quants", "runtime_revision"))
+            "model", "task", "family", "source", "quants", "runtime_revision",
+            "evaluation_version"))
         if same_run and all(
                 item.get("status") == "conversion-or-evaluation-failed"
                 or (Path(item["path"]).is_file() and
@@ -213,7 +215,10 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
                 return saved
     else:
         same_run = False
-    _write(root / "run.json", {"created": time.time(), "plan": plan})
+    plan["baseline_failed"] = False
+    plan["baseline_failures"] = []
+    run_created = time.time()
+    _write(root / "run.json", {"created": run_created, "plan": plan})
     if download:
         source_path = Path(download(family, config.TEMP_DIR))
     else:
@@ -236,6 +241,11 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
     candidates = list(saved.get("candidates", [])) if same_run else []
     baseline = next((item.get("quality") for item in candidates
                      if item["precision"].casefold() == "f32"), None)
+    baseline_failed = bool(baseline is not None and not baseline.get("passed"))
+    baseline_failures = list(baseline.get("gate_failures", [])) if baseline else []
+    plan["baseline_failed"] = baseline_failed
+    plan["baseline_failures"] = baseline_failures
+    _write(root / "run.json", {"created": run_created, "plan": plan})
     for precision in (item.casefold() for item in plan["quants"]):
         previous = next((item for item in candidates
                          if item["precision"].casefold() == precision), None)
@@ -270,8 +280,13 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
             quality["conversion_run"] = conversion_run
             if baseline is None:
                 baseline = quality
+                baseline_failed = not bool(quality.get("passed"))
+                baseline_failures = list(quality.get("gate_failures", []))
+                plan["baseline_failed"] = baseline_failed
+                plan["baseline_failures"] = baseline_failures
             passed = bool(quality.get("passed"))
-            status = "passed" if passed else "quality-rejected"
+            status = "quality-rejected" if baseline_failed else (
+                "passed" if passed else "quality-rejected")
             candidates.append({"precision": precision, "path": str(model_path),
                                "sha256": _hash(model_path), "bytes": model_path.stat().st_size,
                                "quality": {key: value for key, value in quality.items()
@@ -279,12 +294,25 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
                                "status": status})
         except Exception as error:
             candidates.append({"precision": precision, "path": str(model_path),
-                               "status": "conversion-or-evaluation-failed",
+                               "status": ("quality-rejected" if baseline_failed else
+                                          "conversion-or-evaluation-failed"),
                                "error": str(error)})
+            if precision == "f32" and baseline is None:
+                baseline_failed = True
+                baseline_failures = ["F32 baseline conversion or evaluation failed"]
+                plan["baseline_failed"] = True
+                plan["baseline_failures"] = baseline_failures
+        if baseline_failed:
+            for item in candidates:
+                item["status"] = "quality-rejected"
+        _write(root / "run.json", {"created": run_created, "plan": plan})
         _write(result_path, {
             "pipeline": "vision", "engine": engine, "run_id": root.name,
             "plan": plan, "runtime_snapshot": runtime.snapshot(),
             "converter": provenance, "candidates": candidates, "published": False,
+            "baseline_failed": baseline_failed, "baseline_failures": baseline_failures,
+            **({"status": "rejected"} if not any(
+                item["status"] == "passed" for item in candidates) else {}),
         })
     result = {
         "pipeline": "vision",
@@ -295,7 +323,11 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
         "converter": provenance,
         "candidates": candidates,
         "published": False,
+        "baseline_failed": baseline_failed,
+        "baseline_failures": baseline_failures,
     }
+    if not any(item["status"] == "passed" for item in candidates):
+        result["status"] = "rejected"
     _write(result_path, result)
     if publish and any(item["status"] == "passed" for item in candidates):
         result["publication"] = publish_bundle(root, plan, candidates, provenance=provenance)
@@ -470,7 +502,10 @@ def _evaluate_candidate(plan, family, model_path, binary, root, baseline, python
                            f32_mean_top5_overlap=sum(f32_overlap) / len(f32_overlap),
                            f32_probability_mae=sum(f32_error) / len(f32_error),
                            f32=baseline)
-        metrics["passed"] = detection.classification_gate(metrics)["passed"]
+        gate = detection.classification_gate(
+            metrics, baseline_passed=baseline.get("passed") if baseline is not None else None)
+        metrics["gate_failures"] = gate["failures"]
+        metrics["passed"] = gate["passed"]
         return metrics
 
     per_image = []
@@ -547,10 +582,13 @@ def _evaluate_candidate(plan, family, model_path, binary, root, baseline, python
                      f32_by_id[image["id"]], native_by_id[image["id"]])["matches"]])
         metrics["d25_vs_f32"] = d25_vs_f32
         metrics["f32"] = baseline
-    metrics["passed"] = detection.detection_gate(
+    gate = detection.detection_gate(
         metrics, baseline=baseline is None,
+        baseline_passed=baseline.get("passed") if baseline is not None else None,
         segmentation=plan["task"] == "image-segmentation",
-        pose=plan["task"] == "keypoint-detection")["passed"]
+        pose=plan["task"] == "keypoint-detection")
+    metrics["gate_failures"] = gate["failures"]
+    metrics["passed"] = gate["passed"]
     return metrics
 
 
