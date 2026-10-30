@@ -2,6 +2,8 @@
 
 ## 0.5.9 — unreleased development
 
+- Exclude package-only audio.cpp precisions from source-repository conversion sweeps;
+  report voice validation failures as concise CLI errors.
 - Stream native runtime setup and build output to stderr while commands run.
 - Route non-text trending candidates to AgentQuantix tasks in `aqx research`;
   use `--text-only` for the previous ranking behavior.

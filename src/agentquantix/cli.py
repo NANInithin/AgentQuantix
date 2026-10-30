@@ -1274,6 +1274,16 @@ def main(argv=None):
     except RuntimeErrorBase as error:
         _print(f"runtime: {error}")
         return 1
+    except RuntimeError as error:
+        from .voice import VoiceValidationError
+        if not isinstance(error, VoiceValidationError):
+            raise
+        _print(f"aqx: {error}")
+        if _ACTIVE_RESUME_IDS:
+            commands = ", ".join(f"`aqx run --resume {run_id}`"
+                                 for run_id in _ACTIVE_RESUME_IDS)
+            _print(f"Resume with: {commands}")
+        return 1
     except (ValueError, OSError) as error:
         _print(f"aqx: {error}")
         return 1

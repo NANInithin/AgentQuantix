@@ -567,7 +567,8 @@ def available_quants(repo_id: str, backend: VoiceBackend,
             return _audio_cpp_package_quants(spec)
         if _audio_cpp_has_conversion(spec):
             return AUDIOCPP_QUANTS
-        return _audio_cpp_package_quants(spec)
+        return tuple(quant for quant in _audio_cpp_package_quants(spec)
+                     if quant in AUDIOCPP_QUANTS)
     return backend.supported_quants
 
 
