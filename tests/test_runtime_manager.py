@@ -101,6 +101,14 @@ def installed(lifecycle, **kwargs):
     return lifecycle.manager.prepare("llama.cpp", builder=build, persistent=True, **kwargs)
 
 
+def _default_candidate_fingerprint():
+    import platform
+    from agentquantix.runtimes.spec import runtime_spec
+    spec = runtime_spec("llama.cpp")
+    return {"adapter_version": spec.adapter_version, "platform": platform.platform(),
+            "machine": platform.machine(), "required_binaries": []}
+
+
 def test_registry_has_all_designated_originals():
     assert len(RUNTIMES) == 11
     assert RUNTIMES["ultralytics-ggml"].repository == "Asher-1/ultralytics-ggml"
@@ -392,6 +400,66 @@ def test_migration_copy_preserves_legacy_source_and_rebuilds_bound_cache(lifecyc
     assert lifecycle.manager.work_root in handle.source.parents
     assert source.is_dir() and legacy_build.is_dir()
     assert handle.manifest["ownership_kind"] == "managed"
+    from agentquantix.runtimes.spec import canonical_hash
+    expected_root = (lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp"
+                     / OLD[:12] / canonical_hash(handle.manifest["build_fingerprint"])[:16])
+    assert Path(handle.manifest["root"]) == expected_root
+
+
+def test_new_install_uses_short_candidate_root(lifecycle):
+    from agentquantix.runtimes.spec import canonical_hash
+    handle = installed(lifecycle)
+    expected_root = (lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp"
+                     / NEW[:12] / canonical_hash(handle.manifest["build_fingerprint"])[:16])
+    assert Path(handle.manifest["root"]) == expected_root
+
+
+def test_existing_legacy_candidate_with_manifest_is_reused(lifecycle, monkeypatch):
+    from agentquantix.runtimes.spec import canonical_hash
+    fingerprint = _default_candidate_fingerprint()
+    key = canonical_hash(fingerprint)
+    root = lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp" / NEW / key
+    root.mkdir(parents=True)
+    manifest_path = root / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "engine": "llama.cpp", "revision": NEW, "source": str(root / "source"),
+        "build_dir": str(root / "source/build"), "root": str(root), "binaries": {},
+        "build_fingerprint": fingerprint, "storage_policy": "persistent",
+        "identity": "legacy-candidate",
+    }), encoding="utf-8")
+    monkeypatch.setattr(lifecycle.manager, "verify", lambda handle: handle)
+
+    def unexpected_build(*_args):
+        pytest.fail("existing candidate should be reused")
+
+    handle = lifecycle.manager.prepare("llama.cpp", builder=unexpected_build, persistent=True)
+    assert Path(handle.manifest["root"]) == root
+    assert not (lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp"
+                / NEW[:12] / key[:16]).exists()
+
+
+@pytest.mark.parametrize("mismatch", ["revision", "key"])
+def test_short_candidate_manifest_collision_is_preserved(lifecycle, mismatch):
+    from agentquantix.runtimes.spec import canonical_hash
+    fingerprint = _default_candidate_fingerprint()
+    key = canonical_hash(fingerprint)
+    root = (lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp"
+            / NEW[:12] / key[:16])
+    root.mkdir(parents=True)
+    manifest = {"engine": "llama.cpp", "revision": NEW, "build_fingerprint": fingerprint}
+    if mismatch == "revision":
+        manifest["revision"] = OLD
+    else:
+        manifest["build_fingerprint"] = {"different": "fingerprint"}
+    manifest_path = root / "manifest.json"
+    original = json.dumps(manifest)
+    manifest_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(RuntimeErrorBase, match="runtime directory collision"):
+        lifecycle.manager.prepare("llama.cpp", builder=build, persistent=True)
+
+    assert root.is_dir()
+    assert manifest_path.read_text(encoding="utf-8") == original
 
 
 def test_modified_manifest_and_changed_source_are_rejected(lifecycle):

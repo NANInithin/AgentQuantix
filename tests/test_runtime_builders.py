@@ -59,6 +59,35 @@ def test_candidate_build_uses_separate_output_and_retains_native_contract(native
     assert json.loads((native.build / "aqx-build.json").read_text(encoding="utf-8"))["source"] == str(native.source)
 
 
+def test_windows_long_build_dir_fails_before_native_execution(native, monkeypatch):
+    monkeypatch.setattr(builders.sys, "platform", "win32")
+    calls = []
+    monkeypatch.setattr(builders, "_execute", lambda *args, **kwargs: calls.append(args))
+    build_dir = native.build.parent / ("b" * 140)
+
+    with pytest.raises(builders.RuntimeBuildError) as raised:
+        builders.build_runtime("llama.cpp", native.source, build_dir, native.options)
+
+    message = str(raised.value)
+    assert "llama.cpp" in message
+    assert str(len(str(build_dir.resolve()))) in message
+    assert str(build_dir.resolve()) in message
+    assert "260-character limit" in message
+    assert "AQX_WORK_ROOT" in message and r"C:\aqx" in message
+    assert not calls
+    assert not build_dir.exists()
+
+
+def test_windows_short_build_dir_passes_preflight(native, monkeypatch):
+    monkeypatch.setattr(builders.sys, "platform", "win32")
+    assert len(str(native.build.resolve())) <= builders._WINDOWS_BUILD_DIR_MAX
+
+    result = builders.build_runtime("llama.cpp", native.source, native.build, native.options)
+
+    assert result["binaries"]
+    assert any(command[0] == "git" for command in native.commands)
+
+
 def test_ultralytics_build_uses_cpp_ggml_subtree(native):
     (native.source / "CMakeLists.txt").unlink()
     cmake_source = native.source / "cpp_ggml"

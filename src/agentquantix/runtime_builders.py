@@ -35,6 +35,7 @@ _TARGETS = {
     "rf-detr.cpp": ("rfdetr-cli",),
     "depth-anything.cpp": ("da3-cli",),
 }
+_WINDOWS_BUILD_DIR_MAX = 120
 _NONFINITE = re.compile(
     r"(?<![\w/\\.\-])(?:nan|[+-]?inf(?:inity)?)(?![\w/\\.\-])"
     r"|\b(?:assertion failed|assert failed)\b", re.I)
@@ -393,6 +394,13 @@ def build_runtime(engine, source, build_dir, options=None):
     if engine not in _TARGETS:
         raise RuntimeBuildError(f"no native build adapter for {engine}")
     source, build_dir = Path(source).resolve(), Path(build_dir).resolve()
+    build_dir_length = len(str(build_dir))
+    if sys.platform == "win32" and build_dir_length > _WINDOWS_BUILD_DIR_MAX:
+        raise RuntimeBuildError(
+            f"{engine}: build directory is {build_dir_length} characters long: {build_dir}. "
+            "MSVC can fail to open PDB files when nested object paths exceed Windows' "
+            "260-character limit. Set AQX_WORK_ROOT to a shorter folder such as C:\\aqx "
+            "and retry.")
     cmake_source = source / "cpp_ggml" if engine == "ultralytics-ggml" else source
     if not (cmake_source / "CMakeLists.txt").is_file():
         raise RuntimeBuildError(f"{engine}: source lacks CMakeLists.txt")
