@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import time
 
-from . import archsupport, config, feasibility, hub, sysprobe
+from . import archsupport, config, feasibility, hub, sysprobe, voice
 from .tasks import router
 from .tasks.registry import MEDIA
 
@@ -83,7 +83,17 @@ def research(limit=None, probe_disk=True, workers=8, hunt_forks=True,
                 continue
 
             candidate.dropped = None
-            if route.choices:
+            audio_cpp_blocker = None
+            if route.engine == "audio.cpp" and route.family:
+                spec = voice.audio_cpp_catalog()["registry"].get(route.family)
+                if spec is not None and not voice._audio_cpp_has_conversion(spec):
+                    audio_cpp_blocker = voice._audio_cpp_source_blocker(route.family)
+            if audio_cpp_blocker:
+                status = "blocked"
+                next_command = (
+                    f"aqx run audio.cpp:{route.family} --task "
+                    f"{route.task} --no-publish")
+            elif route.choices:
                 status = "choose"
                 next_command = (
                     f"aqx run {candidate.repo_id} --task "
@@ -117,7 +127,8 @@ def research(limit=None, probe_disk=True, workers=8, hunt_forks=True,
                 "engine": route.engine,
                 "family": route.family,
                 "status": status,
-                "detail": route.blocker or "; ".join(route.reasons),
+                "detail": (audio_cpp_blocker or route.blocker
+                           or "; ".join(route.reasons)),
                 "source_gb": source_gb,
                 "license": candidate.license,
                 "gated": candidate.gated,

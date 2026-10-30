@@ -243,6 +243,11 @@ def _audio_cpp_has_conversion(spec: dict) -> bool:
                for source in spec.get("sources", []))
 
 
+def _audio_cpp_source_blocker(family: str) -> str:
+    return (f"audio.cpp {family} has no conversion from the original weights; "
+            "only audio.cpp's published GGUF packages can run")
+
+
 def _audio_cpp_quants(spec: dict) -> tuple[str, ...]:
     """Every precision this family can consume or create.
 

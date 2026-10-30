@@ -32,6 +32,12 @@ def _size(gigabytes):
     return f"{gigabytes:.0f}G" if gigabytes >= 10 else f"{gigabytes:.1f}G"
 
 
+def _task_note(route):
+    if route["status"] == "blocked" and route.get("detail"):
+        return route["detail"]
+    return (route.get("warnings") or [route.get("detail") or ""])[0]
+
+
 def table(result, limit=None, include_blocked=True):
     """Fixed-width table, best candidates first."""
     rows = [a for a in result["assessments"]
@@ -107,7 +113,7 @@ def table(result, limit=None, include_blocked=True):
             f"{'ENGINE':<20} {'SOURCE':>7}  NOTE")
         lines.extend(["", "OTHER TASKS", task_header, "-" * len(task_header)])
         for route in task_rows:
-            note = (route.get("warnings") or [route.get("detail") or ""])[0]
+            note = _task_note(route)
             if len(note) > 60:
                 note = note[:57] + "..."
             lines.append(
@@ -260,7 +266,7 @@ def markdown(result, limit=None, include_blocked=True):
             "|---:|---|---|---|---|---|---|---|---:|---|---|---|---|",
         ]
         for route in task_rows:
-            note = (route.get("warnings") or [route.get("detail") or ""])[0]
+            note = _task_note(route)
             next_command = route.get("next")
             next_cell = f"`{markdown_cell(next_command)}`" if next_command else "-"
             out.append(

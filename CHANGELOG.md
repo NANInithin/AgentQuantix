@@ -2,6 +2,8 @@
 
 ## 0.5.9 — unreleased development
 
+- Block audio.cpp source repos without safetensors conversion and point to the
+  published GGUF package route.
 - Exclude package-only audio.cpp precisions from source-repository conversion sweeps;
   report voice validation failures as concise CLI errors.
 - Stream native runtime setup and build output to stderr while commands run.

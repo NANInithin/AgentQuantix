@@ -215,13 +215,14 @@ def _audio_cpp_catalog_blocker(track):
 
 def voice_plan(repo_id, *, target_repo=None, quants=None, task=None, family=None,
                hunt_forks=True, language=None, speaker=None):
-    task_tracks = {
-        "text-to-speech": voice.TTS,
-        "automatic-speech-recognition": voice.ASR,
-        "audio-source-separation": voice.SEP,
-        "voice-conversion": voice.VC,
-        "forced-alignment": voice.ALIGN,
+    task_names = {
+        voice.TTS: "text-to-speech",
+        voice.ASR: "automatic-speech-recognition",
+        voice.SEP: "audio-source-separation",
+        voice.VC: "voice-conversion",
+        voice.ALIGN: "forced-alignment",
     }
+    task_tracks = {name: track for track, name in task_names.items()}
     allowed, reason, backend = voice.execution_gate(
         repo_id, track=task_tracks.get(task), family=family)
     if not allowed:
@@ -236,6 +237,23 @@ def voice_plan(repo_id, *, target_repo=None, quants=None, task=None, family=None
                 "task": task, "track": backend.track, "backend": backend.id,
                 "engine": backend.backend, "family": backend.family,
                 "blocker": blocker}
+    if (backend.backend == "audio.cpp"
+            and not voice_release._audiocpp_package_reference(repo_id, backend)):
+        spec = voice.audio_cpp_catalog()["registry"].get(backend.family)
+        if spec is not None and not voice._audio_cpp_has_conversion(spec):
+            task_name = task_names[backend.track]
+            return {
+                "model": repo_id,
+                "status": "blocked",
+                "task": task_name,
+                "track": backend.track,
+                "backend": backend.id,
+                "engine": backend.backend,
+                "family": backend.family,
+                "blocker": voice._audio_cpp_source_blocker(backend.family),
+                "next": (f"aqx run audio.cpp:{backend.family} --task "
+                         f"{task_name} --no-publish"),
+            }
     available = voice.available_quants(repo_id, backend)
     requested = [voice.normalize_quant(backend, quant) for quant in (quants or available)]
     if unsupported := [quant for quant in requested if quant not in available]:
@@ -246,13 +264,7 @@ def voice_plan(repo_id, *, target_repo=None, quants=None, task=None, family=None
     suffix = "GGUF" if backend.model_format.endswith("gguf") else "GGML"
     source_name = repo_id.split("/")[-1].replace(":", "-")
     tts = backend.track == voice.TTS
-    task = {
-        voice.TTS: "text-to-speech",
-        voice.ASR: "automatic-speech-recognition",
-        voice.SEP: "audio-source-separation",
-        voice.VC: "voice-conversion",
-        voice.ALIGN: "forced-alignment",
-    }[backend.track]
+    task = task_names[backend.track]
     quality_gates = {
         voice.TTS: ("audio integrity, silence/clipping, ASR round-trip WER/CER, "
                     "then human listening review"),

@@ -278,6 +278,64 @@ def test_reports_render_and_filter_other_tasks(offline_research):
     assert "## Other tasks" not in report.markdown(old_result)
 
 
+@pytest.mark.parametrize(
+    ("family", "registry", "expected_status"),
+    [
+        ("breeze_tts", {
+            "breeze_tts": {
+                "family": "breeze_tts",
+                "sources": [{"format": "gguf"}],
+            },
+        }, "blocked"),
+        ("unknown_audio_family", {}, "ready"),
+    ],
+)
+def test_research_audio_cpp_gguf_only_family_routes_to_packages(
+        monkeypatch, offline_research, family, registry, expected_status):
+    original_route = router.route
+
+    def route(repo_id, **kwargs):
+        if repo_id == "org/audio-model":
+            return router.Route(
+                repo_id, task="text-to-speech", pipeline="voice",
+                engine="audio.cpp", family=family,
+                reasons=["audio.cpp catalog route"])
+        return original_route(repo_id, **kwargs)
+
+    monkeypatch.setattr(router, "route", route)
+    current_catalog = research.voice.audio_cpp_catalog()
+    monkeypatch.setattr(
+        research.voice, "audio_cpp_catalog",
+        lambda: {**current_catalog, "registry": registry})
+
+    original_enrich = research.hub.enrich
+
+    def enrich(candidate, check_ggufs=True, want_readme=True):
+        result = original_enrich(
+            candidate, check_ggufs=check_ggufs, want_readme=want_readme)
+        if candidate.repo_id == "org/audio-model":
+            candidate.source_bytes = 4_000_000_000
+        return result
+
+    monkeypatch.setattr(research.hub, "enrich", enrich)
+    result = research.research(probe_disk=False, hunt_forks=False)
+    audio = next(item for item in result["task_routes"]
+                 if item["repo_id"] == "org/audio-model")
+
+    assert audio["status"] == expected_status
+    if expected_status == "blocked":
+        assert audio["detail"] == research.voice._audio_cpp_source_blocker(family)
+        assert audio["next"] == (
+            "aqx run audio.cpp:breeze_tts --task text-to-speech --no-publish")
+        assert audio["warnings"]
+        assert "audio.cpp breeze_tts has no conversion from" in report.table(result)
+        assert audio["next"] in report.markdown(result)
+    else:
+        assert audio["detail"] == "audio.cpp catalog route"
+        assert audio["next"] == (
+            "aqx run org/audio-model --task text-to-speech --no-publish")
+
+
 def test_research_cli_text_only_option_forwards_and_is_documented(
         monkeypatch, tmp_path, capsys):
     calls = {}
