@@ -182,6 +182,13 @@ def test_plan_selects_detection_engine():
 
 def test_timed_run_creates_nested_log_directory_before_time(monkeypatch, tmp_path):
     log_path = tmp_path / "logs" / "f32" / "785.log"
+    time_binary = Path("/usr/bin/time")
+    original_is_file = release.Path.is_file
+
+    def is_file(path):
+        if path == time_binary:
+            return True
+        return original_is_file(path)
 
     def run(command, **_kwargs):
         assert log_path.parent.is_dir()
@@ -189,6 +196,7 @@ def test_timed_run_creates_nested_log_directory_before_time(monkeypatch, tmp_pat
             "Maximum resident set size (kbytes): 42\n", encoding="utf-8")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
+    monkeypatch.setattr(release.Path, "is_file", is_file)
     monkeypatch.setattr(release.subprocess, "run", run)
     result = release._timed_run(["native-cli"], log_path)
     assert result["peak_rss_kib"] == 42
