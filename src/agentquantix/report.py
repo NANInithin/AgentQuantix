@@ -104,7 +104,7 @@ def table(result, limit=None, include_blocked=True):
         }
         task_header = (
             f"{'STATUS':<8} {'MODEL':<44} {'TASK':<28} "
-            f"{'ENGINE':<18} {'SOURCE':>7}  NOTE")
+            f"{'ENGINE':<20} {'SOURCE':>7}  NOTE")
         lines.extend(["", "OTHER TASKS", task_header, "-" * len(task_header)])
         for route in task_rows:
             note = (route.get("warnings") or [route.get("detail") or ""])[0]
@@ -114,7 +114,7 @@ def table(result, limit=None, include_blocked=True):
                 f"{status_labels[route['status']]:<8} "
                 f"{route['repo_id'][:44]:<44} "
                 f"{(route.get('task') or '?')[:28]:<28} "
-                f"{(route.get('engine') or '?')[:18]:<18} "
+                f"{(route.get('engine') or '?')[:20]:<20} "
                 f"{_size(route.get('source_gb')):>7}  {note}")
 
         task_counts = {
