@@ -1,4 +1,29 @@
-# Agent handover — 29 October 2026
+# Agent handover — 30 October 2026
+
+## 0.6.0 consolidation state
+
+The current work is documentation-only on
+`devin/1793334635-0.6.0-consolidation`. The package version remains **0.4.5**;
+no capability or version change is part of this branch. The consolidated
+support view is [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md), the release notes are
+[draft only](RELEASE_NOTES_0_6_0.md), and the item-by-item status is in
+[RELEASE_0_6_0_CHECKLIST_STATUS.md](RELEASE_0_6_0_CHECKLIST_STATUS.md).
+Evidence remains limited to named Linux x86_64 CPU task/family/precision
+cells. Windows/MSVC, GPU/Metal, and real Hub publication plus re-download have
+not been established.
+
+### Open owner decisions
+
+- Decide whether Windows is in the supported release scope and provide or
+  schedule MSVC builds and native acceptance for the new engines.
+- Provide the Hub authentication needed for real publication and
+  post-download verification; no token or publication evidence is available
+  in this work.
+- Confirm the forecasting deferral and whether SAM3 remains blocked. Forecasting
+  has no engine license or working pinned inference/conversion path; SAM3 has
+  gated official weights and no verified ungated conversion provenance.
+- Approve any release version, tag, package/model publication, or announcement.
+  The source package is still 0.4.5 and the 0.6.0 notes are a draft.
 
 ## Start here
 

@@ -1,569 +1,260 @@
-# Using AgentQuantix
+# Usage
 
-Every task uses the same commands: `aqx inspect`, `aqx plan`, `aqx run`,
-`aqx review`, `aqx publish`, `aqx verify`. AgentQuantix reads the model's Hub
-metadata and the installed engine catalogs to choose the task and engine, so a
-standard repository needs only `aqx run org/model`. The experimental v0.5.0
-image/video workflow is described in [media usage](docs/MEDIA_USAGE.md); it uses
-the same commands with a separate pinned stable-diffusion.cpp engine.
+The shared entry point is `aqx run org/model`. Routing uses Hub metadata and
+engine catalogs; add `--task` or `--family` only to resolve an ambiguity or a
+custom repository. The accepted evidence scope is Linux x86_64 CPU and is
+limited to the task, family, and precision recorded in the
+[support matrix](docs/SUPPORT_MATRIX.md).
 
-For explicit llama.cpp multimodal understanding, use
-`--task multimodal-understanding` with `aqx plan` or `aqx run`. This supports
-the implemented vision, document, video and ASR-style audio routes.
-`image-text-to-text` and `any-to-any` remain on text-generation by default.
-The audio.cpp voice pipeline also supports catalog-declared separation,
-voice-conversion and forced-alignment tasks; use `--task` when a Hub
-`audio-to-audio` tag does not identify the intended task.
-Select these routes with `--task audio-source-separation`,
-`--task voice-conversion` or `--task forced-alignment`. Native acceptance is
-model-specific; see [audio task status](docs/AUDIO_TASKS_STATUS.md) for
-accepted precisions, rejected families and licensing limits.
+The examples use `org/model` where any Hub repository can be substituted.
+`--no-publish` keeps an evaluation local. Use the matching task's status
+document for its complete evidence and limits.
 
-For vision.cpp, use `--task mask-generation`, `--task image-segmentation` or
-`--task depth-estimation`. MobileSAM, BiRefNet and Depth Anything V2 are
-catalog-routed; depth is relative only. See
-[vision task status](docs/VISION_STATUS.md) for gates and limitations.
+## Install and common commands
 
-For 0.5.7 detection support, use `--task object-detection`,
-`--task image-segmentation`, `--task keypoint-detection` or
-`--task image-classification`. The engine is selected from the matching family:
-RF-DETR supports detection and instance segmentation; the tested YOLO26
-families support pose and classification. Plans use `<engine>:<family>` run
-targets and publish only passing precisions. Detection is evaluated on ten
-COCO val2017 images, a small sample. Install the optional evaluation
-dependencies with `pip install "agentquantix[detection]"`. See
-[detection task status](docs/DETECTION_STATUS.md) for quality gates and limits.
+Install the extras needed by your task. For development plus media and
+detection helpers:
 
-Three ways to drive it. The CLI is the ground truth — the Claude Code skill and
-the API-key loop call exactly the same code, so nothing behaves differently
-depending on which one you pick.
-
-See [README.md](README.md) for what it does internally, the environment
-variables, and the file layout.
-
----
-
-## Install
-
-**If you already have Python**, install the CLI straight from the repo:
-
-```bash
-uv tool install "agentquantix[full] @ git+https://github.com/NANInithin/AgentQuantix"
+```sh
+python -m pip install -e '.[dev,media,detection]'
 ```
 
-or from a local checkout:
+The `voice`, `retrieval`, `multimodal`, `convert`, and `media-quality` extras
+provide additional optional dependencies. Per-task converter environments are
+created automatically and kept separate from the main install.
 
-```bash
-uv tool install "./AgentQuantix[full]"
+```sh
+aqx inspect org/model
+aqx plan org/model
+aqx run org/model --no-publish
+aqx runs
+aqx run --resume RUN_ID
 ```
 
-That puts `aqx` on PATH. `pipx install` works identically if you prefer it.
+`aqx run --resume RUN_ID` uses the recorded plan and frozen runtime. Detection
+and depth run IDs use the shared `vision:` prefix; use
+`aqx runs --pipeline vision` to list vision, detection, and depth records.
 
-**Which extra?**
+## Text
 
-| extra | pulls | when |
-|---|---|---|
-| `[all]` | `hf_xet`, `ninja` | you only quantize models whose publisher already ships a BF16 GGUF |
-| `[full]` | the above plus `torch`, `transformers`, `sentencepiece`, `protobuf` | you want to convert safetensors yourself — the general case |
+**Task:** `text-generation`
 
-`[full]` is about a gigabyte larger and is what most people want. Without it,
-`aqx run` can only handle models that already have an official GGUF, and says
-so at plan time rather than after downloading the weights.
+**Target:** `org/model`
 
-`hf_xet` and `ninja` both change what the tool can actually do (downloads over
-47 GiB, and much faster builds), so take them either way.
+**Commands:**
 
-**On a bare machine** — a fresh VM with nothing — use the bootstrap installer,
-which brings its own Python:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/NANInithin/AgentQuantix/main/install.sh | bash
+```sh
+aqx plan org/model --task text-generation
+aqx run org/model --task text-generation --no-publish
+aqx runs --pipeline text
+aqx run --resume RUN_ID
 ```
 
-```powershell
-irm https://raw.githubusercontent.com/NANInithin/AgentQuantix/main/install.ps1 | iex
-```
+**Quality gate:** No text-generation family or precision has accepted native
+evidence in the support matrix; the native recipe acceptance requires
+conversion, quantization, inference, and the expected-text check in
+[release validation](docs/RELEASE_VALIDATION.md).
 
-Then:
+## Voice
 
-```bash
-export HF_TOKEN=hf_...    # write permission; or just run `hf auth login`
-aqx bootstrap             # checks prerequisites, clones + builds llama.cpp
-```
+**Tasks:** `text-to-speech`, `automatic-speech-recognition`,
+`audio-source-separation`, `voice-conversion`, `forced-alignment`
 
-`aqx bootstrap` will not install system packages behind your back. It reports
-what is missing and prints the exact command for each — those need a package
-manager and usually root, and the CUDA choice depends on the machine.
-`--check-only` reports and stops.
+**Targets:** `org/model` or `audio.cpp:<family>`
 
-The **work root** (llama.cpp plus the scratch tree) resolves in this order:
-`AQX_WORK_ROOT`, then an existing `~/Documents/INF` containing llama.cpp — so
-this machine keeps sharing one checkout with the hand-written scripts — then
-`~/.agentquantix` on a fresh machine.
+**Commands:**
 
-## One-time setup
-
-```bash
-aqx doctor
-```
-
-Confirms token, llama.cpp build, GPU, disk, transfer policy. It should end with
-`Ready.`
-
-One more, **while the machine is idle**:
-
-```powershell
-aqx probe --remeasure-disk
-```
-
-Disk throughput drives every time estimate, and it is cached per volume. If the
-first measurement happened while a quantization job was running it will read
-low — roughly half — and every estimate built on it will be pessimistic. Run
-this once on a quiet machine and it is right from then on.
-
----
-
-## The normal cycle
-
-### 1. Trigger the research
-
-```powershell
-aqx research
-```
-
-Top 100 trending, filtered, sized, checked against this box. Two-ish minutes.
-Read-only — downloads nothing, creates nothing, safe to run whenever.
-
-Useful variants:
-
-```powershell
-aqx research --limit 30          # faster, top 30 only
-aqx research --hide-blocked      # only what's actually runnable
-aqx research --markdown          # also writes reports/<stamp>.md
-```
-
-### 2. Read the table
-
-```
-      MODEL                          PARAMS   BF16   PEAK  UPLOAD    EST  QUANTS  NOTE
-WARN  IFM/K2-Horizon-MoVA-36B-A4B     37.4B*    70G   138G     55G   3.0h    3/30  27 of 30 already published...
-WARN  Qwen/Qwen3.8-27B                27.8B    53G   132G    422G  11.5h      29  BF16 is 53 GiB - xet for that download...
-DONE  IFM/K2-Horizon-7B                9.0B    17G   0.0G    0.0G     0m    0/29  29 of 29 already published...
-BLOCK zai-org/GLM-5.3                753.3B*  1431G  3581G  11836G  21.0d      30  needs 3581 GB peak disk...
-```
-
-- `OK` / `WARN` / `DONE` / `BLOCK` — WARN means it runs, but read the note.
-  DONE means it is already fully published under your namespace, so there is no
-  work. BLOCK means it can't run, and the note is the wall.
-- **QUANTS** is `remaining/total` when some are already up, or a plain count
-  when nothing is. `3/30` means twenty-seven are already on the Hub and a run
-  would build three.
-- **PEAK** is peak disk *during* the run, not total output. 29 quants of a 27B
-  model is 132 GB, not the 422 GB the outputs sum to, because each file is
-  deleted the moment it is uploaded.
-- **EST** overlaps quantize with upload. Most runs are upload-bound.
-- `*` after params = MoE, so that is stored parameters, not active.
-- Sorted runnable-and-cheapest first, not by trending rank. **Part-finished
-  repos rise on their own** — only their remaining quants are priced, so a
-  repo that is 27/30 done costs an hour or two and sorts near the top. Those
-  are usually the best work on the list.
-
-Every row checks `<your-hf-username>/<name>-GGUF` on the Hub, so the agent never
-proposes work you have already done, and never quotes a full-sweep price for a
-repo that is nearly finished.
-
-### 3. Look closer at anything interesting
-
-```powershell
-aqx show Qwen3.8-27B
-```
-
-Full breakdown: quant list, imatrix source and why, the `-ngl` it will use,
-disk math, the time split, fork leads, every warning. Partial names work —
-`aqx show qwen3.8-27b` is fine.
-
-### 4. Approve and run
-
-```powershell
-aqx run Qwen3.8-27B
-```
-
-Prints the plan, asks `Start? [y/N]`, then runs for hours. Or omit the name to
-pick from a numbered list:
-
-```powershell
-aqx run
-```
-
-Always worth doing first:
-
-```powershell
-aqx run Qwen3.8-27B --dry-run     # show the plan, touch nothing
-```
-
-Multiple models run smallest-first, so a pipeline problem surfaces on the cheap
-one:
-
-```powershell
-aqx run gpt2 Qwen3.8-27B
-```
-
-#### Trading time against disk
-
-How much overlap the sweep uses decides how much disk it needs, because every
-file in flight is one more quant sitting on the drive:
-
-```
-files on disk at once = quantize workers + upload workers + queue depth
-```
-
-Three by default: one being cut, one queued, one uploading. `aqx run` reprices
-peak disk for whatever you choose and tells you how it moved.
-
-| Flag | Default | Effect |
-|---|---|---|
-| `--sequential` | off | Quantize → upload → delete, one at a time, no background uploader — exactly how `scripts/Ornith-1.5-9B.py` works. **One** quant on disk. Slower, because uploads stop hiding behind the next quantize. |
-| `--upload-workers N` | 1 | Concurrent uploads. The useful knob when a run is upload-bound, which most are. Each stream costs one more quant of disk. |
-| `--queue-depth N` | 1 | Finished quants allowed to wait for an uploader. Pure disk-for-smoothness. |
-| `--quantize-workers N` | 1 | Concurrent `llama-quantize` processes. Rarely worth raising — it already threads across every core, so a second process mostly buys contention. |
-| `--quantize-threads N` | all cores | Its trailing `[nthreads]` argument. Set it to keep the machine usable during a long sweep. |
-
-Qwen3.8-27B, same 29 quants, three ways:
-
-```powershell
-aqx run Qwen3.8-27B --dry-run                              # 132 GB peak
-aqx run Qwen3.8-27B --dry-run --sequential                 # 104 GB peak
-aqx run Qwen3.8-27B --dry-run --upload-workers 3 --queue-depth 2   # 187 GB peak
-```
-
-**When to reach for each:** `--sequential` when a model is blocked on disk, or
-when you want to keep the drive free for something else — it is the only way to
-run a model whose quants will not fit three at a time. `--upload-workers 2-3`
-when the estimate is upload-bound and you have disk to spare. `--quantize-threads`
-when you want to use the machine for something else while it grinds.
-
-All five also work as environment variables (`AQX_SEQUENTIAL=1`,
-`AQX_UPLOAD_WORKERS`, `AQX_QUEUE_DEPTH`, `AQX_QUANTIZE_WORKERS`,
-`AQX_QUANTIZE_THREADS`) if you want a permanent default.
-
-### 5. Nothing — step 5 is automatic
-
-When the run finishes it verifies what actually landed on the Hub and publishes
-the model card. You will see the file listing with real sizes and anything
-missing.
-
-To re-check later, or check a repo the old hand-written scripts produced:
-
-```powershell
-aqx verify K2-Horizon-0.9B
-aqx card K2-Horizon-0.9B --dry-run    # print it
-aqx card K2-Horizon-0.9B              # publish it
-```
-
----
-
-## xet — handled for you
-
-This used to be a manual lever. It is now automatic, because the correct
-setting is not per-run, it is **per transfer**:
-
-- hf_xet is **required** to *download* any file over huggingface_hub's
-  plain-HTTP cap — 50 decimal GB, which is **46.6 GiB**. Without it the
-  download raises outright.
-- hf_xet is roughly **10x slower to upload** on this connection (~2 MB/s
-  against ~20 MB/s), and uploads dominate almost every run.
-
-So a 75 GB model wants xet **on** for one download and **off** for the thirty
-uploads that follow. `aqx run` does exactly that: it enables xet for the BF16
-fetch when the file is over the cap, then pins it off before the first upload
-thread starts. Time estimates are priced on that, which is why they are hours
-rather than days.
-
-Override only if you have a reason:
-
-```powershell
-aqx run <model> --xet auto     # the default
-aqx run <model> --xet off      # never use it; models over 46.6 GiB become unrunnable
-aqx run <model> --xet on       # always use it; expect ~10x slower uploads
-```
-
-`AQX_XET=auto|on|off` does the same permanently. You no longer need to set
-`HF_HUB_DISABLE_XET` yourself — the pipeline sets and restores it around each
-phase.
-
----
-
-## Voice releases
-
-Voice models are routed to their TTS or ASR backend automatically and never
-enter the text-model sweep. Show the registered backends, then inspect a plan
-without downloading anything:
-
-```powershell
-aqx runtime show audio.cpp          # catalog families, tasks and native quants
-aqx plan Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M
-aqx plan openbmb/VoxCPM2 --quant Q8_0
-aqx plan bosonai/higgs-tts-3-4b --quant Q8_0
-aqx plan ResembleAI/chatterbox --quant Q8_0
-aqx plan Qwen/Qwen3-ASR-0.6B --quant Q8_0
-aqx plan openai/whisper-small --quant q5_0
-```
-
-Planning verifies the repository against the Hub and records its exact source
-revision and byte size. Family or size-only aliases such as
-`Qwen/Qwen3-TTS-1.7B` are deliberately rejected because they are not real,
-unambiguous source repositories.
-
-Qwen3-TTS and Pocket TTS use llama.cpp's `llama-tts`. A run converts the
-primary model and mmproj and builds every quant exposed by the installed
-llama.cpp quantizer. Low-bit guided types use an importance matrix built from
-the multilingual voice fixtures; types that require it are skipped explicitly
-if that matrix cannot be produced. The pinned audio.cpp
-`audiocpp_cli`/`audiocpp_gguf` toolchain is catalog-driven: AgentQuantix loads
-all TTS and ASR families from that revision's upstream `model_specs`, uses each
-family's declared source tensors and builds the full runtime
-instead of a hand-maintained family subset. Every TTS path generates the
-licensed fixture prompts, rejects invalid/silent/clipped audio, and measures
-ASR round-trip WER for whitespace-delimited languages or CER for Chinese and
-Japanese. Generated audio is deterministically resampled to the
-16 kHz PCM input required by the Whisper gate. Publication waits until you
-listen to the samples and record a decision. The run prints its `run_id`
-(`aqx runs` lists them); the source repo id also resolves when unambiguous:
-
-```powershell
-aqx run Qwen/Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M --no-publish -y
-aqx review voice:Qwen--Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M --accept `
-  --listened-audio --reviewer "Your name" --notes "Clear and correctly paced"
-aqx publish voice:Qwen--Qwen3-TTS-12Hz-1.7B-Base --quant Q4_K_M
-```
-
-`--listened-audio` is your attestation that you listened; a TTS review is
-refused without it. `aqx publish` republishes every accepted quant together so
-`bundle.json` stays complete. Recorded reviews are discovered automatically. A resumed run reuses its
-provenance-matched quality cache; releases created before that cache existed
-are rescored from the reviewed WAV and ASR artifacts without rerunning model
-inference. `--review` remains available as an explicit override.
-
-Pocket TTS additionally requires `--speaker <reference.wav>`. Whisper ASR is a
-separate whisper.cpp build and model format; it runs the committed 16 kHz PCM
-fixture corpus and rejects a quant whose WER regresses beyond the configured
-limit. TTS round-trip scoring builds only `whisper-cli`; the version-specific
-`whisper-quantize` tool is built only for an actual ASR release:
-
-```powershell
-aqx run openai/whisper-small --quant q5_0 -y
-```
-
-VoxCPM2 is one example of automatic catalog resolution:
-
-```powershell
-aqx plan openbmb/VoxCPM2 --quant Q8_0
-aqx run openbmb/VoxCPM2 --quant Q8_0 --no-publish -y
-```
-
-The plan reports `required_source_inputs` separately from
-`required_companions`. OpenBMB publishes VoxCPM2's AudioVAE as
-`audiovae.pth`, while `audiocpp_gguf` consumes `audiovae.safetensors`.
-AgentQuantix detects that exact source layout and runs audio.cpp's pinned
-`voxcpm2_audiovae` preparation utility before conversion. The prepared VAE is
-embedded into the standalone GGUF; it is not a missing publication companion
-and is never substituted from another checkpoint.
-
-Speaker references follow the selected family's catalog task. They are
-optional for Higgs text-to-speech and can be supplied for cloning:
-
-```powershell
-aqx run bosonai/higgs-tts-3-4b --quant Q8_0 `
-  --speaker C:\path\to\reference.wav --no-publish -y
-```
-
-Known upstream source repositories are resolved automatically. For a custom or
-renamed checkpoint whose name does not identify a unique audio.cpp family, use
-the generic override rather than changing AgentQuantix code:
-
-```powershell
-aqx plan owner/my-kokoro-finetune --family kokoro_tts
-aqx run owner/my-kokoro-finetune --family kokoro_tts --quant Q8_0 -y
-```
-
-The catalog can also install and validate audio.cpp's published package for a
-family, or an exact package variant, without inventing a source-repo mapping:
-
-```powershell
-aqx plan audio.cpp:fish_audio --quant Q8_0
-aqx plan qwen3_tts_0_6b_base_q8_0
-```
-
-An audio.cpp GGUF is not interchangeable with a llama.cpp GGUF. The manifest
-records the converter, runtime family, source revision, and audio.cpp revision
-needed to reproduce and execute the bundle.
-
-Quant planning is source-specific. A direct safetensors source gets all nine
-types accepted by `audiocpp_gguf` (`orig`, `f16`, `bf16`, `q8_0`, and the
-`q2_k` through `q6_k` family). A virtual `audio.cpp:<family>`, exact package id,
-or package repository is narrowed to the precisions actually published for
-that package. whisper.cpp plans all ten types printed by its native quantizer.
-
-### Separation, voice conversion and forced alignment
-
-The pinned audio.cpp catalog declares the families and packages available for
-these tasks. Use `--task` for ambiguous sources; an unmatched Hub
-`audio-to-audio` tag is deliberately blocked until you choose separation or
-voice conversion:
-
-```powershell
+```sh
+aqx plan org/model --task text-to-speech
 aqx plan audio.cpp:bs_roformer --task audio-source-separation
-aqx run audio.cpp:bs_roformer --task audio-source-separation --no-publish -y
-aqx run audio.cpp:meanvc2 --task voice-conversion --no-publish -y
-aqx run Qwen/Qwen3-ForcedAligner-0.6B --task forced-alignment --no-publish -y
+aqx run audio.cpp:bs_roformer --task audio-source-separation --no-publish
+aqx runs --pipeline voice
+aqx run --resume RUN_ID
 ```
 
-Separation gates both vocal and accompaniment SI-SDR improvement against the
-known-stem mixture baseline; later precisions must stay within 1 dB per stem.
-Voice conversion requires a finite, non-silent waveform within 20% of the
-input duration and an ASR round-trip WER at or below 0.35, with a 0.10
-precision-regression allowance. Speaker similarity is not measured. Alignment
-checks word count, monotonic in-range boundaries and precision agreement (mean
-boundary delta at most 0.05 seconds, maximum at most 0.20 seconds); there is
-no independent timing reference.
+**Quality gate:** Separation requires at least 6 dB improvement for both stems
+at baseline and other precisions within 1 dB; voice conversion requires finite,
+non-silent output, duration within 20%, and round-trip WER at most 0.35 at
+baseline and at most baseline +0.10 otherwise; alignment requires valid
+monotonic intervals and mean/max baseline deltas at most 0.05/0.20 seconds.
+TTS publication also requires listening review, and no TTS precision is
+accepted in the support matrix.
 
-Prebuilt package cards identify the package id and revision and state that the
-artifact was not converted by AgentQuantix. Source license information is
-recorded in the plan; publication is blocked if the license cannot be
-determined. `--no-publish` can still be used for evaluation. See
-[audio task status](docs/AUDIO_TASKS_STATUS.md) for tested families, precisions,
-results and limitations.
+See [audio task status](docs/AUDIO_TASKS_STATUS.md) for accepted families,
+precision results, rejected tasks, and gate definitions.
 
-If no installed catalog resolves the model, planning automatically searches
-publisher-owned forks and open PRs for llama.cpp, audio.cpp, whisper.cpp, and
-NeMo-Speech.cpp. The blocked plan includes `fork_leads`; use
-`--no-fork-hunt` only when an offline or rate-limited plan is preferred. A lead
-does not become runnable until its converter, model spec, bundle members, and
-real inference path are verified.
+## Media
 
-Every successful release publishes all accepted quant files, required
-companions, `bundle.json`, `quality.json`, and `README.md` in one Hub commit,
-then verifies the remote sizes and SHA-256 values.
+**Tasks:** `text-to-image`, `image-to-image`, `image-editing`,
+`text-to-video`, `image-to-video`, `first-last-to-video`,
+`reference-to-video`, `text-to-audio-video`, `image-to-audio-video`,
+`first-last-to-audio-video`, `reference-to-audio-video`
 
-## Depth task releases
+**Target:** `org/model`; select a known engine family with `--family FAMILY`.
 
-Use `aqx plan depth-anything.cpp:da2-metric-hypersim-small` or
-`aqx plan depth-anything.cpp:da3-small`, then run the approved plan with
-`aqx run <family-target> --no-publish --yes`. The pipeline verifies the pinned
-weight checksum, builds the pinned CPU runtime, evaluates the license-filtered
-COCO sample against the PyTorch reference, and accepts only precisions that
-pass their family gates. F32 is the baseline; F16, Q8_0 and Q4_K are produced
-from its GGUF by the native quantizer. SAM3 remains blocked. See
-[depth and SAM status](docs/DEPTH_SAM_STATUS.md) for the thresholds and
-acceptance limitations.
+**Commands:**
 
----
-
-## If it stops
-
-Ctrl-C, a reboot, a dead network — just re-run the identical command, or
-`aqx run --resume RUN_ID` (`aqx runs` lists them) to resume with the recorded
-plan and frozen runtime.
-`status.json` plus the Hub listing mean it redoes nothing and never uploads
-twice. A failed quant type does not abort the batch; a failed model does not
-abort the night. The end-of-run summary lists what failed and why.
-
----
-
-## Driving it with a model instead
-
-**Claude Code** — restart your session in INF, approve the two MCP servers,
-then:
-
-```
-/quantix
+```sh
+aqx plan org/model --task text-to-image --output media-plan.json
+aqx run org/model --plan media-plan.json --no-publish
+aqx runs --pipeline media
+aqx run --resume RUN_ID
+aqx review media:RUN_ID --quant q4_0 --accept --reviewer 'Your name'
+aqx publish media:RUN_ID --quant q4_0
 ```
 
-Then talk to it: *"what's worth quantizing tonight?"* It researches, presents
-the table, asks which ones, and will not start without you naming them.
+**Quality gate:** Media has no accepted native family in the support matrix;
+publication requires structural checks, a calibrated quality profile and
+high-precision baseline gates, plus human review (video playback and, for
+audio-video, listening); without a profile the run is structural-only and
+cannot publish.
 
-**Any API key, no harness:**
+See [media usage](docs/MEDIA_USAGE.md) and
+[media implementation status](docs/MEDIA_IMPLEMENTATION_STATUS.md). Use
+`--watched-video` for video reviews and `--listened-audio` for audio-video
+reviews; media publication remains gated on native acceptance.
 
-```powershell
-$env:OPENROUTER_API_KEY = "sk-or-..."
-aqx agent --model anthropic/claude-opus-5
+## Retrieval
+
+**Tasks:** `embeddings`, `reranking`, `image-feature-extraction`,
+`zero-shot-image-classification`
+
+**Target:** `org/model`
+
+**Commands:**
+
+```sh
+aqx plan org/model --task embeddings
+aqx run org/model --task embeddings --no-publish
+aqx plan org/model --task reranking
+aqx plan org/model --task image-feature-extraction
+aqx plan org/model --task zero-shot-image-classification
+aqx runs --pipeline retrieval
+aqx run --resume RUN_ID
 ```
 
-Also reads `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`,
-`TOGETHER_API_KEY`. Any OpenAI-compatible endpoint via `--base-url`. It asks you
-directly before letting a quantization start, regardless of what the model
-thinks it is allowed to do.
+**Quality gate:** Embeddings require F16/reference cosine at least 0.999 and
+quant/F16 cosine at least 0.98 plus normalization and retrieval-score checks;
+reranking requires F16 max logit error at most 0.1 and exact relevant ordering,
+with quant top-1 agreement; CLIP requires F16 image/text cosine at least 0.999
+and quant cosine at least 0.95, with classification accuracy no worse than
+F16.
 
-**The model must support tool calling.** Everything this agent does is tools —
-a text-only model cannot drive it at all. Omit `--model` to use the default,
-which does.
+See [retrieval status](docs/RETRIEVAL_STATUS.md) for accepted models and exact
+per-task thresholds.
 
-Two failures worth recognising, both reported as a plain explanation rather
-than a traceback:
+## Multimodal
 
-- *"filtered out by your account's privacy settings"* — OpenRouter removed
-  every endpoint for that model because your account forbids models that train
-  on prompts. Either allow it at
-  [openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy), or
-  pick a model that does not require the permission.
-- *"cannot do tool calling"* — the model has endpoints, but none that accept a
-  `tools` payload. Check the model's provider page lists Tools support.
+**Task:** `multimodal-understanding`
 
-**Codex / OpenCode / Kimi** — copy the matching file from
-[`adapters/`](adapters/) into that tool's config.
+**Target:** `org/model`
 
----
+**Commands:**
 
-## Two cautions
-
-**Do not start a run while another quantization job is going.** They fight over
-RAM, disk and bandwidth, and both slow to a crawl. Check first:
-
-```powershell
-Get-Process llama-quantize,llama-imatrix -ErrorAction SilentlyContinue
+```sh
+aqx plan org/model --task multimodal-understanding
+aqx run org/model --task multimodal-understanding --no-publish
+aqx runs --pipeline multimodal
+aqx run --resume RUN_ID
 ```
 
-If that prints anything, wait.
+**Quality gate:** The evaluated F16 baseline must pass the image, audio, or
+video task gates; lower text precisions are compared against F16 with the
+shared projector, and a missing or mismatched projector blocks release.
 
-**Try a small model first on a new machine.** The pipeline's first real
-end-to-end run was `MiniCPM5-1B` on 2026-09-04: 30 files, 18.1 GB published,
-every local quant deleted as it uploaded. It works — but a new machine has a
-new toolchain, and a 1B model costs minutes rather than hours to find that out.
+See [multimodal status](docs/MULTIMODAL_STATUS.md) for the accepted models,
+evaluated precisions, and limits.
 
----
+## Vision
 
-## Command reference
+**Tasks:** `mask-generation`, `image-segmentation`, `depth-estimation`
 
-Original runtime installation/update management is shared across the existing
-text, voice and media engines. Choose persistent or temporary setup at first
-use; updates require their own approval even when a model run uses `--yes`.
-See [runtime lifecycle status](docs/RUNTIME_LIFECYCLE_STATUS.md) for paths,
-migration, frozen resume and development validation boundaries.
+**Targets:** `org/model` or `vision.cpp:<family>`
 
-| Command | What it does |
-|---|---|
-| `aqx doctor` | Is this machine ready. Run after any environment change. |
-| `aqx runtime list` | Installed engine revisions, storage and provenance. |
-| `aqx runtime check <engine>` | Check the stable release or default-branch commit without building. |
-| `aqx runtime install <engine> --persistent` | Review and build a regular-use original; `--temporary` selects temporary storage. |
-| `aqx runtime update <engine>` | Review and build an update beside the current installation. |
-| `aqx runtime adopt <engine> <path>` | Verify/register an existing original checkout without modifying it. |
-| `aqx runtime rollback <engine>` | Restore the previous verified installation. |
-| `aqx runtime prune <engine>` | Inventory obsolete builds; `--apply` requests removal. |
-| `aqx probe` | Measure the machine. `--remeasure-disk` to refresh the cached disk rate. |
-| `aqx research` | Steps 1-3. `--limit N`, `--top N`, `--hide-blocked`, `--markdown`, `--json`, `--no-fork-hunt`. |
-| `aqx runtime show <engine>` | One engine's revision plus the tasks, families and native quant types its catalog declares. |
-| `aqx inspect <model>` | Read-only route (task, pipeline, engine, evidence) and the assessment or plan detail. `--task`/`--engine`/`--family` settle a reported ambiguity. |
-| `aqx plan <model>...` | Read-only exact plan for any task. `--output` saves a voice/media plan. |
-| `aqx show <model or run>...` | Research detail, a recorded run, or a live inspection. |
-| `aqx run [model...]` | Plan, approve, build, validate, publish. `--dry-run`, `--yes`, `--resume RUN_ID`, `--plan FILE`. Option groups in `--help` say which task each applies to. |
-| `aqx runs [--pipeline retrieval|multimodal]` | Recorded `text:`, `voice:`, `media:`, `retrieval:` and `multimodal:` run ids; filter by pipeline. |
-| `aqx review RUN_ID --quant Q --accept/--reject --reviewer NAME` | Record a human review; `--listened-audio` and `--watched-video` attest playback. |
-| `aqx publish RUN_ID --quant Q` | Publish a validated, reviewed voice or media candidate. |
-| `aqx verify <target>...` | A published repo, a run's built bundles, or a local `bundle.json`/`manifest.json`. |
-| `aqx card <repo>` | Write and publish the text model card. `--dry-run` to print it instead. |
-| `aqx agent [prompt]` | Drive it with an API key. `--model`, `--base-url`, `--max-steps`. |
-| `aqx mcp` | Run as an MCP server on stdio. Harnesses launch this; you never do by hand. |
+**Commands:**
 
-Research results land in `reports/` (`latest.json` is what `show` and `run`
-read). Run records and the learned timing history land in `state/`.
+```sh
+aqx plan vision.cpp:sam --task mask-generation
+aqx plan vision.cpp:birefnet --task image-segmentation
+aqx plan vision.cpp:depth-anything --task depth-estimation
+aqx run vision.cpp:sam --task mask-generation --no-publish
+aqx runs --pipeline vision
+aqx run --resume RUN_ID
+```
+
+**Quality gate:** MobileSAM requires point and box IoU at least 0.90 and
+lower-precision IoU within 0.01 with pixel agreement at least 0.99; BiRefNet
+requires IoU at least 0.90 and boundary F-score at least 0.80, with the same
+lower-precision bounds; vision.cpp depth is relative/ordinal and uses the
+three-scene Spearman and scale-shift AbsRel gates in its status document.
+
+See [vision status](docs/VISION_STATUS.md). The vision.cpp depth family is
+relative depth only; metric depth is documented under the separate depth
+pipeline below.
+
+## Detection
+
+**Tasks:** `object-detection`, `image-segmentation`, `image-classification`,
+`keypoint-detection`
+
+**Targets:** `ultralytics-ggml:<family>` or `rf-detr.cpp:<family>`
+
+**Commands:**
+
+```sh
+aqx plan ultralytics-ggml:yolo26n-cls --task image-classification
+aqx run ultralytics-ggml:yolo26n-cls --task image-classification --no-publish
+aqx plan ultralytics-ggml:yolo26n-pose --task keypoint-detection
+aqx plan rf-detr.cpp:rfdetr-seg-nano --task image-segmentation
+aqx runs --pipeline vision
+aqx run --resume RUN_ID
+```
+
+**Quality gate:** A family is accepted only when its native outputs pass the
+task-specific reference and precision-regression thresholds; object detection
+is rejected, and no object-detection family or precision is accepted in the
+support matrix.
+
+See [detection status](docs/DETECTION_STATUS.md) for the accepted classification,
+pose, and segmentation results and the rejected RF-DETR object-detection
+baseline.
+
+## Depth
+
+**Task:** `depth-estimation`
+
+**Targets:** `depth-anything.cpp:<family>` or `vision.cpp:<family>`
+
+**Commands:**
+
+```sh
+aqx plan depth-anything.cpp:da2-metric-hypersim-small --task depth-estimation
+aqx run depth-anything.cpp:da2-metric-hypersim-small --task depth-estimation --no-publish
+aqx plan depth-anything.cpp:da3-small --task depth-estimation
+aqx runs --pipeline vision
+aqx run --resume RUN_ID
+```
+
+**Quality gate:** DA2 F32 and its quant candidates require Spearman at least
+0.99, AbsRel at most 0.05, and median absolute error at most 5% of reference
+median; DA3 additionally requires rotation at most 1 degree, translation L2
+at most 0.001, and intrinsics relative error at most 0.01, so Q8_0 and Q4_K
+are rejected for DA3.
+
+See [depth and SAM status](docs/DEPTH_SAM_STATUS.md) for family semantics,
+producers, results, and the SAM3 blocker.
+
+## Reviews, publication, and status
+
+The CLI help documents the shared review and publish forms:
+
+```sh
+aqx review RUN_ID --quant QUANT --accept --reviewer 'Your name'
+aqx publish RUN_ID --quant QUANT
+aqx verify TARGET
+```
+
+Reviews are bound to the run and candidate artifact. Use `--listened-audio`
+for TTS, `--watched-video` for video, and both flags for audio-video. A review
+does not itself publish a candidate; publication is a separate command and is
+blocked when the release gates are not satisfied.

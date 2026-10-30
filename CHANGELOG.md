@@ -2,6 +2,8 @@
 
 ## 0.5.9 — unreleased development
 
+- See the [0.6.0 draft release notes](docs/RELEASE_NOTES_0_6_0.md) for the
+  consolidated status; version, tag, and publication require owner approval.
 - Package runtime fixture data and route catalogs in wheels and sdists; add an
   installed-artifact smoke check for task routing and the detection manifest.
 - Publish the [feature-freeze support matrix](docs/SUPPORT_MATRIX.md), covering
