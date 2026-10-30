@@ -6,6 +6,7 @@ import urllib.request
 from pathlib import Path
 
 from . import vision
+from .package_data import package_path
 
 
 RUNTIME_REVISIONS = {
@@ -81,9 +82,13 @@ def download_source(family, cache_dir, *, opener=urllib.request.urlopen):
     return destination
 
 
+def load_coco_image_manifest():
+    manifest_path = package_path("fixtures/detection/coco_val2017_images.json")
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
 def download_coco_images(cache_dir, *, opener=urllib.request.urlopen):
-    manifest_path = vision.CATALOG_PATH.parent / "detection" / "coco_val2017_images.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = load_coco_image_manifest()
     downloaded = []
     for image in manifest["images"]:
         parsed = urllib.parse.urlparse(image["url"])

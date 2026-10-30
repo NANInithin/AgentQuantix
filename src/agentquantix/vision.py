@@ -7,7 +7,10 @@ from pathlib import Path
 import shutil
 import subprocess
 
-CATALOG_PATH = Path(__file__).parent / "fixtures" / "vision_families.json"
+from .package_data import package_path
+
+
+CATALOG_PATH = package_path("fixtures/vision_families.json")
 VISIONCPP_REVISION = "b766b0acc30f6706f1bfe46769635e361172ce96"
 VISIONCPP_TAG = "v0.3.0"
 

@@ -12,10 +12,11 @@ import time
 from pathlib import Path
 
 from .. import config, detection, vision
+from ..package_data import package_path
 from ..runtimes.spec import RUNTIMES
 
 
-FIXTURES = Path(__file__).parents[1] / "fixtures" / "detection"
+FIXTURES = package_path("fixtures/detection")
 
 
 class DetectionValidationError(RuntimeError):

@@ -10,8 +10,9 @@ import subprocess
 import time
 
 from .. import config, vision
+from ..package_data import package_path
 
-FIXTURES = Path(__file__).parents[1] / "fixtures" / "vision"
+FIXTURES = package_path("fixtures/vision")
 REVISION = vision.VISIONCPP_REVISION
 REQUIREMENTS = ("numpy==2.2.6", "Pillow==12.3.0", "torch==2.11.0+cpu",
                 "transformers==4.57.6", "safetensors==0.8.0", "gguf==0.19.0")

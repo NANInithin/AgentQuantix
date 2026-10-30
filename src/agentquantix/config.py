@@ -12,6 +12,8 @@ could change halfway through a six-hour run is a bug waiting to happen.
 from pathlib import Path
 import os
 
+from .package_data import package_path
+
 # =====================================================
 # PATHS
 # =====================================================
@@ -62,7 +64,7 @@ UPSTREAM_AUDIOCPP = INF_ROOT / "audio.cpp"
 TEMP_DIR = INF_ROOT / "temp"
 VOICE_BACKENDS_DIR = TEMP_DIR / "aqx-voice-backends"
 VOICE_FIXTURES_DIR = Path(os.getenv("AQX_VOICE_FIXTURES")
-                          or Path(__file__).resolve().parent / "fixtures" / "voice")
+                          or package_path("fixtures/voice"))
 
 # Agent state. Kept out of INF so a manual temp wipe in the work tree never
 # destroys the run history the estimator learns from.

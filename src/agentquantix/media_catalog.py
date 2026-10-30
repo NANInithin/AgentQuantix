@@ -12,9 +12,11 @@ from pathlib import Path
 import re
 import subprocess
 
+from .package_data import package_path
+
 ENGINE_REPO = "leejet/stable-diffusion.cpp"
 ENGINE_REVISION = "8cd731e7b4667eb8f40a153315b9a7125d09a58d"
-CATALOG_PATH = Path(__file__).parent / "fixtures/stable_diffusion_cpp_capabilities.json"
+CATALOG_PATH = package_path("fixtures/stable_diffusion_cpp_capabilities.json")
 ROLE_FLAGS = {
     "diffusion_model": "--diffusion-model", "unet": "-m",
     "text_encoder": "--clip_l", "text_encoder_2": "--clip_g",
