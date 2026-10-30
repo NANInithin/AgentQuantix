@@ -75,9 +75,12 @@ One set of commands covers every task. `aqx run org/model` routes by Hub
 metadata and installed engine catalogs to llama.cpp text, embeddings, or
 reranking; clip.cpp image-feature extraction or zero-shot image classification;
 the voice TTS/ASR backends; or stable-diffusion.cpp media. Use `--task` when the
-route reports a genuine ambiguity. Retrieval tasks are implemented in 0.5.3;
-tasks still on the roadmap, such as multimodal understanding, vision, and
-forecasting, are reported as blocked rather than sent through another pipeline.
+route reports a genuine ambiguity. Retrieval tasks are implemented in 0.5.3,
+and libmtmd multimodal understanding is implemented in 0.5.4. Dedicated vision
+and forecasting tasks that remain on the roadmap are reported as blocked rather
+than sent through another pipeline. Use `--task multimodal-understanding` to
+select the multimodal pipeline for vision/audio sources; `image-text-to-text`
+and `any-to-any` remain on text-generation by default.
 
 On a bare VM with no Python at all, `install.sh` / `install.ps1` install uv
 first and then the above. Or drive it with a model instead of by hand — see

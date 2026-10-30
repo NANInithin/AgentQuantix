@@ -1,14 +1,12 @@
 """Native conversion, parity evaluation and atomic publication for retrieval models."""
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import re
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -22,49 +20,10 @@ from .. import config
 from ..retrieval import (CLIP_QUANT_TYPES, RetrievalBundle, cosine, mrr, ndcg_at_k,
                          recall_at_k, render_card, runtime_commands, top1_agreement)
 from ..runtime_control import require_binaries
+from .native_common import (_command, _free_port, _hash, _record_stage, _server as _shared_server,
+                            _slug, _valid_stage, _write)
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "retrieval"
-
-
-def _slug(repo_id):
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", repo_id).strip("-")[:120]
-
-
-def _hash(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _write(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pending = path.with_suffix(path.suffix + ".tmp")
-    pending.write_text(json.dumps(value, indent=2, sort_keys=True, default=str) + "\n",
-                       encoding="utf-8")
-    os.replace(pending, path)
-
-
-def _command(argv, *, cwd=None, env=None):
-    result = subprocess.run([str(value) for value in argv], cwd=cwd, capture_output=True,
-                            text=True, errors="replace", stdin=subprocess.DEVNULL, env=env)
-    if result.returncode:
-        raise RuntimeError(f"native command failed ({result.returncode}): {' '.join(map(str, argv))}\n"
-                           f"{result.stdout}\n{result.stderr}")
-    return result.stdout + result.stderr
-
-
-def _record_stage(journal_path, journal, key, path):
-    journal[key] = {"path": str(path), "sha256": _hash(path), "bytes": Path(path).stat().st_size}
-    _write(journal_path, journal)
-
-
-def _valid_stage(journal, key):
-    item = journal.get(key, {})
-    path = Path(item.get("path", ""))
-    return path.is_file() and item.get("sha256") == _hash(path)
 
 
 def _convert(plan, source, handle, root, journal, journal_path):
@@ -157,40 +116,12 @@ def _embedding_quality(plan, model, ref, binary, root):
                                      for row in (*native_docs, *native_queries))}
 
 
-def _free_port():
-    with socket.socket() as server:
-        server.bind(("127.0.0.1", 0))
-        return server.getsockname()[1]
-
-
 @contextmanager
 def _server(binary, model, root, arguments):
-    port = _free_port()
-    base_url = f"http://127.0.0.1:{port}"
-    process = subprocess.Popen([str(binary), "-m", str(model), *map(str, arguments),
-                                "--host", "127.0.0.1", "--port", str(port)],
-                               cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    try:
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise RuntimeError("llama-server exited before becoming healthy")
-            try:
-                with urlopen(f"{base_url}/health", timeout=1) as response:
-                    if response.status == 200:
-                        break
-            except Exception:
-                time.sleep(0.25)
-        else:
-            raise RuntimeError("llama-server health check timed out")
+    with _shared_server(binary, model, root, arguments, free_port_fn=_free_port,
+                        open_url=urlopen, spawn=subprocess.Popen,
+                        monotonic=time.monotonic, sleep=time.sleep) as base_url:
         yield base_url
-    finally:
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
 
 
 @contextmanager

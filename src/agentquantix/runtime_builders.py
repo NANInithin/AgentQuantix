@@ -106,6 +106,8 @@ def fingerprint(engine, compute_backend="auto", required_targets=None):
     else:
         flags = ["-DCMAKE_BUILD_TYPE=Release", "-DGGML_NATIVE=OFF",
                  f"-DGGML_CUDA={'ON' if backend == 'cuda' else 'OFF'}"]
+        if engine == "llama.cpp":
+            flags.append("-DMTMD_VIDEO=ON")
     if backend == "cuda" and not any(flag.startswith("-DCMAKE_CUDA_ARCHITECTURES=") for flag in flags):
         if architecture := native_build.cuda_arch_from_gpu():
             flags.append(f"-DCMAKE_CUDA_ARCHITECTURES={architecture}")

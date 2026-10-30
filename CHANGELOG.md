@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.4 — unreleased development
+
+- Add the `multimodal-understanding` llama.cpp pipeline for explicit vision and
+  audio task routing, native F16 projector conversion, image/document/video
+  evaluation, ASR-style audio evaluation, resumable runs and atomic bundles.
+- Keep `image-text-to-text` and `any-to-any` on the text-generation pipeline
+  unless `--task multimodal-understanding` is selected. List runs with
+  `aqx runs --pipeline multimodal`; install reference dependencies with
+  `pip install "agentquantix[multimodal]"`.
+- Keep projectors at F16; gate text quants against the F16 multimodal task
+  baseline. Video is CLI-only and requires ffmpeg; audio input remains
+  experimental upstream and the accepted audio path is ASR-style only.
+
 ## 0.5.3 — unreleased development
 
 - Add retrieval tasks for embeddings and reranking on llama.cpp, plus image

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
-from .registry import HUB_TAG_TASKS, MEDIA, RETRIEVAL, TEXT, VOICE, TASKS, task_spec
+from .registry import HUB_TAG_TASKS, MEDIA, MULTIMODAL, RETRIEVAL, TEXT, VOICE, TASKS, task_spec
 
 # transformers head-class conventions for a generative language model.
 GENERATIVE_HEADS = ("ForCausalLM", "ForConditionalGeneration", "LMHeadModel")
@@ -75,7 +75,7 @@ def _explicit(route, task, engine, family):
             route.engine = engine
     elif spec.pipeline == MEDIA:
         route.engine, route.family = "stable-diffusion.cpp", family
-    elif spec.pipeline == RETRIEVAL:
+    elif spec.pipeline in (RETRIEVAL, MULTIMODAL):
         route.engine = spec.engines[0]
     else:
         route.engine = "llama.cpp"
@@ -182,6 +182,8 @@ def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=
     result.reasons = [s[2] for s in implemented]
     result.engine = {TEXT: "llama.cpp", MEDIA: "stable-diffusion.cpp"}.get(result.pipeline)
     if result.pipeline == RETRIEVAL:
+        result.engine = TASKS[result.task].engines[0]
+    if result.pipeline == MULTIMODAL:
         result.engine = TASKS[result.task].engines[0]
     if result.pipeline == VOICE:
         result.reasons.append("no installed voice catalog declares this source; the voice plan runs the fork hunt")

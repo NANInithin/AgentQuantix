@@ -10,8 +10,13 @@ model/precision matrix is complete on Linux CPU, including llama.cpp at
 `8642541b255bfb5dc39cd351a178be09013a55d6` with the llama-server-only runtime
 and clip.cpp. Remaining gaps are Windows/MSVC, GPU/Metal, and real Hub
 publication; acceptance runs used `--no-publish`. See
-[retrieval status](RETRIEVAL_STATUS.md) for the exact matrix. The next milestone
-is **0.5.4: libmtmd multimodal understanding**.
+[retrieval status](RETRIEVAL_STATUS.md) for the exact matrix. **0.5.4
+multimodal understanding is implemented, and sequential Linux CPU native
+evaluation is complete for the tested models. SmolVLM2-500M-Video-Instruct
+passed F16 and all four configured text quants; Qwen3-ASR-0.6B also passed its
+full evaluated matrix. See [multimodal status](MULTIMODAL_STATUS.md).
+Remaining gaps include Windows/MSVC, GPU/Metal and real Hub publication. The
+next milestone is **0.5.5: expanded audio**.
 
 0.5.2 summary: `agentquantix/tasks/` (registry + metadata router),
 `agentquantix/runs.py` (`text:`/`voice:`/`media:` run ids over existing records),
@@ -87,6 +92,30 @@ post-0.5.3 engine builders and task pipelines are not implemented yet.
 - clip.cpp native acceptance passed on Linux x86_64 CPU for
   `openai/clip-vit-base-patch32`. This is a model-specific Linux CPU result,
   not a Windows, GPU, or Metal support claim.
+
+### Multimodal 0.5.4
+
+- Implemented the explicit `multimodal-understanding` task on llama.cpp.
+  Plan-time vision/audio claims are checked against the converted F16
+  projector metadata; a missing or mismatched projector blocks the run.
+- Text quants are evaluated against F16 with a shared F16 projector.
+  Server image/audio cases and CLI video cases are journaled; passing text
+  quants plus the projector are published as one bundle.
+- Qwen3-ASR-0.6B passed F16, Q8_0, Q6_K, Q5_K_M and Q4_K_M on Linux CPU with
+  WER 0.0 and CER 0.018691588785046728. This is ASR-style understanding only;
+  no audio QA or audio reference was evaluated.
+- SmolVLM2-500M-Video-Instruct passed F16, Q8_0, Q6_K, Q5_K_M and Q4_K_M.
+  F16 VQA accuracy was 1.0, OCR CER/WER were 0.0, and all five candidates
+  passed video order at `--video-fps 1 --video-timestamp-interval 1000`.
+- Server request payloads put image/audio before prompt text. The corrected
+  reruns passed the native gates; request timings were near or faster than the
+  feasibility-spike samples, so no server thread override was needed.
+- A native ASR answer exposed an ASR-prefix markup scoring bug. `strip_markup`
+  now removes the prefix generically, and the corrected Qwen rerun is
+  authoritative. Result JSONs and logs are preserved in
+  `/home/ubuntu/spike/acceptance/`.
+- Windows/MSVC, GPU/Metal and real Hub publication remain untested. See
+  [multimodal status](MULTIMODAL_STATUS.md).
 
 ### Existing pipeline integration
 
@@ -169,16 +198,19 @@ frozen MCP resumes, read-only catalogs, early plan validation and offline use.
 6. Perform early feasibility/build/converter audits for all seven new engines,
    especially SAM3 and forecasting, so late upstream blockers are found early.
 
-## Next milestone: 0.5.4
+## 0.5.4 implementation slice
 
-Implement libmtmd-backed multimodal understanding in llama.cpp: image, audio,
-video/frame, and document inputs for the model families the pinned runtime
-supports. Keep companion projectors, preprocessing, tokenizer/prompt behavior,
-and supported task boundaries explicit. The read-only feasibility spike and
-its report are under `/home/ubuntu/spike/0.5.4/`; do not treat the spike as
-pipeline implementation or general model acceptance.
+The implementation adds libmtmd-backed multimodal understanding in llama.cpp:
+image, audio, video/frame, and document inputs for the model families the
+pinned runtime supports. Keep companion projectors, preprocessing,
+tokenizer/prompt behavior, and supported task boundaries explicit. The
+read-only feasibility spike and its report are under
+`/home/ubuntu/spike/0.5.4b/`; do not treat the spike as pipeline
+implementation or native acceptance.
 
-The approved plan continues with expanded audio (0.5.5), vision.cpp (0.5.6),
+The sequential Linux CPU results are recorded in
+[multimodal status](MULTIMODAL_STATUS.md). The approved plan continues with
+expanded audio (0.5.5), vision.cpp (0.5.6),
 YOLO/RF-DETR (0.5.7), dedicated depth/SAM3 (0.5.8), forecasting/hardening
 (0.5.9), and the consolidated 0.6.0 release. Do not claim the full roadmap is
 implemented.
@@ -190,6 +222,9 @@ implemented.
   model/precision matrix only. Windows/MSVC and GPU/Metal remain untested, and
   real Hub publication was not exercised; the acceptance runs used
   `--no-publish`.
+- 0.5.4 native results are model-specific Linux CPU evidence transcribed from
+  the implementation result JSONs. Both tested models passed their evaluated
+  text-quant matrices. The feasibility spike is not implementation acceptance.
 - Select exact upstream SHAs during new-engine audits; README support tables
   alone do not establish acceptance. Track engine revision × family × task ×
   precision × platform/backend.
