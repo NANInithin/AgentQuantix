@@ -25,11 +25,6 @@ not been established.
 - Approve any release version, tag, package/model publication, or announcement.
   The source package is still 0.4.5 and the 0.6.0 notes are a draft.
 
-### Stack merge order
-
-Merge the existing stack in order: **#2 -> #3 -> #4 -> #5 -> #6 -> #7**.
-Do not merge a later dependent change before its predecessor.
-
 ## Start here
 
 The user approved the [0.5.1–0.6.0 implementation plan](RELEASE_0_6_0_PLAN.md).
