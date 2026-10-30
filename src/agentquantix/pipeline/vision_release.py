@@ -267,7 +267,7 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
                 _run(command)
         start = time.monotonic()
         quality = (evaluate or _evaluate)(plan["task"], family, candidate, binary, root, baseline)
-        quality["elapsed_seconds"] = quality.get("elapsed_seconds", 0.0) + time.monotonic() - start
+        quality.setdefault("elapsed_seconds", time.monotonic() - start)
         quality["source_dtype"] = policy["source_dtype"]
         quality["precision_reason"] = policy["precision_reason"]
         if baseline is not None:

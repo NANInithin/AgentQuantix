@@ -187,7 +187,7 @@ def test_release_partial_pass_and_resume(tmp_path, monkeypatch):
 
     def evaluate(_task, _family, model, _binary, _root, _baseline):
         output = np.zeros((2, 2), dtype=bool)
-        quality = {"iou": 0.95, "boundary_fscore": 0.9,
+        quality = {"iou": 0.95, "boundary_fscore": 0.9, "elapsed_seconds": 1.25,
                    "output_path": f"{model.stem}.png", "outputs": [output]}
         if model.stem == "F16":
             output[0, 0] = True
@@ -198,6 +198,8 @@ def test_release_partial_pass_and_resume(tmp_path, monkeypatch):
         convert=convert, evaluate=evaluate)
     assert [item["status"] for item in result["candidates"]] == [
         "passed", "quality-rejected"]
+    assert [item["quality"]["elapsed_seconds"] for item in result["candidates"]] == [
+        1.25, 1.25]
     assert len(conversions) == 2
     resumed = vision_release.run_release(
         plan, user_approved=True, runtime=runtime, download_source=download,
