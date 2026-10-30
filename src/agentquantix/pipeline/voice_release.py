@@ -72,6 +72,15 @@ def _git_revision(directory: Path) -> str | None:
         return None
 
 
+def _audiocpp_runtime_revision(audio_dir: Path | None = None) -> str:
+    revision = voice.audio_cpp_catalog()["revision"]
+    if revision is not None:
+        return str(revision)
+    if audio_dir is not None and (revision := _git_revision(audio_dir)) is not None:
+        return revision
+    return f"audio.cpp-{AUDIOCPP_REVISION}"
+
+
 def ensure_llama_tts() -> tuple[Path, Path, Path]:
     """Return the llama.cpp checkout, llama-tts, and llama-quantize."""
     from .. import runtime_control
@@ -229,7 +238,7 @@ def source_metadata(repo_id: str, api=None, family: str | None = None) -> dict:
         spec = voice.audio_cpp_catalog()["registry"].get(backend.family, {})
         return {
             "repo_id": repo_id,
-            "revision": f"audio.cpp-{AUDIOCPP_REVISION}",
+            "revision": _audiocpp_runtime_revision(),
             "source_bytes": None,
             "gated": False,
             "private": False,
@@ -1516,10 +1525,12 @@ def run_audiocpp_tts_release(repo_id: str, target_repo: str,
         audio_dir, runtime, converter = ensure_audiocpp_tools()
         models = work_dir(repo_id) / "models"
         source = None
-        revision = f"audio.cpp-{AUDIOCPP_REVISION}"
     else:
         backend, source, revision, runtime, converter, audio_dir, models = \
             prepare_audiocpp_source(repo_id, voice.TTS, options.family)
+    audio_cpp_revision = _audiocpp_runtime_revision(audio_dir)
+    if package_mode:
+        revision = audio_cpp_revision
     if backend.speaker_reference == "required":
         if options.speaker is None:
             raise voice.VoiceValidationError(
@@ -1561,7 +1572,7 @@ def run_audiocpp_tts_release(repo_id: str, target_repo: str,
             bundle_source, bundle_revision = repo_id, revision
         bundle_configuration = {
             "sample_rate": 16_000,
-            "audio_cpp_revision": _git_revision(audio_dir),
+            "audio_cpp_revision": audio_cpp_revision,
             "package_format": "standalone GGUF with embedded model spec",
             "audio_cpp_package": package_id,
         }
@@ -1575,7 +1586,7 @@ def run_audiocpp_tts_release(repo_id: str, target_repo: str,
             configuration={
                 "language": options.language,
                 "speaker_reference": backend.speaker_reference,
-                "audio_cpp_revision": _git_revision(audio_dir),
+                "audio_cpp_revision": audio_cpp_revision,
                 "package_format": "standalone GGUF with embedded model spec",
                 "audio_cpp_package": package_id,
             },
@@ -1745,10 +1756,12 @@ def _run_audiocpp_release(repo_id: str, target_repo: str,
         audio_dir, runtime, converter = ensure_audiocpp_tools()
         models = work_dir(repo_id) / "models"
         source = None
-        revision = f"audio.cpp-{AUDIOCPP_REVISION}"
     else:
         backend, source, revision, runtime, converter, audio_dir, models = \
             prepare_audiocpp_source(repo_id, track, options.family)
+    audio_cpp_revision = _audiocpp_runtime_revision(audio_dir)
+    if package_mode:
+        revision = audio_cpp_revision
     requested = options.quants or list(voice.available_quants(repo_id, backend))
     baseline_quant = next((quant for quant in ("BF16", "F16", "F32", "ORIG")
                            if quant in requested), requested[0])
@@ -1808,7 +1821,7 @@ def _run_audiocpp_release(repo_id: str, target_repo: str,
             quant=quant) for path in paths if path != primary)
         bundle_configuration = {
             "sample_rate": 16_000,
-            "audio_cpp_revision": _git_revision(audio_dir),
+            "audio_cpp_revision": audio_cpp_revision,
             "package_format": "standalone GGUF with embedded model spec",
             "audio_cpp_package": package_id,
         }

@@ -2,6 +2,8 @@
 
 ## 0.5.9 — unreleased development
 
+- Gate audio.cpp TTS language flags on model-spec options and record the
+  selected runtime revision in package provenance.
 - Block audio.cpp source repos without safetensors conversion and point to the
   published GGUF package route.
 - Exclude package-only audio.cpp precisions from source-repository conversion sweeps;

@@ -843,11 +843,30 @@ def audiocpp_tts_command(runtime: Path | str, bundle: VoiceBundle,
                str(bundle.runtime_model or bundle.primary.path),
                "--backend", "best", "--text", prompt,
                "--out", str(output), "--metrics"]
-    if language:
+    option_names = _audiocpp_option_names(bundle.backend.family)
+    if language and (option_names is None or "language" in option_names):
         command += ["--language", language]
     if speaker:
         command += ["--voice-ref", str(speaker)]
     return command
+
+
+def _audiocpp_option_names(family: str) -> set[str] | None:
+    spec = audio_cpp_catalog()["registry"].get(family)
+    if not isinstance(spec, dict):
+        return None
+    options = spec.get("options")
+    if not isinstance(options, dict):
+        return set()
+    names = set()
+    for scope in ("request", "session", "load"):
+        entries = options.get(scope, [])
+        if isinstance(entries, list):
+            names.update(
+                entry["name"] for entry in entries
+                if isinstance(entry, dict)
+                and isinstance(entry.get("name"), str))
+    return names
 
 
 def _audiocpp_threads() -> str:

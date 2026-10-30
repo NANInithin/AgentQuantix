@@ -140,6 +140,59 @@ def test_audiocpp_tts_command_uses_catalog_family(tmp_path):
     assert chatterbox.supported_quants == voice.AUDIOCPP_QUANTS
 
 
+def _breeze_tts_bundle(tmp_path):
+    backend = next(item for item in voice.AUDIOCPP_BACKENDS
+                   if item.family == "breeze_tts" and item.track == voice.TTS)
+    primary = tmp_path / "breeze-tts.gguf"
+    primary.write_bytes(b"model")
+    return voice.VoiceBundle(
+        backend=backend,
+        primary=voice.BundleMember(primary, "primary", quant="Q8_0"),
+        quant="Q8_0")
+
+
+def test_audiocpp_tts_command_omits_undeclared_language(tmp_path, monkeypatch):
+    bundle = _breeze_tts_bundle(tmp_path)
+    monkeypatch.setattr(voice, "audio_cpp_catalog", lambda: {
+        "registry": {"breeze_tts": voice.AUDIOCPP_SPEC_REGISTRY["breeze_tts"]}})
+
+    command = voice.audiocpp_tts_command(
+        "audiocpp_cli", bundle, "Hello", tmp_path / "out.wav",
+        language="en", speaker=tmp_path / "speaker.wav")
+
+    assert "--language" not in command
+    assert command[command.index("--voice-ref") + 1] == str(
+        tmp_path / "speaker.wav")
+
+
+@pytest.mark.parametrize("scope", ["request", "session", "load"])
+def test_audiocpp_tts_command_includes_declared_language(
+        tmp_path, monkeypatch, scope):
+    bundle = _breeze_tts_bundle(tmp_path)
+    options = {name: ([{"name": "language"}] if name == scope else [])
+               for name in ("request", "session", "load")}
+    monkeypatch.setattr(voice, "audio_cpp_catalog", lambda: {
+        "registry": {"breeze_tts": {"options": options}}})
+
+    command = voice.audiocpp_tts_command(
+        "audiocpp_cli", bundle, "Hello", tmp_path / "out.wav",
+        language="en")
+
+    assert command[command.index("--language") + 1] == "en"
+
+
+def test_audiocpp_tts_command_keeps_language_when_catalog_is_unknown(
+        tmp_path, monkeypatch):
+    bundle = _breeze_tts_bundle(tmp_path)
+    monkeypatch.setattr(voice, "audio_cpp_catalog", lambda: {"registry": {}})
+
+    command = voice.audiocpp_tts_command(
+        "audiocpp_cli", bundle, "Hello", tmp_path / "out.wav",
+        language="en")
+
+    assert command[command.index("--language") + 1] == "en"
+
+
 def test_quant_availability_distinguishes_sources_from_packages(monkeypatch):
     voxcpm = voice.backend_for("openbmb/VoxCPM2")
     assert voice.available_quants(

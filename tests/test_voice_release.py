@@ -9,6 +9,17 @@ from agentquantix import voice
 from agentquantix.pipeline import voice_release
 
 
+def _audio_cpp_catalog(revision):
+    return {
+        "specs": voice.AUDIOCPP_SPECS,
+        "registry": voice.AUDIOCPP_SPEC_REGISTRY,
+        "backends": voice.AUDIOCPP_BACKENDS,
+        "package_repos": voice.AUDIOCPP_PACKAGE_REPOS,
+        "revision": revision,
+        "runtime_identity": None,
+    }
+
+
 def _wav(path, *, seconds=0.5, rate=16_000, amplitude=0.25):
     frames = int(seconds * rate)
     samples = bytearray()
@@ -200,15 +211,36 @@ def test_audiocpp_build_enables_the_full_backend_catalog(monkeypatch):
     assert not any(value.startswith("-DAUDIOCPP_MODELS=") for value in defines)
 
 
-def test_audio_cpp_virtual_family_preflight_needs_no_hub_call():
+@pytest.mark.parametrize(
+    ("runtime_revision", "expected_revision"),
+    [
+        ("a" * 40, "a" * 40),
+        (None, f"audio.cpp-{voice_release.AUDIOCPP_REVISION}"),
+    ],
+)
+def test_audio_cpp_virtual_family_preflight_uses_runtime_revision(
+        monkeypatch, runtime_revision, expected_revision):
     class Api:
         def model_info(self, *_args, **_kwargs):
             raise AssertionError("catalog package preflight contacted the Hub")
 
+    monkeypatch.setattr(
+        voice, "audio_cpp_catalog",
+        lambda: _audio_cpp_catalog(runtime_revision))
     result = voice_release.source_metadata(
         "audio.cpp:fish_audio", api=Api())
-    assert result["revision"].startswith("audio.cpp-v")
+    assert result["revision"] == expected_revision
     assert result["source_bytes"] is None
+
+
+def test_audiocpp_runtime_revision_uses_checkout_sha_without_selection(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        voice, "audio_cpp_catalog", lambda: _audio_cpp_catalog(None))
+    monkeypatch.setattr(
+        voice_release, "_git_revision", lambda _directory: "c" * 40)
+
+    assert voice_release._audiocpp_runtime_revision(tmp_path) == "c" * 40
 
 
 def test_asr_setup_uses_current_whisper_quantizer_target(tmp_path, monkeypatch):

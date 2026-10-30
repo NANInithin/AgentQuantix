@@ -12,6 +12,17 @@ from agentquantix.pipeline import voice_release
 from agentquantix.tasks import TASKS, route
 
 
+def _audio_cpp_catalog(revision):
+    return {
+        "specs": voice.AUDIOCPP_SPECS,
+        "registry": voice.AUDIOCPP_SPEC_REGISTRY,
+        "backends": voice.AUDIOCPP_BACKENDS,
+        "package_repos": voice.AUDIOCPP_PACKAGE_REPOS,
+        "revision": revision,
+        "runtime_identity": None,
+    }
+
+
 def test_audio_cpp_task_tracks_are_derived_from_spec_tasks():
     mapping = {"sep": voice.SEP, "vc": voice.VC, "align": voice.ALIGN}
     for spec in voice.AUDIOCPP_SPECS:
@@ -235,9 +246,19 @@ def _fake_audiocpp_runtime(monkeypatch, tmp_path):
     return audio_dir, models
 
 
+@pytest.mark.parametrize(
+    ("runtime_revision", "expected_runtime_revision"),
+    [
+        ("b" * 40, "b" * 40),
+        (None, f"audio.cpp-{voice_release.AUDIOCPP_REVISION}"),
+    ],
+)
 def test_generic_package_release_records_package_role_and_card(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, runtime_revision, expected_runtime_revision):
     audio_dir, models = _fake_audiocpp_runtime(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        voice, "audio_cpp_catalog",
+        lambda: _audio_cpp_catalog(runtime_revision))
     captured = []
 
     def install(_audio_dir, _backend, _repo, model_root, quant):
@@ -270,6 +291,8 @@ def test_generic_package_release_records_package_role_and_card(
     assert bundle.primary.role == "vc-model"
     assert bundle.source_repo == "audio-cpp/audio.cpp-gguf"
     assert bundle.source_revision == "package-revision"
+    assert bundle.configuration["audio_cpp_revision"] == (
+        expected_runtime_revision)
     card = voice.render_model_card(bundle, "org/meanvc2")
     assert "prebuilt audio.cpp package; not converted by AgentQuantix" in card
     assert "MeanVC2-GGUF" in card and "package-revision" in card
