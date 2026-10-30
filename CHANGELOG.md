@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.9 — unreleased development
+
+- Package runtime fixture data and route catalogs in wheels and sdists; add an
+  installed-artifact smoke check for task routing and the detection manifest.
+- Publish the [feature-freeze support matrix](docs/SUPPORT_MATRIX.md), covering
+  every TaskSpec and distinguishing accepted evidence from catalog-only routes.
+- Defer timeseries.cpp forecasting pending a source license and upstream fixes;
+  see [forecasting status](docs/FORECASTING_STATUS.md).
+
 ## 0.5.8 — unreleased development
 
 - Add pinned `depth-anything.cpp` support for DA2 metric Hypersim Small and

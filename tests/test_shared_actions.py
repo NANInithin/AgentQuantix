@@ -47,7 +47,7 @@ def test_retrieval_hub_routes_are_ready_and_clip_architecture_overrides_tag():
 
 @pytest.mark.parametrize("tag,task,milestone", [
     ("object-detection", "object-detection", "0.5.7"),
-    ("time-series-forecasting", "time-series-forecasting", "0.5.9"),
+    ("time-series-forecasting", "time-series-forecasting", "post-0.6.0"),
 ])
 def test_recognised_tasks_without_adapters_are_blocked_not_misrouted(tag, task, milestone):
     item = route("org/model", metadata={"pipeline_tag": tag, "library_name": "transformers"})

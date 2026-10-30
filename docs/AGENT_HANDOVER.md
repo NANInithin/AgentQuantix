@@ -29,7 +29,9 @@ run-time gating. 0.5.8 adds depth-anything.cpp for DA2 metric Hypersim Small
 and DA3-Small; DA2 relative Small remains on vision.cpp. SAM3 remains blocked
 by gated official weights and unverifiable ungated conversion provenance.
 See [depth and SAM status](DEPTH_SAM_STATUS.md) for native results. The next
-milestone is **0.5.9**.
+milestone is **0.6.0**. The 0.5.9 feature-freeze matrix is in
+[SUPPORT_MATRIX.md](SUPPORT_MATRIX.md); forecasting remains deferred to
+post-0.6.0 pending a license and upstream fixes.
 
 0.5.2 summary: `agentquantix/tasks/` (registry + metadata router),
 `agentquantix/runs.py` (`text:`/`voice:`/`media:` run ids over existing records),
@@ -299,6 +301,21 @@ claim the full roadmap is implemented.
   its GGML binaries as GGUF.
 - Keep code/model license provenance and complete bundle dependencies separate.
   A successful compile or package listing is not model-quality acceptance.
+
+## Remaining 0.6.0 validation
+
+The following release checks were not established by the Linux CPU rehearsal:
+
+- Windows/MSVC validation for advertised CPU paths, including spaces and long
+  paths, process/lock behavior, installation, migration and rollback.
+- GPU and Metal validation for any backend/device combination the release
+  intends to advertise.
+- Real Hub publication, authentication, atomic commits, and re-download and
+  verification of published bundles; native acceptance used `--no-publish`.
+- End-to-end resume, update, migration and stable-diffusion.cpp resource
+  relocation across the supported Windows/Linux matrix.
+- Applicable outstanding 0.5.0 acceptance work and release approval before
+  versioning, tagging or publication.
 
 No additional approval is needed to continue the already approved implementation
 roadmap. Actual release publication remains a separate operation. Do not
