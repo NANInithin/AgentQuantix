@@ -1,0 +1,114 @@
+[
+  {
+    "engine": "vision.cpp",
+    "family": "sam",
+    "task": "mask-generation",
+    "converter_arch": "sam",
+    "cli_command": "sam",
+    "source_files": ["*.safetensors", "*.pt", "*.pth"],
+    "repos": ["dhkim2810/MobileSAM"],
+    "model_types": ["vit_t"],
+    "architectures": ["SamModel", "SamModelForMaskGeneration", "MobileSamModel"],
+    "licence_notes": "HF metadata MIT; upstream code Apache-2.0"
+  },
+  {
+    "engine": "vision.cpp",
+    "family": "birefnet",
+    "task": "image-segmentation",
+    "converter_arch": "birefnet",
+    "cli_command": "birefnet",
+    "source_files": ["*.safetensors", "*.pt", "*.pth"],
+    "repos": ["ZhengPeng7/BiRefNet"],
+    "model_types": ["birefnet"],
+    "architectures": ["BiRefNet"],
+    "licence_notes": "MIT"
+  },
+  {
+    "engine": "vision.cpp",
+    "family": "depth-anything",
+    "task": "depth-estimation",
+    "converter_arch": "depth-anything",
+    "cli_command": "depth-anything",
+    "source_files": ["*.safetensors", "*.pt", "*.pth"],
+    "repos": ["depth-anything/Depth-Anything-V2-Small-hf"],
+    "model_types": ["depth_anything"],
+    "architectures": ["DepthAnythingForDepthEstimation"],
+    "licence_notes": "Apache-2.0"
+  },
+  {
+    "engine": "ultralytics-ggml",
+    "family": "yolo26n-pose",
+    "task": "keypoint-detection",
+    "converter_arch": "pose",
+    "cli_command": "pose",
+    "source_files": ["yolo26n-pose.pt"],
+    "repos": ["ultralytics/yolo26n-pose", "ultralytics/assets/yolo26n-pose"],
+    "model_types": ["yolo"],
+    "architectures": ["YOLO26nPose"],
+    "source": {
+      "kind": "url",
+      "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n-pose.pt",
+      "sha256": "eb3bb8268828aeaf515cec23a4bfafd793944a86fe9af94ba7823609c14522a9",
+      "size": 7878574,
+      "licence": "AGPL-3.0"
+    },
+    "licence_notes": "YOLO26n pose weights: AGPL-3.0"
+  },
+  {
+    "engine": "ultralytics-ggml",
+    "family": "yolo26n-cls",
+    "task": "image-classification",
+    "converter_arch": "classify",
+    "cli_command": "classify",
+    "source_files": ["yolo26n-cls.pt"],
+    "repos": ["ultralytics/yolo26n-cls", "ultralytics/assets/yolo26n-cls"],
+    "model_types": ["yolo"],
+    "architectures": ["YOLO26nCls"],
+    "source": {
+      "kind": "url",
+      "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n-cls.pt",
+      "sha256": "0dd6f8dbc448870ac98a3cbb7156f923f7ce21fed3755d4019169ffffd279e81",
+      "size": 5786434,
+      "licence": "AGPL-3.0"
+    },
+    "licence_notes": "YOLO26n classification weights: AGPL-3.0"
+  },
+  {
+    "engine": "rf-detr.cpp",
+    "family": "rfdetr-nano",
+    "task": "object-detection",
+    "converter_arch": "nano",
+    "cli_command": "detect",
+    "source_files": ["checkpoint_best_regular.pth"],
+    "repos": ["roboflow/rf-detr-nano", "localai-org/rfdetr-nano"],
+    "model_types": ["rfdetr"],
+    "architectures": ["LWDETR"],
+    "source": {
+      "kind": "url",
+      "url": "https://storage.googleapis.com/rfdetr/nano_coco/checkpoint_best_regular.pth",
+      "sha256": "d8d6b9ee57d4d0ed2b1f305163624712a0532cb7bce0c747317984fc5457440d",
+      "size": 366287238,
+      "licence": "Apache-2.0"
+    },
+    "licence_notes": "RF-DETR nano weights: Apache-2.0; restricted rfdetr loader required"
+  },
+  {
+    "engine": "rf-detr.cpp",
+    "family": "rfdetr-seg-nano",
+    "task": "image-segmentation",
+    "converter_arch": "seg-nano",
+    "cli_command": "detect",
+    "source_files": ["rf-detr-seg-n-ft.pth"],
+    "repos": ["roboflow/rf-detr-seg-nano", "localai-org/rfdetr-seg-nano"],
+    "model_types": ["rfdetr"],
+    "architectures": ["LWDETR"],
+    "source": {
+      "kind": "url",
+      "url": "https://storage.googleapis.com/rfdetr/rf-detr-seg-n-ft.pth",
+      "sha256": "a44613a4ecd6b5ba61a62002c600b0b6cb7a9da2936a45317ec4b62c635fb99b",
+      "size": 134545398,
+      "licence": "Apache-2.0"
+    },
+    "licence_notes": "RF-DETR seg-nano weights: Apache-2.0; restricted rfdetr loader required"
+  }
+]

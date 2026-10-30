@@ -24,6 +24,16 @@ For vision.cpp, use `--task mask-generation`, `--task image-segmentation` or
 catalog-routed; depth is relative only. See
 [vision task status](docs/VISION_STATUS.md) for gates and limitations.
 
+For 0.5.7 detection support, use `--task object-detection`,
+`--task image-segmentation`, `--task keypoint-detection` or
+`--task image-classification`. The engine is selected from the matching family:
+RF-DETR supports detection and instance segmentation; the tested YOLO26
+families support pose and classification. Plans use `<engine>:<family>` run
+targets and publish only passing precisions. Detection is evaluated on ten
+COCO val2017 images, a small sample. Install the optional evaluation
+dependencies with `pip install "agentquantix[detection]"`. See
+[detection task status](docs/DETECTION_STATUS.md) for quality gates and limits.
+
 Three ways to drive it. The CLI is the ground truth — the Claude Code skill and
 the API-key loop call exactly the same code, so nothing behaves differently
 depending on which one you pick.

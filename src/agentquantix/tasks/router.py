@@ -93,12 +93,12 @@ def _explicit(route, task, engine, family):
     elif spec.pipeline in (RETRIEVAL, MULTIMODAL):
         route.engine = spec.engines[0]
     elif spec.pipeline == VISION:
-        match = vision.family_for(route.repo_id, route.metadata, family=family)
+        match = vision.family_for(route.repo_id, route.metadata, family=family, task=spec.id)
         if not match or match["task"] != spec.id:
             route.pipeline = None
             route.blocker = _vision_later_route(spec.id)
             return route
-        route.engine, route.family = "vision.cpp", match["family"]
+        route.engine, route.family = match.get("engine", "vision.cpp"), match["family"]
     else:
         route.engine = "llama.cpp"
     if engine and route.engine and engine != route.engine:
@@ -112,6 +112,14 @@ def _explicit(route, task, engine, family):
 
 def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=None):
     """Resolve one repository. ``fetch`` is injectable for offline callers."""
+    from .. import vision
+    if family is None and repo_id:
+        target = next((item for item in vision.families()
+                       if f"{item.get('engine', 'vision.cpp')}:{item['family']}".casefold()
+                       == str(repo_id).casefold()), None)
+        if target:
+            family = repo_id
+            engine = engine or target.get("engine", "vision.cpp")
     from .. import media, vision, voice
     result = Route(repo_id, metadata=dict(metadata or {}))
     if engine is not None:
@@ -119,7 +127,7 @@ def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=
         if engine not in RUNTIMES:
             raise ValueError(f"unknown engine {engine!r}; choose from {', '.join(RUNTIMES)}")
     if task:
-        if metadata is None and task_spec(task).pipeline in (MEDIA, VISION):
+        if metadata is None and not family and task_spec(task).pipeline in (MEDIA, VISION):
             result.metadata = _fetched(repo_id, fetch, result)
         return _explicit(result, task, engine, family)
 
@@ -135,8 +143,9 @@ def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=
     if vision_match:
         spec = task_spec(vision_match["task"])
         result.task, result.pipeline = spec.id, VISION
-        result.engine, result.family = "vision.cpp", vision_match["family"]
-        result.reasons.append(f"vision.cpp declares family {result.family}")
+        result.engine = vision_match.get("engine", "vision.cpp")
+        result.family = vision_match["family"]
+        result.reasons.append(f"{result.engine} declares family {result.family}")
         return _engine_check(result, engine)
     if family:
         if any(c.family.casefold() == family.casefold() for c in media.capabilities()):
@@ -166,12 +175,13 @@ def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=
     if tagged and TASKS[tagged].pipeline == VISION:
         model_config = {"architectures": architectures,
                         "model_type": result.metadata.get("model_type")}
-        match = vision.family_for(repo_id, model_config)
+        match = vision.family_for(repo_id, model_config, task=tagged)
         if match and match["task"] == tagged:
-            result.task, result.pipeline, result.engine = tagged, VISION, "vision.cpp"
+            result.task, result.pipeline = tagged, VISION
+            result.engine = match.get("engine", "vision.cpp")
             result.family = match["family"]
             result.reasons.append(
-                f"Hub pipeline_tag is {tag}; vision.cpp declares family {match['family']}")
+                f"Hub pipeline_tag is {tag}; {result.engine} declares family {match['family']}")
             return _engine_check(result, engine)
         result.task = tagged
         result.blocker = _vision_later_route(tagged)
@@ -235,9 +245,11 @@ def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=
     if result.pipeline == VISION:
         match = vision.family_for(
             repo_id, {"architectures": architectures,
-                      "model_type": result.metadata.get("model_type")})
+                      "model_type": result.metadata.get("model_type")},
+            task=result.task)
         if match and match["task"] == result.task:
-            result.engine, result.family = "vision.cpp", match["family"]
+            result.engine = match.get("engine", "vision.cpp")
+            result.family = match["family"]
         else:
             result.pipeline = None
             result.blocker = _vision_later_route(result.task)
@@ -247,6 +259,11 @@ def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=
 
 
 def _vision_later_route(task):
+    if task in ("object-detection", "image-segmentation", "keypoint-detection",
+                "image-classification"):
+        return ("ultralytics-ggml YOLO26 detection, instance/semantic segmentation, depth and "
+                "YOLO-World open-vocabulary did not meet native parity gates in 0.5.7; "
+                "OBB was not evaluated")
     later = {
         "mask-generation": "sam3cpp is the later route in 0.5.8",
         "image-segmentation": "ultralytics-ggml/rf-detr.cpp is the later route in 0.5.7",

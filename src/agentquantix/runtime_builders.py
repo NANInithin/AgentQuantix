@@ -31,6 +31,8 @@ _TARGETS = {
     "whisper.cpp": ("whisper-cli", "whisper-quantize"),
     "stable-diffusion.cpp": ("sd-cli",),
     "vision.cpp": ("vision-cli",),
+    "ultralytics-ggml": ("yolo-cli",),
+    "rf-detr.cpp": ("rfdetr-cli",),
 }
 _NONFINITE = re.compile(
     r"(?<![\w/\\.\-])(?:nan|[+-]?inf(?:inity)?)(?![\w/\\.\-])"
@@ -96,9 +98,10 @@ def fingerprint(engine, compute_backend="auto", required_targets=None):
         raise RuntimeBuildError(f"no native build adapter for {engine}")
     backend = compute_backend
     if backend == "auto":
-        backend = ("cpu" if engine in ("clip.cpp", "vision.cpp") else
+        backend = ("cpu" if engine in ("clip.cpp", "vision.cpp",
+                                      "ultralytics-ggml", "rf-detr.cpp") else
                    "cuda" if native_build.has_cuda_toolkit() else "cpu")
-    if engine in ("clip.cpp", "vision.cpp") and backend != "cpu":
+    if engine in ("clip.cpp", "vision.cpp", "ultralytics-ggml", "rf-detr.cpp") and backend != "cpu":
         raise RuntimeBuildError(f"{engine} CUDA is not verified")
     if engine != "stable-diffusion.cpp" and backend not in ("cpu", "cuda"):
         raise RuntimeBuildError(f"{engine}: compute backend not yet verified: {backend}")
@@ -127,6 +130,15 @@ def fingerprint(engine, compute_backend="auto", required_targets=None):
         flags = ["-DCMAKE_BUILD_TYPE=Release", "-DVISP_VULKAN=OFF",
                  "-DVISP_TESTS=OFF", "-DBUILD_SHARED_LIBS=OFF",
                  "-DVISP_FMT_LIB=ON", "-DGGML_CCACHE=OFF"]
+    elif engine == "ultralytics-ggml":
+        flags = ["-DCMAKE_BUILD_TYPE=Release", "-DGGML_CUDA=OFF",
+                 "-DGGML_VULKAN=OFF", "-DGGML_NATIVE=ON",
+                 "-DBUILD_SHARED_LIBS=ON", "-DCMAKE_CXX_FLAGS=-include optional"]
+    elif engine == "rf-detr.cpp":
+        flags = ["-DCMAKE_BUILD_TYPE=Release", "-DGGML_CUDA=OFF",
+                 "-DGGML_VULKAN=OFF", "-DGGML_NATIVE=ON", "-DBUILD_SHARED_LIBS=ON",
+                 "-DRFDETR_BUILD_CLI=ON", "-DRFDETR_BUILD_TESTS=OFF",
+                 "-DGGML_CCACHE=ON"]
     elif engine == "audio.cpp":
         flags = ["-DCMAKE_BUILD_TYPE=Release", "-DAUDIOCPP_DEPLOYMENT_BUILD=ON",
                  "-DAUDIOCPP_MODEL_SET=full",
@@ -209,6 +221,10 @@ def _submodules_for(engine):
         return ["depend/ggml"]
     if engine == "clip.cpp":
         return ["ggml"]
+    if engine == "ultralytics-ggml":
+        return ["cpp_ggml/third_party/ggml"]
+    if engine == "rf-detr.cpp":
+        return ["third_party/ggml"]
     return []
 
 
@@ -227,6 +243,8 @@ def _resources(engine, source, build_dir):
         "llama.cpp": ("convert_hf_to_gguf.py",),
         "clip.cpp": ("models/convert_hf_to_gguf.py",),
         "whisper.cpp": ("models/convert-h5-to-ggml.py", "models/convert-pt-to-ggml.py"),
+        "ultralytics-ggml": ("cpp_ggml/scripts/convert_yolo_to_gguf.py",),
+        "rf-detr.cpp": ("scripts/convert_rfdetr_to_gguf.py",),
     }.get(engine, ())
     resources = {name: {"path": str(Path(source) / name), "sha256": _hash(Path(source) / name)}
                  for name in paths if (Path(source) / name).is_file()}
@@ -251,6 +269,52 @@ def _resources(engine, source, build_dir):
     return resources
 
 
+def _source_changes(engine, source):
+    dirty = _git(source, "status", "--porcelain", "--untracked-files=no")
+    if not dirty:
+        return {}
+    layouts = {
+        "ultralytics-ggml": (
+            "M cpp_ggml/third_party/ggml",
+            "cpp_ggml/third_party/ggml",
+            "cpp_ggml/third_party/ggml-patches",
+        ),
+        "rf-detr.cpp": (
+            "M third_party/ggml",
+            "third_party/ggml",
+            "third_party/ggml-patches",
+        ),
+    }
+    if engine not in layouts:
+        raise RuntimeBuildError("native source contains tracked modifications; leaving it untouched")
+    expected_status, submodule_path, patch_path = layouts[engine]
+    if dirty != expected_status:
+        raise RuntimeBuildError("native source contains tracked modifications; leaving it untouched")
+    patch_dir = Path(source) / patch_path
+    patches = sorted(patch_dir.glob("*.patch"))
+    submodule = Path(source) / submodule_path
+    submodule_status = _git(submodule, "status", "--porcelain", "--untracked-files=all")
+    patch_paths = set()
+    for patch in patches:
+        for line in patch.read_text(encoding="utf-8").splitlines():
+            if line.startswith("diff --git "):
+                names = line[len("diff --git "):].split()
+                if len(names) != 2 or not names[0].startswith("a/") or not names[1].startswith("b/"):
+                    raise RuntimeBuildError("native source has an invalid ggml patch")
+                patch_paths.update((names[0][2:], names[1][2:]))
+        try:
+            _git(submodule, "apply", "--check", "--reverse", str(patch))
+        except RuntimeBuildError as error:
+            raise RuntimeBuildError("native source has an unapplied or unexpected ggml patch") from error
+    changed_paths = set(_git(submodule, "diff", "--name-only").splitlines())
+    staged_paths = _git(submodule, "diff", "--cached", "--name-only")
+    if (not patches or not patch_paths or patch_paths != changed_paths or
+            any(line.startswith("??") for line in submodule_status.splitlines()) or staged_paths):
+        raise RuntimeBuildError(f"{engine} source has unexpected tracked modifications")
+    return {"ggml_patches": [
+        {"name": patch.name, "sha256": _hash(patch)} for patch in patches]}
+
+
 def _result(engine, source, build_dir, binaries, options, *, adopted=False, logs=None):
     probes = {}
     for name, binary in binaries.items():
@@ -261,11 +325,10 @@ def _result(engine, source, build_dir, binaries, options, *, adopted=False, logs
     revision = _git(source, "rev-parse", "HEAD")
     if not re.fullmatch(r"[0-9a-f]{40,64}", revision):
         raise RuntimeBuildError("native source has no immutable Git revision")
-    dirty = _git(source, "status", "--porcelain", "--untracked-files=no")
-    if dirty:
-        raise RuntimeBuildError("native source contains tracked modifications; leaving it untouched")
+    source_changes = _source_changes(engine, source)
     provenance = {"engine": engine, "revision": revision, "adopted": adopted,
                   "build_fingerprint": options,
+                  "source_changes": source_changes,
                   "binary_sha256": {name: _hash(path) for name, path in binaries.items()},
                   "submodules": _git(source, "submodule", "status", "--recursive").splitlines(),
                   "probes": probes}
@@ -296,7 +359,8 @@ def build_runtime(engine, source, build_dir, options=None):
     if engine not in _TARGETS:
         raise RuntimeBuildError(f"no native build adapter for {engine}")
     source, build_dir = Path(source).resolve(), Path(build_dir).resolve()
-    if not (source / "CMakeLists.txt").is_file():
+    cmake_source = source / "cpp_ggml" if engine == "ultralytics-ggml" else source
+    if not (cmake_source / "CMakeLists.txt").is_file():
         raise RuntimeBuildError(f"{engine}: source lacks CMakeLists.txt")
     if source == build_dir:
         raise RuntimeBuildError("native build directory must differ from its source directory")
@@ -315,7 +379,7 @@ def build_runtime(engine, source, build_dir, options=None):
               "-C", source, "submodule", "update", "--init", "--recursive", *submodules],
              logs / "submodules.json", timeout=900)
     contract = _binary_contract(engine, source, effective["targets"])
-    configure = ["cmake", "-S", source, "-B", build_dir]
+    configure = ["cmake", "-S", cmake_source, "-B", build_dir]
     if effective.get("generator"):
         configure += ["-G", effective["generator"]]
     configure += effective["flags"]

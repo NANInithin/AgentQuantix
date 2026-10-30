@@ -1,0 +1,125 @@
+{
+  "annotation_attribution": "COCO val2017 annotations, CC BY 4.0",
+  "images": [
+    {
+      "id": 785,
+      "file_name": "000000000785.jpg",
+      "url": "http://images.cocodataset.org/val2017/000000000785.jpg",
+      "sha256": "83981537a7baeafbeb9c8cb67b3484dc26433f574b3685d021fa537e277e4726",
+      "size": 133674,
+      "width": 640,
+      "height": 425,
+      "license_id": 4,
+      "license": "Attribution License",
+      "license_url": "http://creativecommons.org/licenses/by/2.0/"
+    },
+    {
+      "id": 872,
+      "file_name": "000000000872.jpg",
+      "url": "http://images.cocodataset.org/val2017/000000000872.jpg",
+      "sha256": "c2aa138ee3a59b057a7ba6fc5a6a18e62af531aa7dab78a7bfd33c1cd7e55eb6",
+      "size": 317669,
+      "width": 621,
+      "height": 640,
+      "license_id": 4,
+      "license": "Attribution License",
+      "license_url": "http://creativecommons.org/licenses/by/2.0/"
+    },
+    {
+      "id": 885,
+      "file_name": "000000000885.jpg",
+      "url": "http://images.cocodataset.org/val2017/000000000885.jpg",
+      "sha256": "1c67b783f78b18ddb5dd20aaba4d4aacaf98e5277051688a96da096afa9cdf1f",
+      "size": 111441,
+      "width": 640,
+      "height": 427,
+      "license_id": 4,
+      "license": "Attribution License",
+      "license_url": "http://creativecommons.org/licenses/by/2.0/"
+    },
+    {
+      "id": 1000,
+      "file_name": "000000001000.jpg",
+      "url": "http://images.cocodataset.org/val2017/000000001000.jpg",
+      "sha256": "24bb77a31928404e45a0454b06f6a0bd54a8db103590c9d7917288a1e0269f05",
+      "size": 321136,
+      "width": 640,
+      "height": 480,
+      "license_id": 4,
+      "license": "Attribution License",
+      "license_url": "http://creativecommons.org/licenses/by/2.0/"
+    },
+    {
+      "id": 1268,
+      "file_name": "000000001268.jpg",
+      "url": "http://images.cocodataset.org/val2017/000000001268.jpg",
+      "sha256": "8e85a2e71ee512fe748a3a3be9bb40b8591e8c501c0f3896efcb5be5999ec236",
+      "size": 180751,
+      "width": 640,
+      "height": 427,
+      "license_id": 4,
+      "license": "Attribution License",
+      "license_url": "http://creativecommons.org/licenses/by/2.0/"
+    },
+    {
+      "id": 2473,
+      "file_name": "000000002473.jpg",
+      "url": "http://images.cocodataset.org/val2017/000000002473.jpg",
+      "sha256": "2f1bfa7634a64f7999ba5488ec904ad1f85bbc63d0fe4b9fe35f52abbf8c5f4f",
+      "size": 95783,
+      "width": 640,
+      "height": 427,
+      "license_id": 4,
+      "license": "Attribution License",
+      "license_url": "http://creativecommons.org/licenses/by/2.0/"
+    },
+    {
+      "id": 5001,
+      "file_name": "000000005001.jpg",
+      "url": "http://images.cocodataset.org/val2017/000000005001.jpg",
+      "sha256": "99600c56dc25c72dc1cc1d1f2b09aa33b97142560b54d034fa83a38fcf3c5b0f",
+      "size": 211700,
+      "width": 640,
+      "height": 480,
+      "license_id": 4,
+      "license": "Attribution License",
+      "license_url": "http://creativecommons.org/licenses/by/2.0/"
+    },
+    {
+      "id": 274219,
+      "file_name": "000000274219.jpg",
+      "url": "http://images.cocodataset.org/val2017/000000274219.jpg",
+      "sha256": "a2b2e8d425f64a51b566261300bbb1f528ab1967aee4f3283b9d214b37cb1c9d",
+      "size": 110257,
+      "width": 464,
+      "height": 640,
+      "license_id": 7,
+      "license": "No known copyright restrictions",
+      "license_url": "http://flickr.com/commons/usage/"
+    },
+    {
+      "id": 427077,
+      "file_name": "000000427077.jpg",
+      "url": "http://images.cocodataset.org/val2017/000000427077.jpg",
+      "sha256": "87ceae40482a8f050900f5a4181eecfe5de2c8e20531c831938d2b9fe1aadb50",
+      "size": 84641,
+      "width": 344,
+      "height": 500,
+      "license_id": 7,
+      "license": "No known copyright restrictions",
+      "license_url": "http://flickr.com/commons/usage/"
+    },
+    {
+      "id": 560880,
+      "file_name": "000000560880.jpg",
+      "url": "http://images.cocodataset.org/val2017/000000560880.jpg",
+      "sha256": "da716b857d3c953c702dd0776e3d118038ea84739890eb854623c31a56f53b0a",
+      "size": 166262,
+      "width": 640,
+      "height": 508,
+      "license_id": 7,
+      "license": "No known copyright restrictions",
+      "license_url": "http://flickr.com/commons/usage/"
+    }
+  ]
+}

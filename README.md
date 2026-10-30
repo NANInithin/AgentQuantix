@@ -48,6 +48,12 @@ relative depth estimation. It is limited to the tested synthetic fixtures;
 Depth Anything results are relative, not metric. See
 [vision task status](docs/VISION_STATUS.md).
 
+The 0.5.7 detection route adds catalog-matched RF-DETR detection/segmentation,
+YOLO26 pose and classification. Detection sources are checksum-verified before
+conversion or reference loading. YOLO families that did not meet the spike's
+native parity bars remain blocked; see
+[detection task status](docs/DETECTION_STATUS.md).
+
 The accepted Linux CPU examples use audio.cpp v0.8.0: BS-RoFormer Q8_0,
 MeanVC2 F32/Q4_K and Qwen3 Forced Aligner's nine converter precisions. HTDemucs
 was rejected by its SI-SDR gate; RNNoise and ZipEnhancer worsened SNR.
