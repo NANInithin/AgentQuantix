@@ -74,9 +74,9 @@ repo — and that is a question for the user, not a reason to research.
 
 ## The sweep, in order
 
-1. `research_trending` — the top trending models, filtered to original \
-text-capable base models, each one sized and checked against this machine, \
-plus the separate voice backend catalog. Run it once. `get_report` re-reads \
+1. `research_trending` — trending original base models: text candidates get \
+full quant-sweep estimates, other tasks get route statuses, plus the voice \
+catalog. Ready does not mean accepted. Run it once. `get_report` re-reads \
 the text result without paying for it again.
 2. Present the result. Lead with what is runnable, cheapest first. For each \
 one the user needs four things to decide: how big it is, how long it will \

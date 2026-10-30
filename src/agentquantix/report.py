@@ -86,6 +86,52 @@ def table(result, limit=None, include_blocked=True):
         f"{counts.get('blocked', 0)} blocked."
         + ("  (* = MoE, stored params)" if any(
             a["n_experts"] for a in result["assessments"]) else ""))
+
+    task_routes = result.get("task_routes")
+    if task_routes:
+        task_rows = [
+            route for route in task_routes
+            if include_blocked or route["status"] != "blocked"
+        ]
+        if limit:
+            task_rows = task_rows[:limit]
+
+        status_labels = {
+            "ready": "READY",
+            "experimental": "EXPER",
+            "choose": "CHOOSE",
+            "blocked": "BLOCK",
+        }
+        task_header = (
+            f"{'STATUS':<8} {'MODEL':<44} {'TASK':<28} "
+            f"{'ENGINE':<18} {'SOURCE':>7}  NOTE")
+        lines.extend(["", "OTHER TASKS", task_header, "-" * len(task_header)])
+        for route in task_rows:
+            note = (route.get("warnings") or [route.get("detail") or ""])[0]
+            if len(note) > 60:
+                note = note[:57] + "..."
+            lines.append(
+                f"{status_labels[route['status']]:<8} "
+                f"{route['repo_id'][:44]:<44} "
+                f"{(route.get('task') or '?')[:28]:<28} "
+                f"{(route.get('engine') or '?')[:18]:<18} "
+                f"{_size(route.get('source_gb')):>7}  {note}")
+
+        task_counts = {
+            status: sum(1 for route in task_routes if route["status"] == status)
+            for status in ("ready", "experimental", "choose", "blocked")
+        }
+        lines.append("-" * len(task_header))
+        lines.append(
+            f"{result.get('task_candidate_count', len(task_routes))} other-task "
+            f"candidates -> {task_counts['ready']} ready, "
+            f"{task_counts['experimental']} experimental, "
+            f"{task_counts['choose']} need --task, "
+            f"{task_counts['blocked']} blocked.")
+        lines.append(
+            "ready = a native adapter exists for this task; `aqx run` still "
+            "runs its native quality gates before anything is published. "
+            "Accepted models: docs/SUPPORT_MATRIX.md.")
     return "\n".join(lines)
 
 
@@ -141,10 +187,13 @@ def detail(assessment):
     return "\n".join(lines)
 
 
-def markdown(result, limit=None):
+def markdown(result, limit=None, include_blocked=True):
     """The durable report written to reports/<stamp>.md."""
     system = result["system"]
-    rows = result["assessments"][:limit] if limit else result["assessments"]
+    rows = [assessment for assessment in result["assessments"]
+            if include_blocked or assessment["verdict"] != "blocked"]
+    if limit:
+        rows = rows[:limit]
 
     out = [
         "# AgentQuantix research report",
@@ -187,6 +236,54 @@ def markdown(result, limit=None):
     out += ["", "## Detail", ""]
     for assessment in rows:
         out += ["```", detail(assessment), "```", ""]
+
+    task_routes = result.get("task_routes")
+    if task_routes:
+        task_rows = [
+            route for route in task_routes
+            if include_blocked or route["status"] != "blocked"
+        ]
+        if limit:
+            task_rows = task_rows[:limit]
+
+        def markdown_cell(value):
+            return str(value if value is not None else "-").replace("|", "\\|").replace("\n", " ")
+
+        out += [
+            "## Other tasks",
+            "",
+            f"{result.get('task_candidate_count', len(task_routes))} other-task "
+            "candidates.",
+            "",
+            "| Rank | Model | Pipeline tag | Task | Pipeline | Engine | Family | Status | "
+            "Source | License | Gated | Note | Next |",
+            "|---:|---|---|---|---|---|---|---|---:|---|---|---|---|",
+        ]
+        for route in task_rows:
+            note = (route.get("warnings") or [route.get("detail") or ""])[0]
+            next_command = route.get("next")
+            next_cell = f"`{markdown_cell(next_command)}`" if next_command else "-"
+            out.append(
+                f"| {route['rank']} "
+                f"| [{markdown_cell(route['repo_id'])}]({route['url']}) "
+                f"| {markdown_cell(route.get('pipeline_tag'))} "
+                f"| {markdown_cell(route.get('task'))} "
+                f"| {markdown_cell(route.get('pipeline'))} "
+                f"| {markdown_cell(route.get('engine'))} "
+                f"| {markdown_cell(route.get('family'))} "
+                f"| {markdown_cell(route['status'])} "
+                f"| {_size(route.get('source_gb'))} "
+                f"| {markdown_cell(route.get('license'))} "
+                f"| {markdown_cell(route.get('gated'))} "
+                f"| {markdown_cell(note)} "
+                f"| {next_cell} |")
+        out += [
+            "",
+            "ready = a native adapter exists for this task; `aqx run` still "
+            "runs its native quality gates before anything is published. "
+            "Accepted models: docs/SUPPORT_MATRIX.md.",
+            "",
+        ]
 
     if result["dropped"]:
         out += ["## Dropped before scoring", "",

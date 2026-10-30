@@ -91,14 +91,12 @@ TOOLS = [
     {
         "name": "research_trending",
         "description": (
-            "Steps 1-3. Fetch the top trending models from the Hugging Face "
-            "Hub, drop everything that is not an original text-capable base "
-            "model, read each survivor's real parameter count and "
-            "architecture, check it against llama.cpp's supported list "
-            "(hunting for a fork when it is not supported), and estimate "
-            "disk, transfer and wall-clock time for a full quant sweep on "
-            "THIS machine. Also returns the voice backend catalog. Read-only: "
-            "downloads nothing, creates nothing. Takes a minute or two."),
+            "Steps 1-3. Fetch trending original base models from the Hugging "
+            "Face Hub. Text-capable models get full quant-sweep estimates; "
+            "other models are routed to AgentQuantix tasks (embeddings, "
+            "reranking, ASR, vision, depth, etc.) with a route status. Ready "
+            "does not mean accepted. Also returns the voice backend catalog. "
+            "Read-only: downloads nothing, creates nothing."),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -505,6 +503,12 @@ def _call(name, arguments=None):
                 "ok": sum(1 for a in result["assessments"] if a["verdict"] == "ok"),
                 "warn": sum(1 for a in result["assessments"] if a["verdict"] == "warn"),
                 "blocked": sum(1 for a in result["assessments"] if a["verdict"] == "blocked"),
+                "task_routes": {
+                    status: sum(
+                        1 for route in result.get("task_routes", [])
+                        if route["status"] == status)
+                    for status in ("ready", "experimental", "choose", "blocked")
+                },
             },
             "runnable": [
                 {"repo_id": a["repo_id"], "url": a["url"],

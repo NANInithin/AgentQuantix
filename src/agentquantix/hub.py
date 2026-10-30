@@ -93,6 +93,7 @@ class Candidate:
 
     # Filled by the filter
     dropped: str | None = None          # reason, or None if it survived
+    library_name: str | None = None
 
     @property
     def org(self):
@@ -153,6 +154,7 @@ def trending(limit=None):
             repo_id=model.id,
             rank=rank,
             pipeline_tag=getattr(model, "pipeline_tag", None),
+            library_name=getattr(model, "library_name", None),
             tags=list(getattr(model, "tags", []) or []),
             downloads=getattr(model, "downloads", 0) or 0,
             likes=getattr(model, "likes", 0) or 0,
@@ -181,6 +183,7 @@ def one(repo_id):
         repo_id=model.id,
         rank=0,
         pipeline_tag=getattr(model, "pipeline_tag", None),
+        library_name=getattr(model, "library_name", None),
         tags=list(getattr(model, "tags", []) or []),
         downloads=getattr(model, "downloads", 0) or 0,
         likes=getattr(model, "likes", 0) or 0,

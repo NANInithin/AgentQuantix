@@ -31,6 +31,10 @@ aqx runs
 aqx run --resume RUN_ID
 ```
 
+`aqx research` now adds an other-tasks section for non-text models routed to
+AgentQuantix tasks. Use `aqx research --text-only` for the previous text-only
+ranking.
+
 `aqx run --resume RUN_ID` uses the recorded plan and frozen runtime. Detection
 and depth run IDs use the shared `vision:` prefix; use
 `aqx runs --pipeline vision` to list vision, detection, and depth records.

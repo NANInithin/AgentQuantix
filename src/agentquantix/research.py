@@ -13,10 +13,12 @@ import json
 import time
 
 from . import archsupport, config, feasibility, hub, sysprobe
+from .tasks import router
+from .tasks.registry import MEDIA
 
 
 def research(limit=None, probe_disk=True, workers=8, hunt_forks=True,
-             on_progress=None):
+             on_progress=None, include_tasks=True):
     """Trending -> filtered -> enriched -> assessed, plus the machine probe.
 
     `workers` parallelises enrichment, which is network-latency bound: each
@@ -37,12 +39,100 @@ def research(limit=None, probe_disk=True, workers=8, hunt_forks=True,
     kept = hub.filter_candidates(candidates)
     progress(f"{len(kept)} of {len(candidates)} survived the base-model filter")
 
+    task_pool = []
+    if include_tasks:
+        kept_ids = {id(candidate) for candidate in kept}
+        for candidate in candidates:
+            if (candidate.private or candidate.pipeline_tag in config.ALLOWED_PIPELINE_TAGS
+                    or id(candidate) in kept_ids):
+                continue
+            if reason := hub._looks_derivative(candidate):
+                candidate.dropped = reason
+                continue
+            candidate.dropped = None
+            task_pool.append(candidate)
+
     progress(f"reading metadata for {len(kept)} candidates...")
     with ThreadPoolExecutor(max_workers=workers) as pool:
         # No README here. It is a round trip per candidate for something only
         # the card writer reads, and at most a handful of a hundred-model
         # sweep ever reach that step.
         list(pool.map(lambda c: hub.enrich(c, want_readme=False), kept))
+        if task_pool:
+            list(pool.map(
+                lambda c: hub.enrich(c, check_ggufs=False, want_readme=False),
+                task_pool))
+
+    error_candidates = [*kept, *task_pool]
+    task_routes = []
+    if include_tasks:
+        sysinfo_free_disk = sysinfo.get("disk_free_gb") or 0
+        for candidate in task_pool:
+            if candidate.error:
+                continue
+            metadata = {
+                "pipeline_tag": candidate.pipeline_tag,
+                "library_name": candidate.library_name,
+                "tags": candidate.tags,
+                "model_type": candidate.model_type,
+                "architectures": candidate.architectures,
+            }
+            route = router.route(candidate.repo_id, metadata=metadata)
+            if not route.task and not route.choices:
+                candidate.dropped = f"no AgentQuantix task ({route.blocker})"
+                continue
+
+            candidate.dropped = None
+            if route.choices:
+                status = "choose"
+                next_command = (
+                    f"aqx run {candidate.repo_id} --task "
+                    f"<{'|'.join(choice['task'] for choice in route.choices if choice['task'])}> "
+                    "--no-publish")
+            elif route.blocker:
+                status = "blocked"
+                next_command = None
+            elif route.pipeline == MEDIA:
+                status = "experimental"
+                next_command = (
+                    f"aqx run {candidate.repo_id} --task {route.task} --no-publish")
+            else:
+                status = "ready"
+                next_command = (
+                    f"aqx run {candidate.repo_id} --task {route.task} --no-publish")
+
+            source_bytes = getattr(candidate, "source_bytes", 0) or 0
+            source_gb = round(source_bytes / 1e9, 2) or None
+            warnings = []
+            if source_gb is not None and source_gb * 3 > sysinfo_free_disk:
+                warnings.append(
+                    f"source is {source_gb:g} GB; conversion may need ~3x free disk")
+            task_routes.append({
+                "repo_id": candidate.repo_id,
+                "rank": candidate.rank,
+                "url": f"https://huggingface.co/{candidate.repo_id}",
+                "pipeline_tag": candidate.pipeline_tag,
+                "task": route.task,
+                "pipeline": route.pipeline,
+                "engine": route.engine,
+                "family": route.family,
+                "status": status,
+                "detail": route.blocker or "; ".join(route.reasons),
+                "source_gb": source_gb,
+                "license": candidate.license,
+                "gated": candidate.gated,
+                "warnings": warnings,
+                "next": next_command,
+            })
+
+        status_order = {
+            "ready": 0,
+            "experimental": 1,
+            "choose": 2,
+            "blocked": 3,
+        }
+        task_routes.sort(
+            key=lambda item: (status_order[item["status"]], item["rank"]))
 
     # Read the architecture list ONCE. It costs a subprocess that imports the
     # whole converter, and it is identical for every candidate.
@@ -87,7 +177,7 @@ def research(limit=None, probe_disk=True, workers=8, hunt_forks=True,
 
     assessments.sort(key=feasibility.rank_key)
 
-    return {
+    result = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "elapsed_s": round(time.time() - started, 1),
         "system": sysinfo,
@@ -96,9 +186,13 @@ def research(limit=None, probe_disk=True, workers=8, hunt_forks=True,
         "dropped": [{"repo_id": c.repo_id, "rank": c.rank, "reason": c.dropped}
                     for c in candidates if c.dropped],
         "errors": [{"repo_id": c.repo_id, "error": c.error}
-                   for c in kept if c.error],
+                   for c in error_candidates if c.error],
         "assessments": assessments,
     }
+    if include_tasks:
+        result["task_routes"] = task_routes
+        result["task_candidate_count"] = len(task_pool)
+    return result
 
 
 def assess_one(repo_id, sysinfo=None, hunt_forks=True, probe_disk=False):

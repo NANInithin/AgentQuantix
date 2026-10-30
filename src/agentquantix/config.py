@@ -331,9 +331,8 @@ BPW = {
 # =====================================================
 # CANDIDATE FILTERS  (step 1)
 # =====================================================
-# Only these produce a text-generation GGUF llama.cpp can run. Everything else
-# on the trending list — diffusion, TTS, embeddings, rerankers, ASR — is
-# dropped before scoring.
+# These produce a text-generation GGUF llama.cpp can run. Non-text tags are
+# routed to task-specific research instead of being dropped.
 ALLOWED_PIPELINE_TAGS = {
     "text-generation",
     "image-text-to-text",

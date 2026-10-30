@@ -73,12 +73,16 @@ def cmd_research(args):
         limit=args.limit,
         probe_disk=not args.no_disk,
         hunt_forks=not args.no_fork_hunt,
+        include_tasks=not args.text_only,
         on_progress=None if args.json else (lambda m: _print(f"  .. {m}")))
 
     path = research.save(result)
     if args.markdown:
         markdown_path = path.with_suffix(".md")
-        markdown_path.write_text(report.markdown(result), encoding="utf-8")
+        markdown_path.write_text(
+            report.markdown(result, limit=args.top,
+                            include_blocked=not args.hide_blocked),
+            encoding="utf-8")
 
     if args.json:
         _print(json.dumps(result, indent=2, default=str))
@@ -1129,6 +1133,9 @@ def build_parser():
     res.add_argument("--top", type=int, default=None,
                      help="only show the top N in the table")
     res.add_argument("--hide-blocked", action="store_true")
+    res.add_argument(
+        "--text-only", action="store_true",
+        help="only rank text-generation candidates (previous behaviour)")
     res.add_argument("--no-disk", action="store_true")
     res.add_argument("--no-fork-hunt", action="store_true",
                      help="do not search GitHub for forks adding an "
