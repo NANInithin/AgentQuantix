@@ -20,7 +20,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
+import threading
 import time
 import unicodedata
 import wave
@@ -1067,27 +1067,41 @@ def run_checked(command: list[str], *, output: Path | None = None,
     """Run a real inference binary and measure latency to its first output."""
     began = time.monotonic()
     first_output = None
-    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as log:
-        process = subprocess.Popen([str(part) for part in command], text=True,
-                                   stdout=log, stderr=subprocess.STDOUT,
-                                   cwd=cwd)
+    process = subprocess.Popen(
+        [str(part) for part in command], text=True, encoding="utf-8",
+        errors="replace", stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        cwd=cwd)
+    stdout_lines = []
+
+    def read_output():
         try:
-            while process.poll() is None:
-                if (first_output is None and output is not None and output.exists()
-                        and output.stat().st_size > 44):
-                    first_output = time.monotonic() - began
-                if time.monotonic() - began > timeout:
-                    process.kill()
-                    process.wait(timeout=10)
-                    raise VoiceValidationError(
-                        f"runtime timed out after {timeout} seconds")
-                time.sleep(0.02)
-            log.seek(0)
-            stdout = log.read()
+            for line in process.stdout:
+                stdout_lines.append(line)
+                sys.stderr.write(line)
+                sys.stderr.flush()
         finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=10)
+            process.stdout.close()
+
+    reader = threading.Thread(target=read_output)
+    reader_started = False
+    try:
+        reader.start()
+        reader_started = True
+        while process.poll() is None:
+            if (first_output is None and output is not None and output.exists()
+                    and output.stat().st_size > 44):
+                first_output = time.monotonic() - began
+            if time.monotonic() - began > timeout:
+                raise VoiceValidationError(
+                    f"runtime timed out after {timeout} seconds")
+            time.sleep(0.02)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+        if reader_started:
+            reader.join()
+    stdout = "".join(stdout_lines)
     elapsed = time.monotonic() - began
     if process.returncode:
         tail = next((line for line in reversed(stdout.splitlines()) if line.strip()),

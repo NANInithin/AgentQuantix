@@ -106,7 +106,8 @@ def test_reviewed_legacy_tts_artifacts_resume_without_inference(
     assert result["performance_from_review"] is True
 
 
-def test_tts_quality_cache_skips_repeated_inference(tmp_path, monkeypatch):
+def test_tts_quality_cache_skips_repeated_inference(tmp_path, monkeypatch,
+                                                   capsys):
     backend = voice.backend_for("openbmb/VoxCPM2")
     models = tmp_path / "models"
     models.mkdir()
@@ -147,11 +148,20 @@ def test_tts_quality_cache_skips_repeated_inference(tmp_path, monkeypatch):
     }
     first = voice_release.score_tts(
         bundle, runtime, voice_release.VoiceReleaseOptions(), **kwargs)
+    first_output = capsys.readouterr()
     second = voice_release.score_tts(
         bundle, runtime, voice_release.VoiceReleaseOptions(), **kwargs)
+    second_output = capsys.readouterr()
 
     assert first == second
     assert calls == {"tts": 1, "asr": 1}
+    assert first_output.out == ""
+    assert first_output.err.splitlines() == [
+        ".. TTS check 1/1 (short-en, Q8_0): audio.cpp generating; timeout 900 s",
+        ".. TTS check 1/1 (short-en, Q8_0): whisper.cpp round-trip ASR; "
+        "timeout 900 s",
+    ]
+    assert second_output.out == second_output.err == ""
 
 
 def test_source_preflight_returns_revision_and_size():

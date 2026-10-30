@@ -2,6 +2,7 @@
 
 import json
 import math
+import sys
 import wave
 
 import pytest
@@ -304,6 +305,55 @@ def test_asr_smoke_runs_inference_and_scores_transcript(tmp_path, monkeypatch):
         prefix, language="en")
     assert result["wer"] == 0
     assert result["audio_seconds_per_second"] == pytest.approx(4)
+
+
+def test_run_checked_echoes_and_captures_merged_output(capsys):
+    command = [
+        sys.executable, "-c",
+        "import sys,time; print('first line', flush=True); time.sleep(0.05); "
+        "print('second line', file=sys.stderr, flush=True)",
+    ]
+    result = voice.run_checked(command)
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+    assert captured.err == "first line\nsecond line\n"
+    assert result["stdout"] == captured.err
+    assert result["command"] == command
+    assert set(result) == {
+        "command", "elapsed_seconds", "first_output_seconds", "stdout"}
+
+
+def test_run_checked_nonzero_error_uses_last_output_line(capsys):
+    command = [
+        sys.executable, "-c",
+        "import sys; print('first line', flush=True); "
+        "print('last line', file=sys.stderr, flush=True); sys.exit(7)",
+    ]
+
+    with pytest.raises(
+            voice.VoiceValidationError,
+            match="runtime inference failed: last line"):
+        voice.run_checked(command)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "first line\nlast line\n"
+
+
+def test_run_checked_timeout_raises_and_echoes_to_stderr(capsys):
+    command = [
+        sys.executable, "-c",
+        "import time; print('started', flush=True); time.sleep(5)",
+    ]
+
+    with pytest.raises(
+            voice.VoiceValidationError,
+            match="runtime timed out after 0.1 seconds"):
+        voice.run_checked(command, timeout=0.1)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
 
 
 def test_audio_gate_accepts_signal_and_rejects_silence_and_clipping(tmp_path):

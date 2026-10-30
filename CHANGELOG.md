@@ -2,6 +2,7 @@
 
 ## 0.5.9 — unreleased development
 
+- Stream native voice inference output and per-fixture progress to stderr.
 - Gate audio.cpp TTS language flags on model-spec options and record the
   selected runtime revision in package provenance.
 - Block audio.cpp source repos without safetensors conversion and point to the

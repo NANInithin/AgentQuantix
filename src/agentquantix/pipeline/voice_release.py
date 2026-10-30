@@ -1004,6 +1004,13 @@ def _score_existing_tts_artifacts(bundle: voice.VoiceBundle,
     return aggregate
 
 
+def _announce_inference(task: str, index: int, total: int, fixture: str,
+                        quant: str | None, action: str, timeout: int) -> None:
+    detail = f"{fixture}, {quant}" if quant else fixture
+    print(f".. {task} check {index}/{total} ({detail}): {action}; "
+          f"timeout {timeout} s", file=sys.stderr, flush=True)
+
+
 def score_tts(bundle: voice.VoiceBundle, runtime: Path, options: VoiceReleaseOptions,
               fixtures: list[dict] | None = None,
               asr_runtime: Path | None = None,
@@ -1037,6 +1044,10 @@ def score_tts(bundle: voice.VoiceBundle, runtime: Path, options: VoiceReleaseOpt
             return existing
     results = []
     for index, fixture in enumerate(fixtures):
+        _announce_inference(
+            "TTS", index + 1, len(fixtures), fixture["id"],
+            bundle.quant or "base",
+            f"{bundle.backend.backend} generating", options.runtime_timeout)
         output = quality_dir / f"{index:02d}-{fixture['id']}.wav"
         output.unlink(missing_ok=True)
         generated = sanity.validate_tts_runtime(
@@ -1047,6 +1058,10 @@ def score_tts(bundle: voice.VoiceBundle, runtime: Path, options: VoiceReleaseOpt
         asr_audio.unlink(missing_ok=True)
         voice.resample_pcm16_wav(output, asr_audio)
         prefix = quality_dir / f"{index:02d}-{fixture['id']}-asr"
+        _announce_inference(
+            "TTS", index + 1, len(fixtures), fixture["id"],
+            bundle.quant or "base", "whisper.cpp round-trip ASR",
+            options.runtime_timeout)
         transcribed = sanity.validate_asr_runtime(
             asr_runtime, asr_model, asr_audio, fixture["text"], prefix,
             language=fixture.get("language"), timeout=options.runtime_timeout)
@@ -1066,6 +1081,9 @@ def score_asr(model: Path, runtime: Path, options: VoiceReleaseOptions,
     fixtures = fixtures or load_fixtures(voice.ASR)
     results = []
     for index, fixture in enumerate(fixtures):
+        _announce_inference(
+            "ASR", index + 1, len(fixtures), fixture["id"], model.stem,
+            "whisper.cpp transcribing", options.runtime_timeout)
         audio = config.VOICE_FIXTURES_DIR / fixture["audio"]
         prefix = model.parent / "quality" / model.stem / f"{index:02d}"
         prefix.parent.mkdir(parents=True, exist_ok=True)
@@ -1092,9 +1110,12 @@ def score_audiocpp_asr(backend: voice.VoiceBackend, model: Path,
                        fixtures: list[dict] | None = None) -> dict:
     fixtures = fixtures or load_fixtures(voice.ASR)
     results = []
-    for index, fixture in enumerate(fixtures):
-        if not backend.supports_language(fixture.get("language")):
-            continue
+    compatible = [(index, fixture) for index, fixture in enumerate(fixtures)
+                  if backend.supports_language(fixture.get("language"))]
+    for check_index, (index, fixture) in enumerate(compatible, start=1):
+        _announce_inference(
+            "ASR", check_index, len(compatible), fixture["id"], model.stem,
+            "audio.cpp transcribing", options.runtime_timeout)
         audio = config.VOICE_FIXTURES_DIR / fixture["audio"]
         output = model.parent / "quality" / model.stem / f"{index:02d}.txt"
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -1217,6 +1238,9 @@ def score_audiocpp_separation(backend: voice.VoiceBackend, model: Path,
     out_dir.mkdir(parents=True, exist_ok=True)
     command = voice.audiocpp_sep_command(
         runtime, backend, model, fixture_dir / "mixture.wav", out_dir)
+    _announce_inference(
+        "SEPARATION", 1, 1, "mixture", model.stem, "audio.cpp separating",
+        options.runtime_timeout)
     execution = voice.run_checked(
         command, timeout=options.runtime_timeout, cwd=audio_dir)
     vocal_path, accompaniment_path = _separation_stems(out_dir)
@@ -1270,6 +1294,9 @@ def score_audiocpp_vc(backend: voice.VoiceBackend, model: Path,
     output.unlink(missing_ok=True)
     command = voice.audiocpp_vc_command(
         runtime, backend, model, audio, voice_ref, output)
+    _announce_inference(
+        "VOICE CONVERSION", 1, 1, audio.stem, model.stem,
+        "audio.cpp converting", options.runtime_timeout)
     execution = voice.run_checked(
         command, timeout=options.runtime_timeout, cwd=audio_dir)
     _, facts = _mono_audio(output, 16000)
@@ -1283,6 +1310,9 @@ def score_audiocpp_vc(backend: voice.VoiceBackend, model: Path,
         asr_runtime, asr_model = _tiny_whisper()
         voice.resample_pcm16_wav(output, asr_audio)
         fixture = load_fixtures(voice.ASR)[0]
+        _announce_inference(
+            "VOICE CONVERSION", 1, 1, fixture["id"], model.stem,
+            "whisper.cpp round-trip ASR", options.runtime_timeout)
         asr_result = sanity.validate_asr_runtime(
             asr_runtime, asr_model, asr_audio, fixture["transcript"],
             output.with_name("converted-asr"),
@@ -1345,6 +1375,9 @@ def score_audiocpp_align(backend: voice.VoiceBackend, model: Path,
     command = voice.audiocpp_align_command(
         runtime, backend, model, audio, text, fixture.get("language") or "en",
         words_out)
+    _announce_inference(
+        "ALIGNMENT", 1, 1, fixture["id"], model.stem, "audio.cpp aligning",
+        options.runtime_timeout)
     execution = voice.run_checked(
         command, timeout=options.runtime_timeout, cwd=audio_dir)
     facts = voice.inspect_wav(audio)
