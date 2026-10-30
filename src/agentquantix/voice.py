@@ -1077,8 +1077,11 @@ def run_checked(command: list[str], *, output: Path | None = None,
         try:
             for line in process.stdout:
                 stdout_lines.append(line)
-                sys.stderr.write(line)
-                sys.stderr.flush()
+                try:
+                    sys.stderr.write(line)
+                    sys.stderr.flush()
+                except (OSError, UnicodeError, ValueError):
+                    pass
         finally:
             process.stdout.close()
 
