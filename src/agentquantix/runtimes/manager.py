@@ -57,6 +57,25 @@ def _inside(path, root):
     return path != root and root in path.parents
 
 
+def _candidate_root(base, revision, key):
+    base = Path(base)
+    legacy = base / revision / key
+    if (legacy / "manifest.json").is_file():
+        return legacy
+    return base / revision[:12] / key[:16]
+
+
+def _read_short_candidate_manifest(root, revision, key):
+    try:
+        manifest = _read(Path(root) / "manifest.json", {})
+    except (OSError, ValueError):
+        manifest = None
+    if (not isinstance(manifest, dict) or manifest.get("revision") != revision
+            or canonical_hash(manifest.get("build_fingerprint", {})) != key):
+        raise RuntimeErrorBase(f"runtime directory collision at {root}")
+    return manifest
+
+
 def _request_json(url):
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "AgentQuantix/runtime-manager"}
     if token := os.getenv("GITHUB_TOKEN"):
@@ -358,13 +377,18 @@ class RuntimeManager:
                        "machine": platform.machine(), **(build_fingerprint or {}),
                        "migrated_from": str(source)}
         base = self.work_root / ".aqx-runtime-builds" / engine
-        root = base / revision / canonical_hash(fingerprint)
+        key = canonical_hash(fingerprint)
+        legacy_root = base / revision / key
+        root = _candidate_root(base, revision, key)
+        short_root = root != legacy_root
         candidate_source, candidate_build = root / "source", root / "source/build"
         if not _inside(root, base):
             raise RuntimeErrorBase("invalid runtime migration destination")
         with self._lock(engine):
             if (root / "manifest.json").is_file():
-                handle = RuntimeHandle.from_manifest(_read(root / "manifest.json"))
+                manifest = (_read_short_candidate_manifest(root, revision, key) if short_root
+                            else _read(root / "manifest.json"))
+                handle = RuntimeHandle.from_manifest(manifest)
                 self.verify(handle)
                 return self._activate(engine, handle.manifest)
             if root.exists():
@@ -543,13 +567,18 @@ class RuntimeManager:
         key = canonical_hash(fingerprint)
         base = (self.work_root / ".aqx-runtime-builds" if persistent else
                 self.temp_root / "aqx-runtime-sessions")
-        root = base / engine / sha / key
+        candidate_base = base / engine
+        legacy_root = candidate_base / sha / key
+        root = _candidate_root(candidate_base, sha, key)
+        short_root = root != legacy_root
         source = root / "source"
         with self._lock(engine):
             previous = self.inspect(engine)
             manifest_path = root / "manifest.json"
             if manifest_path.is_file():
-                handle = RuntimeHandle.from_manifest(_read(manifest_path))
+                manifest = (_read_short_candidate_manifest(root, sha, key) if short_root
+                            else _read(manifest_path))
+                handle = RuntimeHandle.from_manifest(manifest)
                 self.verify(handle)
                 if set(required_binaries) - set(handle.binaries):
                     raise RuntimeErrorBase("cached runtime lacks required binary targets")

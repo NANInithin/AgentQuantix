@@ -34,6 +34,8 @@ aqx run --resume RUN_ID
 `aqx run --resume RUN_ID` uses the recorded plan and frozen runtime. Detection
 and depth run IDs use the shared `vision:` prefix; use
 `aqx runs --pipeline vision` to list vision, detection, and depth records.
+On Windows, keep `AQX_WORK_ROOT` short (for example, `C:\aqx`) to avoid MSVC
+path-length failures.
 
 ## Text
 
