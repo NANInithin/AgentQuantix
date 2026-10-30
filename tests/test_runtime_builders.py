@@ -59,6 +59,83 @@ def test_candidate_build_uses_separate_output_and_retains_native_contract(native
     assert json.loads((native.build / "aqx-build.json").read_text(encoding="utf-8"))["source"] == str(native.source)
 
 
+def test_ultralytics_build_uses_cpp_ggml_subtree(native):
+    (native.source / "CMakeLists.txt").unlink()
+    cmake_source = native.source / "cpp_ggml"
+    cmake_source.mkdir()
+    (cmake_source / "CMakeLists.txt").write_text("project(yolo)\n", encoding="utf-8")
+    converter = cmake_source / "scripts/convert_yolo_to_gguf.py"
+    converter.parent.mkdir()
+    converter.write_text("# converter\n", encoding="utf-8")
+    options = {"engine": "ultralytics-ggml", "flags": ["-DCMAKE_CXX_FLAGS=-include optional"],
+               "targets": ["yolo-cli"], "compute_backend": "cpu"}
+
+    result = builders.build_runtime("ultralytics-ggml", native.source, native.build, options)
+
+    configure = next(command for command in native.commands if command[:2] == ["cmake", "-S"])
+    assert configure[2] == str(cmake_source.resolve())
+    assert result["binaries"]["yolo-cli"]
+    assert result["resources"]["cpp_ggml/scripts/convert_yolo_to_gguf.py"]["sha256"]
+
+
+def test_ultralytics_source_change_must_match_its_patch(monkeypatch, tmp_path):
+    source = tmp_path / "source"
+    patch_dir = source / "cpp_ggml/third_party/ggml-patches"
+    patch_dir.mkdir(parents=True)
+    patch = patch_dir / "0001-yolo.patch"
+    patch.write_text("diff --git a/src/ggml.c b/src/ggml.c\n", encoding="utf-8")
+    submodule = source / "cpp_ggml/third_party/ggml"
+    statuses = {
+        str(source.resolve()): "M cpp_ggml/third_party/ggml",
+        str(submodule.resolve()): " M src/ggml.c",
+    }
+
+    def fake_git(path, *args):
+        key = str(Path(path).resolve())
+        if args[0] == "status":
+            return statuses.get(key, "")
+        if args[:2] == ("diff", "--name-only"):
+            return "src/ggml.c"
+        return ""
+
+    monkeypatch.setattr(builders, "_git", fake_git)
+    assert builders._source_changes("ultralytics-ggml", source) == {
+        "ggml_patches": [{"name": patch.name, "sha256": builders._hash(patch)}]}
+    with pytest.raises(builders.RuntimeBuildError, match="tracked modifications"):
+        builders._source_changes("llama.cpp", source)
+
+
+def test_rfdetr_source_change_matches_all_pinned_patches(monkeypatch, tmp_path):
+    source = tmp_path / "source"
+    patch_dir = source / "third_party/ggml-patches"
+    patch_dir.mkdir(parents=True)
+    patches = []
+    for name, path in (
+            ("0001-first.patch", "src/ggml.c"),
+            ("0002-second.patch", "src/ggml-cpu/ggml-cpu.c")):
+        patch = patch_dir / name
+        patch.write_text(f"diff --git a/{path} b/{path}\n", encoding="utf-8")
+        patches.append(patch)
+    submodule = source / "third_party/ggml"
+    statuses = {
+        str(source.resolve()): "M third_party/ggml",
+        str(submodule.resolve()): "M src/ggml.c\nM src/ggml-cpu/ggml-cpu.c",
+    }
+
+    def fake_git(path, *args):
+        key = str(Path(path).resolve())
+        if args[0] == "status":
+            return statuses.get(key, "")
+        if args[:2] == ("diff", "--name-only"):
+            return "src/ggml.c\nsrc/ggml-cpu/ggml-cpu.c"
+        return ""
+
+    monkeypatch.setattr(builders, "_git", fake_git)
+    result = builders._source_changes("rf-detr.cpp", source)
+    assert [entry["name"] for entry in result["ggml_patches"]] == [
+        patch.name for patch in patches]
+
+
 def test_failed_candidate_keeps_other_installation_and_diagnostics(native, tmp_path):
     current = tmp_path / "current" / "bin" / "llama-quantize.exe"
     current.parent.mkdir(parents=True)

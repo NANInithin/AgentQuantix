@@ -264,16 +264,60 @@ class RuntimeManager:
             raise RuntimeErrorBase("existing runtime did not expose an immutable source revision")
         return revision
 
+    def _expected_ggml_patches(self, engine, source, status):
+        layouts = {
+            "ultralytics-ggml": (
+                "M cpp_ggml/third_party/ggml",
+                "cpp_ggml/third_party/ggml",
+                "cpp_ggml/third_party/ggml-patches",
+            ),
+            "rf-detr.cpp": (
+                "M third_party/ggml",
+                "third_party/ggml",
+                "third_party/ggml-patches",
+            ),
+        }
+        if engine not in layouts:
+            return False
+        expected_status, submodule_path, patch_path = layouts[engine]
+        if status != expected_status:
+            return False
+        source = Path(source)
+        submodule = source / submodule_path
+        patches = sorted((source / patch_path).glob("*.patch"))
+        submodule_status = self._git(
+            submodule, "status", "--porcelain", "--untracked-files=all")
+        patch_paths = set()
+        try:
+            for patch in reversed(patches):
+                for line in patch.read_text(encoding="utf-8").splitlines():
+                    if line.startswith("diff --git "):
+                        names = line[len("diff --git "):].split()
+                        if len(names) != 2 or not names[0].startswith("a/") or not names[1].startswith("b/"):
+                            return False
+                        patch_paths.update((names[0][2:], names[1][2:]))
+                self._git(submodule, "apply", "--check", "--reverse", str(patch))
+        except RuntimeErrorBase:
+            return False
+        changed_paths = set(self._git(submodule, "diff", "--name-only").splitlines())
+        staged_paths = self._git(submodule, "diff", "--cached", "--name-only")
+        return (bool(patches) and bool(patch_paths) and patch_paths == changed_paths and
+                not any(line.startswith("??") for line in submodule_status.splitlines()) and
+                not staged_paths)
+
     def _complete_cached_source(self, engine, source):
         """Require a clean, fully materialized native checkout before offline use."""
         source = Path(source).resolve()
-        if not (source / "CMakeLists.txt").is_file():
+        cmake_path = ("cpp_ggml/CMakeLists.txt" if engine == "ultralytics-ggml"
+                      else "CMakeLists.txt")
+        if not (source / cmake_path).is_file():
             raise RuntimeErrorBase(f"{engine}: cached source is incomplete (missing CMakeLists.txt)")
         revision = self._check_original(engine, source)
-        self._git(source, "ls-files", "--error-unmatch", "CMakeLists.txt")
+        self._git(source, "ls-files", "--error-unmatch", cmake_path)
         if self._git(source, "ls-files", "--deleted"):
             raise RuntimeErrorBase(f"{engine}: cached source has missing tracked files")
-        if self._git(source, "status", "--porcelain", "--untracked-files=no"):
+        status = self._git(source, "status", "--porcelain", "--untracked-files=no")
+        if status and not self._expected_ggml_patches(engine, source, status):
             raise RuntimeErrorBase(f"{engine}: cached source has tracked changes; leaving it untouched")
         submodules = self._git(source, "submodule", "status", "--recursive")
         if any(line.startswith(("-", "+", "U")) for line in submodules.splitlines()):
@@ -537,7 +581,8 @@ class RuntimeManager:
                     run(["git", "clone", "--no-checkout", "--filter=blob:none", spec.url, source])
                 else:
                     self._check_original(engine, source)
-                    if self._git(source, "status", "--porcelain", "--untracked-files=no"):
+                    status = self._git(source, "status", "--porcelain", "--untracked-files=no")
+                    if status and not self._expected_ggml_patches(engine, source, status):
                         raise RuntimeErrorBase("candidate source has tracked changes; leaving it untouched")
                 if local_source is None:
                     # Fetch immutable SHA, never checkout a moving branch/tag.

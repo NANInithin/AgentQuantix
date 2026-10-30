@@ -7,7 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
-CATALOG_PATH = Path(__file__).parent / "fixtures" / "vision_cpp_families.json"
+CATALOG_PATH = Path(__file__).parent / "fixtures" / "vision_families.json"
 VISIONCPP_REVISION = "b766b0acc30f6706f1bfe46769635e361172ce96"
 VISIONCPP_TAG = "v0.3.0"
 
@@ -16,11 +16,18 @@ def families():
     return json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
 
 
-def family_for(repo_id, config=None, family=None):
-    catalog = families()
+def family_for(repo_id, config=None, family=None, *, engine=None, task=None):
+    catalog = [item for item in families()
+               if (engine is None or item.get("engine", "vision.cpp") == engine)
+               and (task is None or item["task"] == task)]
     if family:
+        requested = str(family).casefold()
+        if ":" in requested:
+            target_engine, requested = requested.split(":", 1)
+            catalog = [item for item in catalog
+                       if item.get("engine", "vision.cpp").casefold() == target_engine]
         return next((item for item in catalog
-                     if item["family"].casefold() == str(family).casefold()), None)
+                     if item["family"].casefold() == requested), None)
     repo = (repo_id or "").casefold()
     match = next((item for item in catalog
                   if any(repo == value.casefold() for value in item["repos"])), None)

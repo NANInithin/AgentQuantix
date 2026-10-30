@@ -384,6 +384,21 @@ def multimodal_plan(model, *, task="multimodal-understanding", engine="llama.cpp
 def vision_plan(model, *, task, family=None, target_repo=None, quants=None):
     from . import runtime_control
     from .pipeline import vision_release
+    from . import vision
+    matched = vision.family_for(model, family=family, task=task)
+    if matched and matched.get("engine", "vision.cpp") != "vision.cpp":
+        from .pipeline import detection_release
+        engine = matched["engine"]
+        handle = runtime_control.selected_runtime(engine)
+        try:
+            return detection_release.plan_release(
+                model, task=task, family=matched["family"], engine=engine,
+                target_repo=target_repo, quants=quants,
+                runtime_revision=handle.revision if handle else None)
+        except detection_release.DetectionValidationError as error:
+            return {"pipeline": "vision", "engine": engine, "model": model,
+                    "task": task, "family": matched["family"], "status": "blocked",
+                    "blockers": [str(error)]}
     handle = runtime_control.selected_runtime("vision.cpp")
     try:
         return vision_release.plan_release(
@@ -402,6 +417,17 @@ def start_vision(plan, *, user_approved, publish=False):
     if plan.get("blockers") or plan.get("status") != "ready":
         raise ValueError("vision plan is blocked: " + "; ".join(plan.get("blockers", [])))
     from . import runtime_control
+    if plan.get("engine") in ("ultralytics-ggml", "rf-detr.cpp"):
+        from .pipeline import detection_release
+        engine = plan["engine"]
+        revision = plan["runtime_revision"]
+        handle = runtime_control.ensure_runtime(
+            engine, revision={"revision": revision, "ref": revision, "channel": "pinned",
+                              "repository": plan["runtime_repository"]},
+            required_targets=("yolo-cli" if engine == "ultralytics-ggml" else "rfdetr-cli",))
+        result = detection_release.run_release(
+            plan, user_approved=True, publish=publish, runtime=handle)
+        return {"pipeline": VISION, **result, "run_id": f"vision:{result['run_id']}"}
     handle = runtime_control.ensure_runtime(
         "vision.cpp", revision={"revision": vision_release.REVISION,
                                 "ref": vision_release.REVISION, "channel": "pinned",
@@ -575,10 +601,15 @@ def publish(run_id, quant, *, user_approved):
         return {"run_id": record.id,
                 **multimodal_release.publish_run(record.id.partition(":")[2], quant)}
     if record.pipeline == VISION:
+        plan = record.details.get("plan") or {}
+        if plan.get("engine") in ("ultralytics-ggml", "rf-detr.cpp"):
+            from .pipeline import detection_release
+            return {"run_id": record.id,
+                    **detection_release.publish_run(
+                        record.id.partition(":")[2], quant, root=record.location)}
         from .pipeline import vision_release
-        return {"run_id": record.id,
-                **vision_release.publish_run(record.id.partition(":")[2], quant,
-                                             root=record.location)}
+        return {"run_id": record.id, **vision_release.publish_run(
+            record.id.partition(":")[2], quant, root=record.location)}
     if record.pipeline == MEDIA:
         return {"run_id": record.id, **media_release.publish_run(record.id.partition(":")[2], quant)}
     saved = record.details.get("plan") or {}
@@ -613,6 +644,11 @@ def _verify_local(path, root=None):
         return {"target": str(path), "kind": "multimodal-bundle",
                 "valid": not problems, "problems": problems}
     if data.get("pipeline") == "vision":
+        if data.get("engine") in ("ultralytics-ggml", "rf-detr.cpp"):
+            from .pipeline import detection_release
+            problems = detection_release.verify_manifest(data, root or Path(path).parent)
+            return {"target": str(path), "kind": "detection-bundle",
+                    "valid": not problems, "problems": problems}
         from .pipeline import vision_release
         problems = vision_release.verify_manifest(data, root or Path(path).parent)
         return {"target": str(path), "kind": "vision-bundle",

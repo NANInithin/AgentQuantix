@@ -52,7 +52,13 @@ def test_retrieval_hub_routes_are_ready_and_clip_architecture_overrides_tag():
 def test_recognised_tasks_without_adapters_are_blocked_not_misrouted(tag, task, milestone):
     item = route("org/model", metadata={"pipeline_tag": tag, "library_name": "transformers"})
     assert item.task == task and item.pipeline is None and not item.ready
-    assert milestone in item.blocker and "not sent through the text-generation" in item.blocker
+    if task == "object-detection":
+        assert item.blocker == (
+            "ultralytics-ggml YOLO26 detection, instance/semantic segmentation, depth and "
+            "YOLO-World open-vocabulary did not meet native parity gates in 0.5.7; "
+            "OBB was not evaluated")
+    else:
+        assert milestone in item.blocker and "not sent through the text-generation" in item.blocker
 
 
 @pytest.mark.parametrize("metadata,task", [

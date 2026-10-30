@@ -24,6 +24,8 @@ class FakeGit:
         self.effective_origins = {}
         self.dirty = {}
         self.submodules = {}
+        self.diffs = {}
+        self.diff_names = {}
 
     def __call__(self, command):
         command = list(map(str, command))
@@ -48,6 +50,10 @@ class FakeGit:
             output = self.dirty.get(source, "")
         elif args[:2] == ["submodule", "status"]:
             output = self.submodules.get(source, "")
+        elif args[:2] == ["diff", "--name-only"]:
+            output = self.diff_names.get(source, "")
+        elif args[:1] == ["diff"]:
+            output = self.diffs.get(source, "")
         return SimpleNamespace(returncode=0, stdout=output, stderr="")
 
 
@@ -98,6 +104,50 @@ def installed(lifecycle, **kwargs):
 def test_registry_has_all_designated_originals():
     assert len(RUNTIMES) == 11
     assert RUNTIMES["ultralytics-ggml"].repository == "Asher-1/ultralytics-ggml"
+    assert RUNTIMES["ultralytics-ggml"].adapter_version == 2
+
+
+def test_cached_ultralytics_source_checks_cpp_ggml_cmake(lifecycle, tmp_path):
+    source = tmp_path / "ultralytics-ggml"
+    cmake_file = source / "cpp_ggml/CMakeLists.txt"
+    cmake_file.parent.mkdir(parents=True)
+    cmake_file.write_text("project(yolo)\n", encoding="utf-8")
+    lifecycle.git.origins[str(source)] = "https://github.com/Asher-1/ultralytics-ggml.git"
+
+    assert lifecycle.manager._complete_cached_source("ultralytics-ggml", source) == OLD
+    assert any(command[-2:] == ["--error-unmatch", "cpp_ggml/CMakeLists.txt"]
+               for command in lifecycle.git.calls)
+
+
+def test_ultralytics_source_validator_accepts_its_exact_ggml_patch(lifecycle, tmp_path):
+    source = tmp_path / "ultralytics-ggml"
+    patch_dir = source / "cpp_ggml/third_party/ggml-patches"
+    patch_dir.mkdir(parents=True)
+    (source / "cpp_ggml/CMakeLists.txt").write_text("project(yolo)\n", encoding="utf-8")
+    (patch_dir / "0001-yolo.patch").write_text(
+        "diff --git a/src/ggml.c b/src/ggml.c\n", encoding="utf-8")
+    submodule = str(source / "cpp_ggml/third_party/ggml")
+    lifecycle.git.dirty[submodule] = " M src/ggml.c"
+    lifecycle.git.diff_names[submodule] = "src/ggml.c"
+
+    assert lifecycle.manager._expected_ggml_patches(
+        "ultralytics-ggml", source, "M cpp_ggml/third_party/ggml")
+
+
+def test_rfdetr_source_validator_accepts_its_exact_patch_series(lifecycle, tmp_path):
+    source = tmp_path / "rf-detr.cpp"
+    patch_dir = source / "third_party/ggml-patches"
+    patch_dir.mkdir(parents=True)
+    for name, path in (
+            ("0001-first.patch", "src/ggml.c"),
+            ("0002-second.patch", "src/ggml-cpu/ggml-cpu.c")):
+        (patch_dir / name).write_text(f"diff --git a/{path} b/{path}\n", encoding="utf-8")
+    submodule = str(source / "third_party/ggml")
+    lifecycle.git.dirty[submodule] = " M src/ggml.c\n M src/ggml-cpu/ggml-cpu.c"
+    lifecycle.git.diff_names[submodule] = "src/ggml.c\nsrc/ggml-cpu/ggml-cpu.c"
+
+    assert lifecycle.manager._expected_ggml_patches(
+        "rf-detr.cpp", source, "M third_party/ggml")
 
 
 def test_latest_stable_release_resolves_exact_sha(lifecycle):
