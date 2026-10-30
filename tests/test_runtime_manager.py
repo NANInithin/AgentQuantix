@@ -414,6 +414,24 @@ def test_new_install_uses_short_candidate_root(lifecycle):
     assert Path(handle.manifest["root"]) == expected_root
 
 
+def test_manifestless_legacy_candidate_is_left_while_install_uses_short_root(lifecycle):
+    from agentquantix.runtimes.spec import canonical_hash
+    fingerprint = _default_candidate_fingerprint()
+    key = canonical_hash(fingerprint)
+    legacy = lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp" / NEW / key
+    legacy.mkdir(parents=True)
+    failed_build = legacy / "failure.json"
+    failed_build.write_text("preserve failed candidate", encoding="utf-8")
+
+    handle = installed(lifecycle)
+
+    expected_root = (lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp"
+                     / NEW[:12] / key[:16])
+    assert Path(handle.manifest["root"]) == expected_root
+    assert failed_build.read_text(encoding="utf-8") == "preserve failed candidate"
+    assert not (legacy / "manifest.json").exists()
+
+
 def test_existing_legacy_candidate_with_manifest_is_reused(lifecycle, monkeypatch):
     from agentquantix.runtimes.spec import canonical_hash
     fingerprint = _default_candidate_fingerprint()

@@ -60,7 +60,7 @@ def _inside(path, root):
 def _candidate_root(base, revision, key):
     base = Path(base)
     legacy = base / revision / key
-    if legacy.exists():
+    if (legacy / "manifest.json").is_file():
         return legacy
     return base / revision[:12] / key[:16]
 
