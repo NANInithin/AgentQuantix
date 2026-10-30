@@ -12,8 +12,10 @@ import os
 from pathlib import Path
 import platform
 import re
+import signal
 import subprocess
 import sys
+import threading
 import time
 
 from .pipeline import build as native_build
@@ -199,29 +201,129 @@ def fingerprint(engine, compute_backend="auto", required_targets=None):
             "vcvars": str(vcvars) if vcvars else None}
 
 
-def _execute(command, log_path=None, *, cwd=None, timeout=3600, help_probe=False):
+def _kill_process_tree(process):
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            result = subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                capture_output=True, text=True, timeout=10)
+            if result.returncode:
+                process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+def _execute(command, log_path=None, *, cwd=None, timeout=3600, help_probe=False,
+             label=None):
     command = [str(argument) for argument in command]
     started = time.monotonic()
-    record = {"argv": command, "cwd": str(cwd) if cwd else None}
+    record = {"argv": command, "cwd": str(cwd) if cwd else None,
+              "returncode": None, "stdout": "", "stderr": ""}
+    process = None
+    live_path = Path(log_path).with_suffix(".log") if log_path is not None else None
+    live_stream = None
+    output = {"stdout": [], "stderr": []}
+    output_lock = threading.Lock()
+    readers = []
+
+    def read_output(name, pipe):
+        for line in pipe:
+            with output_lock:
+                output[name].append(line)
+                if live_stream is not None:
+                    live_stream.write(line)
+                    live_stream.flush()
+                if label:
+                    sys.stderr.write(line)
+                    sys.stderr.flush()
+        pipe.close()
+
     try:
-        result = subprocess.run(command, cwd=cwd, env=native_build.build_env(),
-                                capture_output=True, text=True, errors="replace",
-                                stdin=subprocess.DEVNULL, timeout=timeout)
-        record.update(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        record.update(returncode=None, stdout=str(getattr(error, "stdout", "") or ""),
-                      stderr=str(getattr(error, "stderr", "") or error))
-        raise RuntimeBuildError(f"native command could not execute: {error}; log: {log_path}") from error
+        if live_path is not None:
+            live_path.parent.mkdir(parents=True, exist_ok=True)
+            live_stream = live_path.open("a", encoding="utf-8")
+        process = subprocess.Popen(
+            command, cwd=cwd, env=native_build.build_env(),
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, errors="replace", start_new_session=os.name != "nt")
+        readers = [
+            threading.Thread(target=read_output, args=("stdout", process.stdout)),
+            threading.Thread(target=read_output, args=("stderr", process.stderr)),
+        ]
+        for reader in readers:
+            reader.start()
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            _kill_process_tree(process)
+            process.wait()
+            for reader in readers:
+                reader.join()
+            record.update(
+                returncode=None,
+                stdout="".join(output["stdout"]),
+                stderr="".join(output["stderr"]) or str(error))
+            raise RuntimeBuildError(
+                f"native command could not execute: timed out after {timeout}s; "
+                f"log: {log_path}") from error
+        except BaseException:
+            _kill_process_tree(process)
+            try:
+                process.wait()
+            except BaseException:
+                pass
+            for reader in readers:
+                reader.join()
+            raise
+        for reader in readers:
+            reader.join()
+        record.update(returncode=returncode,
+                      stdout="".join(output["stdout"]),
+                      stderr="".join(output["stderr"]))
+    except (OSError, subprocess.SubprocessError) as error:
+        if process is not None and process.poll() is None:
+            _kill_process_tree(process)
+            process.wait()
+        record.update(
+            returncode=getattr(process, "returncode", None),
+            stdout="".join(output["stdout"]),
+            stderr="".join(output["stderr"]) or str(getattr(error, "stderr", "") or error))
+        raise RuntimeBuildError(
+            f"native command could not execute: {error}; log: {log_path}") from error
+    except BaseException:
+        if process is not None and process.poll() is None:
+            _kill_process_tree(process)
+            try:
+                process.wait()
+            except BaseException:
+                pass
+        for reader in readers:
+            if reader.is_alive():
+                reader.join()
+        raise
     finally:
+        for reader in readers:
+            if reader.is_alive():
+                reader.join()
+        if live_stream is not None:
+            live_stream.close()
         record["duration_seconds"] = time.monotonic() - started
         if log_path is not None:
             _atomic_json(log_path, record)
+    returncode = record["returncode"]
     diagnostics = record["stdout"] + "\n" + record["stderr"]
-    usage_exit = (help_probe and result.returncode == 1
+    usage_exit = (help_probe and returncode == 1
                   and re.search(r"\b(?:usage|options|help)\b", diagnostics, re.I))
-    if (result.returncode and not usage_exit) or (not help_probe and _NONFINITE.search(diagnostics)):
+    if (returncode and not usage_exit) or (not help_probe and _NONFINITE.search(diagnostics)):
         tail = next((line for line in reversed(diagnostics.splitlines()) if line.strip()), "no diagnostics")
-        raise RuntimeBuildError(f"native command failed ({result.returncode}): {tail}; log: {log_path}")
+        raise RuntimeBuildError(f"native command failed ({returncode}): {tail}; log: {log_path}")
     return record
 
 
@@ -419,7 +521,8 @@ def build_runtime(engine, source, build_dir, options=None):
     submodules = _submodules_for(engine)
     _execute(["git", "-c", "url.https://github.com/.insteadOf=git@github.com:",
               "-C", source, "submodule", "update", "--init", "--recursive", *submodules],
-             logs / "submodules.json", timeout=900)
+             logs / "submodules.json", timeout=900,
+             label=f"{engine}: submodules")
     contract = _binary_contract(engine, source, effective["targets"])
     configure = ["cmake", "-S", cmake_source, "-B", build_dir]
     if effective.get("generator"):
@@ -428,6 +531,11 @@ def build_runtime(engine, source, build_dir, options=None):
     compile_command = ["cmake", "--build", build_dir, "--config", "Release",
                        "--target", *dict.fromkeys(contract.values()),
                        "--parallel", native_build.build_jobs()]
+    print(
+        f"  .. {engine}: building {effective.get('compute_backend') or 'native'} runtime; "
+        "this can take 30-60+ minutes for CUDA builds. "
+        f"Live log: {logs / 'build.log'}",
+        file=sys.stderr, flush=True)
     if sys.platform == "win32" and effective.get("vcvars"):
         script = build_dir / "aqx-build.bat"
         script.write_text("@echo off\r\nsetlocal DisableDelayedExpansion\r\n"
@@ -438,10 +546,13 @@ def build_runtime(engine, source, build_dir, options=None):
         # Use a fixed basename and native cwd instead of passing a user path
         # through cmd.exe's additional command-line parsing/expansion layer.
         _execute(["cmd.exe", "/d", "/v:off", "/c", ".\\" + script.name],
-                 logs / "build.json", cwd=build_dir, timeout=7200)
+                 logs / "build.json", cwd=build_dir, timeout=7200,
+                 label=f"{engine}: configure+build")
     else:
-        _execute(configure, logs / "configure.json")
-        _execute(compile_command, logs / "build.json", timeout=7200)
+        _execute(configure, logs / "configure.json",
+                 label=f"{engine}: configure")
+        _execute(compile_command, logs / "build.json", timeout=7200,
+                 label=f"{engine}: build")
     binaries = {role: _find_binary(build_dir, target) for role, target in contract.items()}
     if missing := [role for role, path in binaries.items() if path is None]:
         raise RuntimeBuildError(f"{engine}: native build produced no {', '.join(missing)}")

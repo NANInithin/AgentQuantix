@@ -624,3 +624,17 @@ def test_frozen_fork_cannot_be_treated_as_an_original(lifecycle):
     snapshot["identity"] = canonical_hash(snapshot)
     with pytest.raises(RuntimeErrorBase, match="designated original upstream"):
         lifecycle.manager.verify(RuntimeHandle.from_manifest(snapshot))
+
+
+def test_source_setup_commands_are_reported_before_execution(lifecycle, capsys):
+    handle = installed(lifecycle)
+
+    progress = [line for line in capsys.readouterr().err.splitlines()
+                if line.startswith("  .. llama.cpp: ")]
+    setup = json.loads((handle.source.parent / "setup.json").read_text(encoding="utf-8"))
+
+    assert len(progress) == 4
+    assert progress[0] == "  .. llama.cpp: git clone --no-checkout..."
+    assert len(setup["commands"]) == 4
+    assert all(set(command) == {"argv", "returncode", "stdout", "stderr"}
+               for command in setup["commands"])

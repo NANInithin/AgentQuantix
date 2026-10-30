@@ -15,6 +15,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -587,6 +588,8 @@ class RuntimeManager:
             commands = []
 
             def run(args):
+                print(f"  .. {engine}: {' '.join(map(str, args[:3]))}...",
+                      file=sys.stderr, flush=True)
                 result = self.run_command(args)
                 record = {"argv": list(map(str, args)), "returncode": result.returncode,
                           "stdout": result.stdout, "stderr": result.stderr}

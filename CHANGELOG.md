@@ -2,6 +2,7 @@
 
 ## 0.5.9 — unreleased development
 
+- Stream native runtime setup and build output to stderr while commands run.
 - Route non-text trending candidates to AgentQuantix tasks in `aqx research`;
   use `--text-only` for the previous ranking behavior.
 - Keep managed runtime build paths short on Windows to avoid MSVC nested-object

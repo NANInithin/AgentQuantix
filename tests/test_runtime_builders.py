@@ -1,4 +1,5 @@
 """Offline build-adapter control-flow tests; these are not native acceptance."""
+import io
 import json
 from pathlib import Path
 import sys
@@ -7,6 +8,23 @@ from types import SimpleNamespace
 import pytest
 
 from agentquantix import runtime_builders as builders
+
+
+class _FakeProcess:
+    def __init__(self, returncode, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = io.StringIO(stdout)
+        self.stderr = io.StringIO(stderr)
+        self.pid = 1
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
 
 
 @pytest.fixture
@@ -38,9 +56,14 @@ def native(tmp_path, monkeypatch):
                     path.write_bytes(b"native executable")
                 (path.parent / "ggml-cpu.dll").write_bytes(b"native backend")
             return SimpleNamespace(returncode=0, stdout="Configured in C:/Documents/INF/source", stderr="")
-        return SimpleNamespace(returncode=control["probe_code"], stdout=control["diagnostic"], stderr="")
+        return SimpleNamespace(returncode=control["probe_code"],
+                               stdout=control["diagnostic"], stderr="")
 
-    monkeypatch.setattr(builders.subprocess, "run", run)
+    def popen(command, **kwargs):
+        result = run(command, **kwargs)
+        return _FakeProcess(result.returncode, result.stdout, result.stderr)
+
+    monkeypatch.setattr(builders.subprocess, "Popen", popen)
     monkeypatch.setattr(builders.native_build, "build_jobs", lambda: "2")
     options = {"engine": "llama.cpp", "flags": ["-DGGML_CUDA=OFF"],
                "targets": ["llama-quantize", "llama-imatrix"], "compute_backend": "cpu"}
@@ -293,10 +316,10 @@ def test_retrieval_runtime_targets_and_clip_cpp_cmake4_policy(native, monkeypatc
 
 def test_msvc_configuration_and_build_share_developer_environment(native, monkeypatch):
     monkeypatch.setattr(builders.sys, "platform", "win32")
-    run = builders.subprocess.run
+    popen = builders.subprocess.Popen
     scripts = []
 
-    def windows_run(command, **kwargs):
+    def windows_popen(command, **kwargs):
         if str(command[0]) == "cmd.exe":
             # `.\aqx-build.bat` is a cmd.exe path; the test may run on POSIX.
             script = Path(kwargs["cwd"]) / command[-1].rsplit("\\", 1)[-1]
@@ -305,9 +328,10 @@ def test_msvc_configuration_and_build_share_developer_environment(native, monkey
                 path = native.build / "bin" / (target + ".exe")
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b"windows native executable")
-        return run(command, **kwargs)
+            return _FakeProcess(0)
+        return popen(command, **kwargs)
 
-    monkeypatch.setattr(builders.subprocess, "run", windows_run)
+    monkeypatch.setattr(builders.subprocess, "Popen", windows_popen)
     options = {**native.options, "vcvars": "C:/Build Tools/vcvars64.bat", "generator": "Ninja"}
     result = builders.build_runtime("llama.cpp", native.source, native.build, options)
     assert len(scripts) == 1
