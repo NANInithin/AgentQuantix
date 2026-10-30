@@ -78,6 +78,15 @@ def test_ultralytics_build_uses_cpp_ggml_subtree(native):
     assert result["resources"]["cpp_ggml/scripts/convert_yolo_to_gguf.py"]["sha256"]
 
 
+def test_depth_cli_is_found_in_its_upstream_output_directory(tmp_path):
+    build = tmp_path / "build"
+    binary = build / "examples" / "cli" / "da3-cli"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"native executable")
+
+    assert builders._find_binary(build, "da3-cli") == binary.resolve()
+
+
 def test_ultralytics_source_change_must_match_its_patch(monkeypatch, tmp_path):
     source = tmp_path / "source"
     patch_dir = source / "cpp_ggml/third_party/ggml-patches"

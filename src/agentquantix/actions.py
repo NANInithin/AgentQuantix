@@ -387,9 +387,20 @@ def vision_plan(model, *, task, family=None, target_repo=None, quants=None):
     from . import vision
     matched = vision.family_for(model, family=family, task=task)
     if matched and matched.get("engine", "vision.cpp") != "vision.cpp":
-        from .pipeline import detection_release
         engine = matched["engine"]
         handle = runtime_control.selected_runtime(engine)
+        if engine == "depth-anything.cpp":
+            from .pipeline import depth_release
+            try:
+                return depth_release.plan_release(
+                    model, task=task, family=matched["family"],
+                    target_repo=target_repo, quants=quants,
+                    runtime_revision=handle.revision if handle else None)
+            except depth_release.DepthValidationError as error:
+                return {"pipeline": "vision", "engine": engine, "model": model,
+                        "task": task, "family": matched["family"], "status": "blocked",
+                        "blockers": [str(error)]}
+        from .pipeline import detection_release
         try:
             return detection_release.plan_release(
                 model, task=task, family=matched["family"], engine=engine,
@@ -426,6 +437,17 @@ def start_vision(plan, *, user_approved, publish=False):
                               "repository": plan["runtime_repository"]},
             required_targets=("yolo-cli" if engine == "ultralytics-ggml" else "rfdetr-cli",))
         result = detection_release.run_release(
+            plan, user_approved=True, publish=publish, runtime=handle)
+        return {"pipeline": VISION, **result, "run_id": f"vision:{result['run_id']}"}
+    if plan.get("engine") == "depth-anything.cpp":
+        from .pipeline import depth_release
+        revision = plan["runtime_revision"]
+        handle = runtime_control.ensure_runtime(
+            "depth-anything.cpp",
+            revision={"revision": revision, "ref": revision, "channel": "pinned",
+                      "repository": plan["runtime_repository"]},
+            required_targets=("da3-cli",))
+        result = depth_release.run_release(
             plan, user_approved=True, publish=publish, runtime=handle)
         return {"pipeline": VISION, **result, "run_id": f"vision:{result['run_id']}"}
     handle = runtime_control.ensure_runtime(
@@ -602,6 +624,10 @@ def publish(run_id, quant, *, user_approved):
                 **multimodal_release.publish_run(record.id.partition(":")[2], quant)}
     if record.pipeline == VISION:
         plan = record.details.get("plan") or {}
+        if plan.get("engine") == "depth-anything.cpp":
+            from .pipeline import depth_release
+            return {"run_id": record.id, **depth_release.publish_run(
+                record.id.partition(":")[2], quant, root=record.location)}
         if plan.get("engine") in ("ultralytics-ggml", "rf-detr.cpp"):
             from .pipeline import detection_release
             return {"run_id": record.id,
@@ -644,6 +670,11 @@ def _verify_local(path, root=None):
         return {"target": str(path), "kind": "multimodal-bundle",
                 "valid": not problems, "problems": problems}
     if data.get("pipeline") == "vision":
+        if data.get("engine") == "depth-anything.cpp":
+            from .pipeline import depth_release
+            problems = depth_release.verify_manifest(data, root or Path(path).parent)
+            return {"target": str(path), "kind": "depth-bundle",
+                    "valid": not problems, "problems": problems}
         if data.get("engine") in ("ultralytics-ggml", "rf-detr.cpp"):
             from .pipeline import detection_release
             problems = detection_release.verify_manifest(data, root or Path(path).parent)

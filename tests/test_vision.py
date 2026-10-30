@@ -83,7 +83,9 @@ def test_runtime_revision_guard_and_router_blockers():
         vision_release.runtime_guard("wrong")
     route_result = route("unknown/model", task="mask-generation")
     assert not route_result.ready
-    assert "sam3cpp is the later route in 0.5.8" in route_result.blocker
+    assert route_result.blocker == (
+        "official facebook/sam3 weights are gated under the SAM License; "
+        "no ungated source with verifiable conversion provenance; sam3cpp not accepted")
     assert route("dhkim2810/MobileSAM", task="mask-generation").pipeline == VISION
     configured = route("someone/custom", task="depth-estimation",
                        metadata={"model_type": "depth_anything"})

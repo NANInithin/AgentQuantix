@@ -114,7 +114,10 @@ def test_unknown_and_unimplemented_explicit_tasks():
     with pytest.raises(ValueError, match="unknown engine"):
         route("org/x", engine="nope.cpp")
     item = route("org/x", task="depth-estimation")
-    assert not item.ready and "0.5.8" in item.blocker
+    assert not item.ready
+    assert item.blocker == (
+        "no vision.cpp family matches depth-estimation; "
+        "depth-anything.cpp requires an exact catalog family")
 
 
 def test_metadata_without_task_evidence_asks_for_a_task():

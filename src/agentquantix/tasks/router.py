@@ -51,6 +51,7 @@ def hub_metadata(repo_id):
             "library_name": getattr(info, "library_name", None),
             "tags": list(getattr(info, "tags", None) or []),
             "model_type": model_config.get("model_type"),
+            "depth_estimation_type": model_config.get("depth_estimation_type"),
             "architectures": list(model_config.get("architectures") or [])}
 
 
@@ -259,15 +260,17 @@ def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=
 
 
 def _vision_later_route(task):
+    if task == "mask-generation":
+        return ("official facebook/sam3 weights are gated under the SAM License; no ungated "
+                "source with verifiable conversion provenance; sam3cpp not accepted")
     if task in ("object-detection", "image-segmentation", "keypoint-detection",
                 "image-classification"):
         return ("ultralytics-ggml YOLO26 detection, instance/semantic segmentation, depth and "
                 "YOLO-World open-vocabulary did not meet native parity gates in 0.5.7; "
                 "OBB was not evaluated")
     later = {
-        "mask-generation": "sam3cpp is the later route in 0.5.8",
         "image-segmentation": "ultralytics-ggml/rf-detr.cpp is the later route in 0.5.7",
-        "depth-estimation": "depth-anything.cpp is the later route in 0.5.8",
+        "depth-estimation": "depth-anything.cpp requires an exact catalog family",
     }.get(task, "no later native route is scheduled")
     return f"no vision.cpp family matches {task}; {later}"
 
