@@ -19,6 +19,11 @@ Select these routes with `--task audio-source-separation`,
 model-specific; see [audio task status](docs/AUDIO_TASKS_STATUS.md) for
 accepted precisions, rejected families and licensing limits.
 
+For vision.cpp, use `--task mask-generation`, `--task image-segmentation` or
+`--task depth-estimation`. MobileSAM, BiRefNet and Depth Anything V2 are
+catalog-routed; depth is relative only. See
+[vision task status](docs/VISION_STATUS.md) for gates and limitations.
+
 Three ways to drive it. The CLI is the ground truth — the Claude Code skill and
 the API-key loop call exactly the same code, so nothing behaves differently
 depending on which one you pick.

@@ -1,0 +1,35 @@
+[
+  {
+    "family": "sam",
+    "task": "mask-generation",
+    "converter_arch": "sam",
+    "cli_command": "sam",
+    "source_files": ["*.safetensors", "*.pt", "*.pth"],
+    "repos": ["dhkim2810/MobileSAM"],
+    "model_types": ["vit_t"],
+    "architectures": ["SamModel", "SamModelForMaskGeneration", "MobileSamModel"],
+    "licence_notes": "HF metadata MIT; upstream code Apache-2.0"
+  },
+  {
+    "family": "birefnet",
+    "task": "image-segmentation",
+    "converter_arch": "birefnet",
+    "cli_command": "birefnet",
+    "source_files": ["*.safetensors", "*.pt", "*.pth"],
+    "repos": ["ZhengPeng7/BiRefNet"],
+    "model_types": ["birefnet"],
+    "architectures": ["BiRefNet"],
+    "licence_notes": "MIT"
+  },
+  {
+    "family": "depth-anything",
+    "task": "depth-estimation",
+    "converter_arch": "depth-anything",
+    "cli_command": "depth-anything",
+    "source_files": ["*.safetensors", "*.pt", "*.pth"],
+    "repos": ["depth-anything/Depth-Anything-V2-Small-hf"],
+    "model_types": ["depth_anything"],
+    "architectures": ["DepthAnythingForDepthEstimation"],
+    "licence_notes": "Apache-2.0"
+  }
+]

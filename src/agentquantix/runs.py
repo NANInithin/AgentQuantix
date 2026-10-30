@@ -20,7 +20,7 @@ import re
 import time
 
 from . import config
-from .tasks import MEDIA, MULTIMODAL, PIPELINES, RETRIEVAL, TEXT, VOICE
+from .tasks import MEDIA, MULTIMODAL, PIPELINES, RETRIEVAL, TEXT, VISION, VOICE
 
 
 class AmbiguousRun(ValueError):
@@ -61,6 +61,10 @@ def retrieval_root():
 
 def multimodal_root():
     return config.TEMP_DIR / "aqx-multimodal-runs"
+
+
+def vision_root():
+    return config.TEMP_DIR / "aqx-vision-runs"
 
 
 def _read(path):
@@ -141,9 +145,22 @@ def _multimodal_runs():
                         created=data.get("created"), details={"plan": plan, "journal": journal})
 
 
+def _vision_runs():
+    root = vision_root()
+    for directory in sorted(root.iterdir()) if root.is_dir() else ():
+        data = _read(directory / "run.json")
+        plan = data.get("plan") if isinstance(data, dict) else None
+        if not isinstance(plan, dict) or not plan.get("model"):
+            continue
+        yield RunRecord(f"vision:{directory.name}", VISION, plan["model"], str(directory),
+                        target=plan.get("target_repo"), task=plan.get("task"),
+                        engine=plan.get("engine"), created=data.get("created"),
+                        details={"plan": plan, "journal": _read(directory / "journal.json") or {}})
+
+
 def discover(pipeline=None):
     found = [*_text_runs(), *_voice_runs(), *_media_runs(), *_retrieval_runs(),
-             *_multimodal_runs()]
+             *_multimodal_runs(), *_vision_runs()]
     return [item for item in found if pipeline in (None, item.pipeline)]
 
 

@@ -27,7 +27,7 @@ from . import (actions, card, config, feasibility, media, report, research, runs
 from .pipeline import build as build_mod, run as run_mod, source as source_mod
 from .pipeline.job import Job
 from .runtimes import RuntimeDecisionRequired, RuntimeErrorBase
-from .tasks import MEDIA, MULTIMODAL, RETRIEVAL, TEXT, VOICE, TASKS
+from .tasks import MEDIA, MULTIMODAL, RETRIEVAL, TEXT, VISION, VOICE, TASKS
 
 
 def _print(*args):
@@ -246,6 +246,7 @@ APPLICABLE = {
     MEDIA: MEDIA_OPTIONS | {"target", "quant", "publish", "output", "sequential"},
     RETRIEVAL: {"target", "quant", "publish", "output"},
     MULTIMODAL: {"target", "quant", "publish", "output"},
+    VISION: {"target", "quant", "publish", "output"},
 }
 
 
@@ -296,6 +297,9 @@ def cmd_run(args):
         if task_spec and task_spec.pipeline == MULTIMODAL:
             _check_applicable(args, MULTIMODAL)
             return _run_multimodal(args, saved=saved)
+        if task_spec and task_spec.pipeline == VISION:
+            _check_applicable(args, VISION)
+            return _run_vision(args, saved=saved)
         _check_applicable(args, MEDIA)
         return _run_media(args, args.model[0] if args.model else None, saved=saved)
     if not args.model:
@@ -331,6 +335,8 @@ def cmd_run(args):
         code = _run_retrieval(args, ready[0][1])
     elif pipeline == MULTIMODAL:
         code = _run_multimodal(args, ready[0][1])
+    elif pipeline == VISION:
+        code = _run_vision(args, ready[0][1])
     else:
         code = _run_media(args, ready[0][1].repo_id, route=ready[0][1])
     return code or (1 if len(ready) < len(routes) else 0)
@@ -766,6 +772,30 @@ def _run_multimodal(args, route=None, saved=None):
     return int(any(item.get("status") != "passed" for item in result.get("candidates", [])))
 
 
+def _run_vision(args, route=None, saved=None):
+    if saved is None:
+        if route is None:
+            raise ValueError("vision execution requires a resolved route")
+        plan = actions.vision_plan(route.repo_id, task=route.task, family=route.family,
+                                   target_repo=args.target, quants=args.quant)
+    else:
+        plan = saved
+    if args.output:
+        media.atomic_json(args.output, plan)
+    _json(plan)
+    if args.dry_run:
+        return int(bool(plan.get("blockers")))
+    if plan.get("status") != "ready" or plan.get("blockers"):
+        raise ValueError("vision plan is blocked: " + "; ".join(plan.get("blockers", [])))
+    if not _confirm(args, "Run this vision release? This downloads, builds and validates. [y/N] "):
+        _print("Nothing started.")
+        return 0
+    result = actions.start_vision(plan, user_approved=True, publish=bool(args.publish))
+    _json(result)
+    return int(not any(item.get("status") == "passed"
+                       for item in result.get("candidates", [])))
+
+
 def _run_media(args, repo, route=None, saved=None):
     def make_plan():
         return media.plan_release(repo, hunt_forks=not args.no_fork_hunt, **_media_args(args, route))
@@ -821,6 +851,8 @@ def _resume(args):
         return _run_retrieval(args, saved=record.details["plan"])
     if record.pipeline == MULTIMODAL:
         return _run_multimodal(args, saved=record.details["plan"])
+    if record.pipeline == VISION:
+        return _run_vision(args, saved=record.details["plan"])
     plan = json.loads((Path(record.location) / "plan.json").read_text(encoding="utf-8"))
     return _run_media(args, None, saved=plan)
 
@@ -835,7 +867,8 @@ def cmd_plan(args):
                           hunt_forks=not args.no_fork_hunt, text=_text_run_options(args),
                           voice_args=_voice_args(args), media_args=media_args,
                           retrieval_args={"target_repo": args.target, "quants": args.quant},
-                          multimodal_args={"target_repo": args.target, "quants": args.quant})
+                          multimodal_args={"target_repo": args.target, "quants": args.quant},
+                          vision_args={"target_repo": args.target, "quants": args.quant})
     if args.output:
         if len(result["releases"]) != 1:
             raise ValueError("--output saves exactly one release plan")
@@ -1122,7 +1155,7 @@ def build_parser():
     publish.set_defaults(func=cmd_publish)
 
     runs_cmd = sub.add_parser("runs", help="list recorded runs and their ids")
-    runs_cmd.add_argument("--pipeline", choices=[TEXT, VOICE, MEDIA, RETRIEVAL, MULTIMODAL])
+    runs_cmd.add_argument("--pipeline", choices=[TEXT, VOICE, MEDIA, RETRIEVAL, MULTIMODAL, VISION])
     runs_cmd.add_argument("--json", action="store_true")
     runs_cmd.set_defaults(func=cmd_runs)
 

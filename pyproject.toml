@@ -80,7 +80,7 @@ version = { attr = "agentquantix.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-agentquantix = ["fixtures/voice/*", "fixtures/voice/separation/*", "fixtures/audio_cpp_model_specs/*.json", "fixtures/media/*", "fixtures/retrieval/*", "fixtures/multimodal/*", "fixtures/multimodal/video-frames/*.png", "fixtures/stable_diffusion_cpp_capabilities.json"]
+agentquantix = ["fixtures/voice/*", "fixtures/voice/separation/*", "fixtures/audio_cpp_model_specs/*.json", "fixtures/media/*", "fixtures/retrieval/*", "fixtures/multimodal/*", "fixtures/multimodal/video-frames/*.png", "fixtures/vision/*", "fixtures/vision/segmentation/*", "fixtures/vision/depth/*", "fixtures/stable_diffusion_cpp_capabilities.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

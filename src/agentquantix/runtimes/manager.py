@@ -252,7 +252,8 @@ class RuntimeManager:
 
     def _check_original(self, engine, source):
         spec = runtime_spec(engine)
-        origin = self._git(source, "remote", "get-url", "origin").rstrip("/").removesuffix(".git")
+        origin = self._git(source, "config", "--local", "--get", "remote.origin.url")
+        origin = origin.rstrip("/").removesuffix(".git")
         origins = {f"https://github.com/{name}".casefold() for name in (spec.repository, *spec.aliases)}
         normalized = origin.replace("git@github.com:", "https://github.com/").replace(
             "ssh://git@github.com/", "https://github.com/").casefold()

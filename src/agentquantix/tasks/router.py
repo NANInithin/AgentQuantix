@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
-from .registry import HUB_TAG_TASKS, MEDIA, MULTIMODAL, RETRIEVAL, TEXT, VOICE, TASKS, task_spec
+from .registry import (HUB_TAG_TASKS, MEDIA, MULTIMODAL, RETRIEVAL, TEXT, VISION, VOICE,
+                       TASKS, task_spec)
 
 # transformers head-class conventions for a generative language model.
 GENERATIVE_HEADS = ("ForCausalLM", "ForConditionalGeneration", "LMHeadModel")
@@ -49,6 +50,7 @@ def hub_metadata(repo_id):
     return {"pipeline_tag": getattr(info, "pipeline_tag", None),
             "library_name": getattr(info, "library_name", None),
             "tags": list(getattr(info, "tags", None) or []),
+            "model_type": model_config.get("model_type"),
             "architectures": list(model_config.get("architectures") or [])}
 
 
@@ -64,7 +66,7 @@ def _voice_task(backend):
 
 
 def _explicit(route, task, engine, family):
-    from .. import media, voice
+    from .. import media, vision, voice
     spec = task_spec(task)
     route.task, route.reasons = spec.id, [f"task {spec.id} was selected explicitly"]
     if not spec.implemented:
@@ -90,6 +92,13 @@ def _explicit(route, task, engine, family):
         route.engine, route.family = "stable-diffusion.cpp", family
     elif spec.pipeline in (RETRIEVAL, MULTIMODAL):
         route.engine = spec.engines[0]
+    elif spec.pipeline == VISION:
+        match = vision.family_for(route.repo_id, route.metadata, family=family)
+        if not match or match["task"] != spec.id:
+            route.pipeline = None
+            route.blocker = _vision_later_route(spec.id)
+            return route
+        route.engine, route.family = "vision.cpp", match["family"]
     else:
         route.engine = "llama.cpp"
     if engine and route.engine and engine != route.engine:
@@ -103,14 +112,14 @@ def _explicit(route, task, engine, family):
 
 def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=None):
     """Resolve one repository. ``fetch`` is injectable for offline callers."""
-    from .. import media, voice
+    from .. import media, vision, voice
     result = Route(repo_id, metadata=dict(metadata or {}))
     if engine is not None:
         from ..runtimes import RUNTIMES
         if engine not in RUNTIMES:
             raise ValueError(f"unknown engine {engine!r}; choose from {', '.join(RUNTIMES)}")
     if task:
-        if metadata is None and task_spec(task).pipeline == MEDIA:
+        if metadata is None and task_spec(task).pipeline in (MEDIA, VISION):
             result.metadata = _fetched(repo_id, fetch, result)
         return _explicit(result, task, engine, family)
 
@@ -121,6 +130,13 @@ def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=
         result.task, result.pipeline = _voice_task(backend), VOICE
         result.engine, result.family = backend.backend, backend.family
         result.reasons.append(f"{backend.backend} declares family {backend.family}")
+        return _engine_check(result, engine)
+    vision_match = vision.family_for(repo_id, {}, family=family)
+    if vision_match:
+        spec = task_spec(vision_match["task"])
+        result.task, result.pipeline = spec.id, VISION
+        result.engine, result.family = "vision.cpp", vision_match["family"]
+        result.reasons.append(f"vision.cpp declares family {result.family}")
         return _engine_check(result, engine)
     if family:
         if any(c.family.casefold() == family.casefold() for c in media.capabilities()):
@@ -147,6 +163,19 @@ def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=
     if library == "sentence-transformers" and tag in (None, "text-classification"):
         tagged = "reranking" if tag == "text-classification" else "embeddings"
         evidence = f"sentence-transformers {'cross-encoder' if tag else 'encoder'} library contract"
+    if tagged and TASKS[tagged].pipeline == VISION:
+        model_config = {"architectures": architectures,
+                        "model_type": result.metadata.get("model_type")}
+        match = vision.family_for(repo_id, model_config)
+        if match and match["task"] == tagged:
+            result.task, result.pipeline, result.engine = tagged, VISION, "vision.cpp"
+            result.family = match["family"]
+            result.reasons.append(
+                f"Hub pipeline_tag is {tag}; vision.cpp declares family {match['family']}")
+            return _engine_check(result, engine)
+        result.task = tagged
+        result.blocker = _vision_later_route(tagged)
+        return result
     signals = []
     if tagged:
         signals.append((TASKS[tagged].pipeline, tagged, evidence))
@@ -203,9 +232,27 @@ def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=
         result.engine = TASKS[result.task].engines[0]
     if result.pipeline == MULTIMODAL:
         result.engine = TASKS[result.task].engines[0]
+    if result.pipeline == VISION:
+        match = vision.family_for(
+            repo_id, {"architectures": architectures,
+                      "model_type": result.metadata.get("model_type")})
+        if match and match["task"] == result.task:
+            result.engine, result.family = "vision.cpp", match["family"]
+        else:
+            result.pipeline = None
+            result.blocker = _vision_later_route(result.task)
     if result.pipeline == VOICE:
         result.reasons.append("no installed voice catalog declares this source; the voice plan runs the fork hunt")
     return _engine_check(result, engine)
+
+
+def _vision_later_route(task):
+    later = {
+        "mask-generation": "sam3cpp is the later route in 0.5.8",
+        "image-segmentation": "ultralytics-ggml/rf-detr.cpp is the later route in 0.5.7",
+        "depth-estimation": "depth-anything.cpp is the later route in 0.5.8",
+    }.get(task, "no later native route is scheduled")
+    return f"no vision.cpp family matches {task}; {later}"
 
 
 def _engine_check(result, engine):

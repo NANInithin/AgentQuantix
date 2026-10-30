@@ -21,6 +21,7 @@ class FakeGit:
         self.revisions = {}
         self.calls = []
         self.origins = {}
+        self.effective_origins = {}
         self.dirty = {}
         self.submodules = {}
 
@@ -38,8 +39,11 @@ class FakeGit:
             output = self.revisions.get(source, OLD)
         elif args[:2] == ["checkout", "--detach"]:
             self.revisions[source] = args[-1]
-        elif args[:3] == ["remote", "get-url", "origin"]:
+        elif args[:4] == ["config", "--local", "--get", "remote.origin.url"]:
             output = self.origins.get(source, "https://github.com/ggml-org/llama.cpp.git")
+        elif args[:3] == ["remote", "get-url", "origin"]:
+            output = self.effective_origins.get(
+                source, self.origins.get(source, "https://github.com/ggml-org/llama.cpp.git"))
         elif args[:1] == ["status"]:
             output = self.dirty.get(source, "")
         elif args[:2] == ["submodule", "status"]:
@@ -222,6 +226,17 @@ def test_checkout_with_wrong_origin_is_not_adopted_as_original(lifecycle):
     lifecycle.git.origins[str(source)] = "https://github.com/other/llama.cpp.git"
     with pytest.raises(RuntimeErrorBase, match="does not match original"):
         lifecycle.manager.adopt("llama.cpp", source, build)
+
+
+def test_proxy_rewrite_does_not_change_original_repository_check(lifecycle):
+    source = lifecycle.manager.original_path("vision.cpp")
+    source.mkdir(parents=True)
+    lifecycle.git.revisions[str(source)] = OLD
+    lifecycle.git.origins[str(source)] = "https://github.com/Acly/vision.cpp.git"
+    lifecycle.git.effective_origins[str(source)] = (
+        "https://git-manager.devin.ai/proxy/github.com/Acly/vision.cpp.git")
+
+    assert lifecycle.manager._check_original("vision.cpp", source) == OLD
 
 
 def test_binary_resource_and_source_drift_are_detected(lifecycle):

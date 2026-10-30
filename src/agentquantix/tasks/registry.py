@@ -13,8 +13,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
-TEXT, VOICE, MEDIA, RETRIEVAL, MULTIMODAL = "text", "voice", "media", "retrieval", "multimodal"
-PIPELINES = (TEXT, VOICE, MEDIA, RETRIEVAL, MULTIMODAL)
+TEXT, VOICE, MEDIA, RETRIEVAL, MULTIMODAL, VISION = (
+    "text", "voice", "media", "retrieval", "multimodal", "vision"
+)
+PIPELINES = (TEXT, VOICE, MEDIA, RETRIEVAL, MULTIMODAL, VISION)
 
 
 @dataclass(frozen=True)
@@ -100,20 +102,26 @@ TASKS = {spec.id: spec for spec in (
     TaskSpec("voice-activity-detection", "audio", None, ("audio.cpp", "whisper.cpp"),
              ("voice-activity-detection",), "post-0.6.0",
              note="audio.cpp VAD models are bundled runtime assets, not releasable sources"),
-    TaskSpec("image-segmentation", "vision", None, ("vision.cpp", "ultralytics-ggml", "rf-detr.cpp"),
-             ("image-segmentation",), "0.5.6"),
-    TaskSpec("super-resolution", "vision", None, ("vision.cpp",), (), "0.5.6"),
-    TaskSpec("inpainting", "vision", None, ("vision.cpp",), (), "0.5.6"),
+    TaskSpec("image-segmentation", "vision", VISION,
+             ("vision.cpp", "ultralytics-ggml", "rf-detr.cpp"),
+             ("image-segmentation",), "0.5.6", "none",
+             "one atomic bundle commit of passing precisions after native task gates"),
+    TaskSpec("super-resolution", "vision", None, ("vision.cpp",), (), "post-0.6.0",
+             note="native MI-GAN/Real-ESRGAN outputs did not beat the naive baseline under PSNR/SSIM; no perceptual quality gate is established"),
+    TaskSpec("inpainting", "vision", None, ("vision.cpp",), (), "post-0.6.0",
+             note="native MI-GAN/Real-ESRGAN outputs did not beat the naive baseline under PSNR/SSIM; no perceptual quality gate is established"),
     TaskSpec("object-detection", "vision", None, ("ultralytics-ggml", "rf-detr.cpp"),
              ("object-detection",), "0.5.7"),
     TaskSpec("image-classification", "vision", None, ("ultralytics-ggml",),
              ("image-classification",), "0.5.7"),
     TaskSpec("keypoint-detection", "vision", None, ("ultralytics-ggml",),
              ("keypoint-detection",), "0.5.7"),
-    TaskSpec("depth-estimation", "vision", None, ("depth-anything.cpp", "vision.cpp"),
-             ("depth-estimation",), "0.5.8"),
-    TaskSpec("mask-generation", "vision", None, ("sam3cpp", "vision.cpp"),
-             ("mask-generation",), "0.5.8"),
+    TaskSpec("depth-estimation", "vision", VISION, ("vision.cpp", "depth-anything.cpp"),
+             ("depth-estimation",), "0.5.6", "none",
+             "one atomic bundle commit of passing precisions after native task gates"),
+    TaskSpec("mask-generation", "vision", VISION, ("vision.cpp", "sam3cpp"),
+             ("mask-generation",), "0.5.6", "none",
+             "one atomic bundle commit of passing precisions after native task gates"),
     TaskSpec("time-series-forecasting", "timeseries", None, ("timeseries.cpp",),
              ("time-series-forecasting",), "0.5.9"),
 )}
