@@ -13,7 +13,7 @@ from pathlib import Path
 from . import card, config, feasibility, media, report, research, runs, sysprobe, voice
 from .pipeline import voice_release
 from .pipeline.job import Job
-from .tasks import MEDIA, MULTIMODAL, RETRIEVAL, TEXT, VOICE
+from .tasks import MEDIA, MULTIMODAL, RETRIEVAL, TEXT, VISION, VOICE
 from .tasks.router import Route, is_short_name, route as route_model
 
 VOICE_RUN_DEFAULTS = {"language": None, "speaker": None, "pocket_language": "english",
@@ -381,6 +381,42 @@ def multimodal_plan(model, *, task="multimodal-understanding", engine="llama.cpp
                                    target_repo=target_repo, quants=quants)
 
 
+def vision_plan(model, *, task, family=None, target_repo=None, quants=None):
+    from . import runtime_control
+    from .pipeline import vision_release
+    handle = runtime_control.selected_runtime("vision.cpp")
+    try:
+        return vision_release.plan_release(
+            model, task=task, family=family, target_repo=target_repo, quants=quants,
+            runtime_revision=handle.revision if handle else None)
+    except vision_release.VisionValidationError as error:
+        return {"pipeline": "vision", "engine": "vision.cpp", "model": model,
+                "task": task, "family": family, "status": "blocked",
+                "blockers": [str(error)]}
+
+
+def start_vision(plan, *, user_approved, publish=False):
+    if user_approved is not True:
+        raise ValueError("start_release requires approval of the exact vision plan")
+    from .pipeline import vision_release
+    if plan.get("blockers") or plan.get("status") != "ready":
+        raise ValueError("vision plan is blocked: " + "; ".join(plan.get("blockers", [])))
+    from . import runtime_control
+    handle = runtime_control.ensure_runtime(
+        "vision.cpp", revision={"revision": vision_release.REVISION,
+                                "ref": vision_release.REVISION, "channel": "pinned",
+                                "repository": "Acly/vision.cpp"},
+        required_targets=("vision-cli",))
+    result = vision_release.run_release(plan, user_approved=True, publish=publish,
+                                        runtime=handle)
+    return {"pipeline": VISION, **result, "run_id": f"vision:{result['run_id']}"}
+
+
+def vision_failed(result):
+    return not any(item.get("status") == "passed"
+                   for item in result.get("candidates", []))
+
+
 def start_multimodal(plan, *, user_approved, publish=False):
     if user_approved is not True:
         raise ValueError("start_release requires approval of the exact multimodal plan")
@@ -409,6 +445,8 @@ def inspect(model, *, task=None, engine=None, family=None, hunt_forks=True):
                                      hunt_forks=hunt_forks)
     elif item.pipeline == RETRIEVAL:
         result["retrieval"] = retrieval_plan(item.repo_id, task=item.task, engine=item.engine)
+    elif item.pipeline == VISION:
+        result["vision"] = vision_plan(item.repo_id, task=item.task, family=item.family)
     elif item.pipeline == MULTIMODAL:
         result["multimodal"] = multimodal_plan(item.repo_id, task=item.task, engine=item.engine)
     else:
@@ -420,7 +458,7 @@ def inspect(model, *, task=None, engine=None, family=None, hunt_forks=True):
 
 def plan(models, *, task=None, engine=None, family=None, hunt_forks=True,
          text=None, voice_args=None, media_args=None, retrieval_args=None,
-         multimodal_args=None):
+         multimodal_args=None, vision_args=None):
     """Read-only plans for named models, grouped by their resolved pipeline."""
     if isinstance(models, str):
         models = [models]
@@ -431,10 +469,13 @@ def plan(models, *, task=None, engine=None, family=None, hunt_forks=True,
         raise ValueError("retrieval releases run one model per plan")
     if sum(route.pipeline == MULTIMODAL for route in routes) > 1:
         raise ValueError("multimodal releases run one model per plan")
+    if sum(route.pipeline == VISION for route in routes) > 1:
+        raise ValueError("vision releases run one model per plan")
     per_model = ("target_repo", "quants", "speaker", "components", "contract",
                  "quality_profile", "conditioning", "settings")
     single = {k: v for k, v in {**(voice_args or {}), **(media_args or {}),
-                                **(retrieval_args or {}), **(multimodal_args or {})}.items()
+                                **(retrieval_args or {}), **(multimodal_args or {}),
+                                **(vision_args or {})}.items()
               if k in per_model and v not in (None, [], {})}
     if single and len(models) > 1:
         raise ValueError("target, quant, speaker and media options apply to one model at a time")
@@ -464,6 +505,9 @@ def plan(models, *, task=None, engine=None, family=None, hunt_forks=True,
         elif r.pipeline == MULTIMODAL:
             args = {k: v for k, v in (multimodal_args or {}).items() if v is not None}
             entry = multimodal_plan(r.repo_id, task=r.task, engine=r.engine, **args)
+        elif r.pipeline == VISION:
+            args = {k: v for k, v in (vision_args or {}).items() if v is not None}
+            entry = vision_plan(r.repo_id, task=r.task, family=r.family, **args)
         else:
             continue
         output["releases"].append({"pipeline": r.pipeline, "model": r.repo_id, "plan": entry})
@@ -490,6 +534,8 @@ def review(run_id, quant, *, accepted, reviewer, notes="", watched_video=False, 
         raise ValueError("retrieval releases are gated by automated parity and retrieval metrics; there is no human review")
     if record.pipeline == MULTIMODAL:
         raise ValueError("multimodal releases are gated by automated task metrics; there is no human review")
+    if record.pipeline == VISION:
+        raise ValueError("vision releases are gated by automated task metrics; there is no human review")
     if record.pipeline == MEDIA:
         review_data = media_release.record_review(
             record.id.partition(":")[2], quant, reviewer, accepted, notes=notes,
@@ -528,6 +574,11 @@ def publish(run_id, quant, *, user_approved):
         from .pipeline import multimodal_release
         return {"run_id": record.id,
                 **multimodal_release.publish_run(record.id.partition(":")[2], quant)}
+    if record.pipeline == VISION:
+        from .pipeline import vision_release
+        return {"run_id": record.id,
+                **vision_release.publish_run(record.id.partition(":")[2], quant,
+                                             root=record.location)}
     if record.pipeline == MEDIA:
         return {"run_id": record.id, **media_release.publish_run(record.id.partition(":")[2], quant)}
     saved = record.details.get("plan") or {}
@@ -560,6 +611,11 @@ def _verify_local(path, root=None):
         from .pipeline.multimodal_release import verify_manifest
         problems = verify_manifest(data, root or Path(path).parent)
         return {"target": str(path), "kind": "multimodal-bundle",
+                "valid": not problems, "problems": problems}
+    if data.get("pipeline") == "vision":
+        from .pipeline import vision_release
+        problems = vision_release.verify_manifest(data, root or Path(path).parent)
+        return {"target": str(path), "kind": "vision-bundle",
                 "valid": not problems, "problems": problems}
     if isinstance(data, dict) and data.get("engine") == "stable-diffusion.cpp":
         from .pipeline import media_release
@@ -601,6 +657,12 @@ def verify(target, *, root=None):
         return {"run_id": record.id, "kind": f"{record.pipeline}-run", "bundles": bundles,
                 "valid": bool(bundles) and all(item["valid"] for item in bundles),
                 "problems": [] if bundles else ["no published retrieval manifest in this run"]}
+    if record and record.pipeline == VISION:
+        manifest = Path(record.location) / "result.json"
+        if not manifest.is_file():
+            return {"run_id": record.id, "kind": "vision-run", "valid": False,
+                    "problems": ["no vision result manifest in this run"]}
+        return _verify_local(manifest, root or Path(record.location))
     return verify_remote(our_repo(target))
 
 

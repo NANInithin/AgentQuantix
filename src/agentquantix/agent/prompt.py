@@ -116,6 +116,14 @@ actual decision; never invent one. publish_release requires matching human
 review and fresh remote checksum verification. For joint audio-video, the human
 must watch and listen. A video without audio cannot pass an audio-video recipe.
 
+## Vision releases
+
+MobileSAM, BiRefNet and Depth Anything V2 use the pinned vision.cpp family
+catalog and source-aware F32/F16 conversion. Mask and segmentation outputs must
+pass their fixed-fixture quality gates. Depth Anything is relative depth only;
+never claim metric depth. Inpainting and super-resolution remain unimplemented
+because tested outputs did not beat their naive baselines.
+
 ## Voice releases
 
 TTS and ASR are different products. Qwen3-TTS and Pocket TTS run through \

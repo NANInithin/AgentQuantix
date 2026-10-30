@@ -30,6 +30,7 @@ _TARGETS = {
     "audio.cpp": ("audiocpp_cli", "audiocpp_gguf"),
     "whisper.cpp": ("whisper-cli", "whisper-quantize"),
     "stable-diffusion.cpp": ("sd-cli",),
+    "vision.cpp": ("vision-cli",),
 }
 _NONFINITE = re.compile(
     r"(?<![\w/\\.\-])(?:nan|[+-]?inf(?:inity)?)(?![\w/\\.\-])"
@@ -62,6 +63,28 @@ def _tool_stamp(name):
     return result
 
 
+def _vision_cmake():
+    cmake = native_build.find_tool("cmake")
+    if not cmake:
+        raise RuntimeBuildError(
+            'vision.cpp requires CMake >= 3.28; install it with: '
+            'python -m pip install "cmake>=3.28"')
+    try:
+        output = subprocess.run([cmake, "--version"], capture_output=True,
+                                text=True, timeout=10, check=True).stdout.splitlines()[0]
+        match = re.search(r"version\s+(\d+)\.(\d+)(?:\.(\d+))?", output)
+        if not match:
+            raise ValueError(f"unrecognized version output: {output}")
+        version = tuple(int(part or 0) for part in match.groups())
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as error:
+        raise RuntimeBuildError(f"cannot determine CMake version for vision.cpp: {error}") from error
+    if version < (3, 28, 0):
+        raise RuntimeBuildError(
+            f'vision.cpp requires CMake >= 3.28 (found {output}); install it with: '
+            'python -m pip install "cmake>=3.28"')
+    return cmake, output
+
+
 def fingerprint(engine, compute_backend="auto", required_targets=None):
     """Return the effective native configuration used to key a candidate build.
 
@@ -73,10 +96,10 @@ def fingerprint(engine, compute_backend="auto", required_targets=None):
         raise RuntimeBuildError(f"no native build adapter for {engine}")
     backend = compute_backend
     if backend == "auto":
-        backend = ("cpu" if engine == "clip.cpp" else
+        backend = ("cpu" if engine in ("clip.cpp", "vision.cpp") else
                    "cuda" if native_build.has_cuda_toolkit() else "cpu")
-    if engine == "clip.cpp" and backend != "cpu":
-        raise RuntimeBuildError("clip.cpp CUDA is not verified")
+    if engine in ("clip.cpp", "vision.cpp") and backend != "cpu":
+        raise RuntimeBuildError(f"{engine} CUDA is not verified")
     if engine != "stable-diffusion.cpp" and backend not in ("cpu", "cuda"):
         raise RuntimeBuildError(f"{engine}: compute backend not yet verified: {backend}")
     if backend == "cuda" and not native_build.has_cuda_toolkit():
@@ -99,6 +122,11 @@ def fingerprint(engine, compute_backend="auto", required_targets=None):
                     flags.append("-DCMAKE_POLICY_VERSION_MINIMUM=3.5")
             except (OSError, subprocess.SubprocessError, IndexError):
                 pass
+    elif engine == "vision.cpp":
+        _vision_cmake()
+        flags = ["-DCMAKE_BUILD_TYPE=Release", "-DVISP_VULKAN=OFF",
+                 "-DVISP_TESTS=OFF", "-DBUILD_SHARED_LIBS=OFF",
+                 "-DVISP_FMT_LIB=ON", "-DGGML_CCACHE=OFF"]
     elif engine == "audio.cpp":
         flags = ["-DCMAKE_BUILD_TYPE=Release", "-DAUDIOCPP_DEPLOYMENT_BUILD=ON",
                  "-DAUDIOCPP_MODEL_SET=full",
@@ -172,6 +200,16 @@ def _find_binary(build_dir, name):
             if candidate.is_file():
                 return candidate.resolve()
     return None
+
+
+def _submodules_for(engine):
+    if engine == "stable-diffusion.cpp":
+        return ["ggml", "thirdparty/libwebp", "thirdparty/libwebm"]
+    if engine == "vision.cpp":
+        return ["depend/ggml"]
+    if engine == "clip.cpp":
+        return ["ggml"]
+    return []
 
 
 def _binary_contract(engine, source, targets):
@@ -268,11 +306,11 @@ def build_runtime(engine, source, build_dir, options=None):
                              supplied.get("required_targets")))
     if effective.get("engine") != engine:
         raise RuntimeBuildError("build fingerprint belongs to a different engine")
+    if engine == "vision.cpp":
+        _vision_cmake()
     build_dir.mkdir(parents=True, exist_ok=True)
     logs = build_dir / "aqx-logs"
-    submodules = (["ggml", "thirdparty/libwebp", "thirdparty/libwebm"]
-                  if engine == "stable-diffusion.cpp" else
-                  ["ggml"] if engine == "clip.cpp" else [])
+    submodules = _submodules_for(engine)
     _execute(["git", "-c", "url.https://github.com/.insteadOf=git@github.com:",
               "-C", source, "submodule", "update", "--init", "--recursive", *submodules],
              logs / "submodules.json", timeout=900)

@@ -31,7 +31,7 @@ from .. import actions, card, config, hub, report, research, sysprobe, voice
 from . import runtime_tools
 from ..pipeline.job import Job
 from ..runtimes import RuntimeDecisionRequired
-from ..tasks import MEDIA, MULTIMODAL, RETRIEVAL, TASKS, TEXT, VOICE
+from ..tasks import MEDIA, MULTIMODAL, RETRIEVAL, TASKS, TEXT, VISION, VOICE
 
 STRING = {"type": "string"}
 STRINGS = {"type": "array", "items": STRING}
@@ -55,7 +55,7 @@ TEXT_OPTIONS = {
 }
 BUNDLE_OPTIONS = {
     "target_repo": STRING,
-    "quants": {**STRINGS, "description": "Voice/media/retrieval/multimodal: selected native quant types."},
+    "quants": {**STRINGS, "description": "Voice/media/retrieval/multimodal/vision: selected native quant types."},
     "language": STRING,
     "speaker": {"type": "string", "description": "Voice: consented speaker WAV when required."},
 }
@@ -164,7 +164,8 @@ TOOLS = [
             "companions, quants, quality gate), media plans (revisions, components, "
             "policies, licenses, estimates, evaluator, blockers), and retrieval "
             "bundles (source contract, native quants, parity and quality gates), and "
-            "multimodal bundles (vision/audio claims, projector metadata, fixtures and task gates). "
+            "multimodal bundles (vision/audio claims, projector metadata, fixtures and task gates), "
+            "and vision.cpp segmentation, masks and relative depth bundles. "
             "This is what you show the user at the approval gate. Always call it "
             "before start_release. Per-model options apply to one model at a time."),
         "input_schema": {
@@ -181,8 +182,8 @@ TOOLS = [
             "approved. Text: quantize and upload the named models smallest-first, "
             "deleting each quant once uploaded. Voice: convert, quantize, run the "
             "real runtime and quality gates; TTS publication also needs a recorded "
-            "listening review. Media, retrieval and multimodal: pass the exact `plan` from "
-            "plan_release, unchanged; retrieval and multimodal run one model per call and only "
+            "listening review. Media, retrieval, multimodal and vision: pass the exact `plan` from "
+            "plan_release, unchanged; retrieval, multimodal and vision run one model per call and only "
             "publish candidates that pass automated gates. This spends "
             "hours, uses the disk and writes to the Hub; it "
             "requires that the user named these models (or saw this exact plan) and "
@@ -192,7 +193,7 @@ TOOLS = [
             "properties": {
                 "models": STRINGS,
                 "plan": {"type": "object",
-                         "description": "Media/retrieval/multimodal: the unchanged plan the user approved."},
+                         "description": "Media/retrieval/multimodal/vision: the unchanged plan the user approved."},
                 "user_approved": {
                     "type": "boolean",
                     "description": "True only when the user has approved these "
@@ -206,7 +207,7 @@ TOOLS = [
                 **BUNDLE_OPTIONS,
                 "publish": {"type": "boolean",
                             "description": "Voice defaults to true (reviewed TTS quants only); "
-                                           "media/retrieval/multimodal default to false (passing candidates only)."},
+                                           "media/retrieval/multimodal/vision default to false (passing candidates only)."},
             },
             "required": ["user_approved"],
         },
@@ -411,6 +412,10 @@ def _start(arguments):
             return actions.start_multimodal(
                 approved_plan, user_approved=True,
                 publish=bool(arguments.get("publish", False)))
+        if task_spec and task_spec.pipeline == VISION:
+            return actions.start_vision(
+                approved_plan, user_approved=True,
+                publish=bool(arguments.get("publish", False)))
         return actions.start_media(arguments["plan"], user_approved=True,
                                    publish=bool(arguments.get("publish", False)))
     models = arguments.get("models") or []
@@ -448,6 +453,14 @@ def _start(arguments):
             quants=arguments.get("quants"))
         return actions.start_multimodal(plan, user_approved=True,
                                         publish=bool(arguments.get("publish", False)))
+    if pipeline == VISION:
+        if len(models) > 1:
+            raise ValueError("vision releases run one model per call")
+        plan = actions.vision_plan(
+            routes[0].repo_id, task=routes[0].task, family=routes[0].family,
+            target_repo=arguments.get("target_repo"), quants=arguments.get("quants"))
+        return actions.start_vision(plan, user_approved=True,
+                                    publish=bool(arguments.get("publish", False)))
     if len(models) > 1:
         raise ValueError("voice releases run one model per call")
     plan = actions.voice_plan(
@@ -536,6 +549,8 @@ def _call(name, arguments=None):
                                             if arguments.get(key) is not None},
                             multimodal_args={key: arguments[key] for key in ("target_repo", "quants")
                                              if arguments.get(key) is not None},
+                            vision_args={key: arguments[key] for key in ("target_repo", "quants")
+                                         if arguments.get(key) is not None},
                             **_routing(arguments))
 
     if name == "start_release":
@@ -605,7 +620,8 @@ def _call(name, arguments=None):
 def _failed(result):
     return bool(result.get("failures") or result.get("incomplete")
                 or (result.get("pipeline") == VOICE and actions.voice_failed(result))
-                or (result.get("pipeline") == MEDIA and actions.media_failed(result)))
+                or (result.get("pipeline") == MEDIA and actions.media_failed(result))
+                or (result.get("pipeline") == VISION and actions.vision_failed(result)))
 
 
 def call(name, arguments=None):

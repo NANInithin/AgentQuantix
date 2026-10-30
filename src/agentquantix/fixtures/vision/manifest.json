@@ -1,0 +1,99 @@
+{
+  "depth_two_plane": "upper half is farther sky; lower half is nearer ground",
+  "fixtures": [
+    {
+      "bytes": 231609,
+      "height": 384,
+      "mode": "RGB",
+      "path": "depth/scene-1.png",
+      "sha256": "ead75348411164c2fcbab3dbe80cb4d1a8ab8e9ae2a0850b9b8e3d93315c76ff",
+      "width": 512
+    },
+    {
+      "bytes": 246408,
+      "height": 384,
+      "mode": "RGB",
+      "path": "depth/scene-2.png",
+      "sha256": "e2a8371d420d40ea6e9e5c4f32c9140a89c61470c34b66c2a1d2fe5fa4ae7215",
+      "width": 512
+    },
+    {
+      "bytes": 258941,
+      "height": 384,
+      "mode": "RGB",
+      "path": "depth/scene-3.png",
+      "sha256": "809612265bc049fcfff87696750839d7b066bffad6b1c678efe39180c35fdbc9",
+      "width": 512
+    },
+    {
+      "bytes": 93081,
+      "height": 256,
+      "mode": "RGB",
+      "path": "depth/two-plane.png",
+      "sha256": "70b616a0acb5496bcc94fe661b92ce1a003bb36fdcaeacc41d42b77393f635a7",
+      "width": 384
+    },
+    {
+      "bytes": 46934,
+      "height": 512,
+      "mode": "RGB",
+      "path": "inpainting/image.png",
+      "sha256": "620ac07c2b4318a4b592f92959e50e23c41471838ffd565b2d90a2b979776453",
+      "width": 512
+    },
+    {
+      "bytes": 717,
+      "height": 512,
+      "mode": "L",
+      "path": "inpainting/mask.png",
+      "sha256": "1b0b38559313184965cf34c4d67070f2d14ab0d5fdcd043d4e57d4a2c583269a",
+      "width": 512
+    },
+    {
+      "bytes": 78461,
+      "height": 240,
+      "mode": "RGB",
+      "path": "segmentation/image.png",
+      "sha256": "478dc20f40aa645a150be279daceb0239e0c8ca588f9d938b49bf3f75f006192",
+      "width": 320
+    },
+    {
+      "bytes": 926,
+      "height": 240,
+      "mode": "L",
+      "path": "segmentation/mask.png",
+      "sha256": "ccdfa43594d5910956818d7f8d4381af2ce72b91e0559d17913744caf5c7d997",
+      "width": 320
+    },
+    {
+      "bytes": 6255,
+      "height": 64,
+      "mode": "RGB",
+      "path": "super-resolution/input-x4.png",
+      "sha256": "9ee4969e2b537af53a2c5914e48e91f3ff45bebe2c3b90e0d8c5ed8bcea98f14",
+      "width": 64
+    },
+    {
+      "bytes": 26335,
+      "height": 256,
+      "mode": "RGB",
+      "path": "super-resolution/reference.png",
+      "sha256": "abb741bcf8c66b5fc378692448e5c344b5ff646160680327b6600ed8530da767",
+      "width": 256
+    }
+  ],
+  "mask_convention": "MI-GAN input mask is 255 for the rectangular hole and 0 for known pixels; vision-cli inverts it internally",
+  "prompts": {
+    "segmentation_box_xyxy": [
+      77,
+      40,
+      244,
+      214
+    ],
+    "segmentation_point_xy": [
+      160,
+      105
+    ]
+  },
+  "seed": 20261101
+}
