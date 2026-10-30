@@ -210,6 +210,56 @@ def test_release_partial_pass_and_resume(tmp_path, monkeypatch):
     assert len(conversions) == 2
 
 
+def test_release_skips_completed_precision_after_interruption(tmp_path, monkeypatch):
+    monkeypatch.setattr(vision, "converter_venv", lambda *_args: "python")
+    monkeypatch.setattr(vision_release, "_requirements_provenance",
+                        lambda _python: {"python": "python", "packages": []})
+    monkeypatch.setattr(vision_release.config, "TEMP_DIR", tmp_path)
+    runtime = SimpleNamespace(
+        revision=vision.VISIONCPP_REVISION,
+        source=tmp_path / "runtime",
+        binaries={"vision-cli": tmp_path / "vision-cli"},
+        snapshot=lambda: {"revision": vision.VISIONCPP_REVISION, "identity": "frozen"})
+    plan = {
+        "pipeline": "vision", "engine": "vision.cpp", "task": "image-segmentation",
+        "model": "org/birefnet", "family": "birefnet",
+        "source_revision": "source-sha", "source_files": ["weights.safetensors"],
+        "source_license": "MIT", "license_note": "MIT", "target_repo": "user/model",
+        "quants": ["F32", "F16"], "runtime_revision": vision.VISIONCPP_REVISION,
+        "status": "ready", "blockers": [],
+    }
+    evaluations = []
+    conversions = []
+
+    def download(_model, revision, local_dir, allow_patterns):
+        assert revision == "source-sha" and allow_patterns == ["weights.safetensors"]
+        Path(local_dir).mkdir(parents=True, exist_ok=True)
+        return _safetensors(Path(local_dir) / "weights.safetensors").parent
+
+    def convert(command):
+        conversions.append(command)
+        Path(command[command.index("--output") + 1]).write_bytes(b"gguf")
+
+    def evaluate(_task, _family, model, _binary, _root, _baseline):
+        evaluations.append(model.stem)
+        if model.stem == "F16" and evaluations.count("F16") == 1:
+            raise RuntimeError("interrupted")
+        return {"iou": 0.95, "boundary_fscore": 0.9,
+                "outputs": [np.zeros((2, 2), dtype=bool)]}
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        vision_release.run_release(
+            plan, user_approved=True, runtime=runtime, download_source=download,
+            convert=convert, evaluate=evaluate)
+    result = vision_release.run_release(
+        plan, user_approved=True, runtime=runtime, download_source=download,
+        convert=convert, evaluate=evaluate)
+
+    assert evaluations == ["F32", "F16", "F16"]
+    assert len(conversions) == 2
+    assert [candidate["precision"] for candidate in result["candidates"]] == ["F32", "F16"]
+
+
 def test_bundle_publishes_only_passing_precision_atomically(tmp_path):
     candidate_path = tmp_path / "F32.gguf"
     candidate_path.write_bytes(b"model")
@@ -253,9 +303,10 @@ def test_cli_resume_and_agent_tool_dispatch_vision(monkeypatch):
     monkeypatch.setattr(cli.runs, "resolve", lambda _run_id: record)
     monkeypatch.setattr(cli, "_check_applicable", lambda *_args: None)
     calls = []
-    monkeypatch.setattr(cli, "_run_vision", lambda _args, saved: calls.append(saved) or 0)
+    monkeypatch.setattr(cli, "_run_vision",
+                        lambda _args, saved, **kwargs: calls.append((saved, kwargs)) or 0)
     assert cli._resume(SimpleNamespace(resume=record.id)) == 0
-    assert calls == [plan]
+    assert calls == [(plan, {"runtime_snapshot": None})]
 
     monkeypatch.setattr(actions, "vision_plan", lambda *args, **kwargs: plan)
     monkeypatch.setattr(actions, "start_vision",

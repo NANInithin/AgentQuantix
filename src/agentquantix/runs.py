@@ -67,6 +67,10 @@ def vision_root():
     return config.TEMP_DIR / "aqx-vision-runs"
 
 
+def detection_root():
+    return config.TEMP_DIR / "aqx-detection-runs"
+
+
 def _read(path):
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -146,16 +150,22 @@ def _multimodal_runs():
 
 
 def _vision_runs():
-    root = vision_root()
-    for directory in sorted(root.iterdir()) if root.is_dir() else ():
-        data = _read(directory / "run.json")
-        plan = data.get("plan") if isinstance(data, dict) else None
-        if not isinstance(plan, dict) or not plan.get("model"):
-            continue
-        yield RunRecord(f"vision:{directory.name}", VISION, plan["model"], str(directory),
-                        target=plan.get("target_repo"), task=plan.get("task"),
-                        engine=plan.get("engine"), created=data.get("created"),
-                        details={"plan": plan, "journal": _read(directory / "journal.json") or {}})
+    for root in (vision_root(), detection_root()):
+        for directory in sorted(root.iterdir()) if root.is_dir() else ():
+            data = _read(directory / "run.json")
+            plan = data.get("plan") if isinstance(data, dict) else None
+            if not isinstance(plan, dict) or not plan.get("model"):
+                continue
+            result = _read(directory / "result.json") or {}
+            runtime_snapshot = (data.get("runtime_snapshot") or
+                                result.get("runtime_snapshot"))
+            candidates = data.get("candidates") or result.get("candidates", [])
+            yield RunRecord(
+                f"vision:{directory.name}", VISION, plan["model"], str(directory),
+                target=plan.get("target_repo"), task=plan.get("task"),
+                engine=plan.get("engine"), created=data.get("created"),
+                details={"plan": plan, "journal": _read(directory / "journal.json") or {},
+                         "runtime_snapshot": runtime_snapshot, "candidates": candidates})
 
 
 def discover(pipeline=None):

@@ -309,9 +309,96 @@ def test_runtime_show_replaces_voice_list_and_media_backends(monkeypatch, capsys
 
 
 def test_runs_command_lists_recorded_ids(recorded, capsys):
+    detection_dir = runs.detection_root() / "detection-demo"
+    detection_dir.mkdir(parents=True)
+    (detection_dir / "run.json").write_text(json.dumps({
+        "plan": {"model": "org/detection", "task": "image-classification",
+                 "engine": "ultralytics-ggml"}}), encoding="utf-8")
+    depth_dir = runs.vision_root() / "depth-anything.cpp--depth-demo"
+    depth_dir.mkdir(parents=True)
+    (depth_dir / "run.json").write_text(json.dumps({
+        "plan": {"model": "org/depth", "task": "depth-estimation",
+                 "engine": "depth-anything.cpp"}}), encoding="utf-8")
     assert cli.cmd_runs(cli.build_parser().parse_args(["runs"])) == 0
     out = capsys.readouterr().out
     assert "text:Demo" in out and f"media:{recorded}" in out
+    assert "vision:detection-demo" in out and "vision:depth-anything.cpp--depth-demo" in out
+
+
+@pytest.mark.parametrize("kind", [
+    "text", "voice", "media", "retrieval", "multimodal",
+    "vision.cpp", "detection", "depth",
+])
+def test_resumable_pipeline_ids_round_trip_through_resume(kind, recorded, monkeypatch):
+    run_ids = {
+        "text": "text:Demo",
+        "voice": "voice:Qwen--Qwen3-TTS-12Hz-1.7B-Base",
+        "media": f"media:{recorded}",
+        "retrieval": "retrieval:resume-retrieval",
+        "multimodal": "multimodal:resume-multimodal",
+        "vision.cpp": "vision:resume-vision",
+        "detection": "vision:resume-detection",
+        "depth": "vision:resume-depth",
+    }
+    run_id = run_ids[kind]
+    if kind == "retrieval":
+        root = runs.retrieval_root() / "resume-retrieval"
+        root.mkdir(parents=True)
+        (root / "run.json").write_text(json.dumps({"plan": {
+            "model": "org/retrieval", "task": "embeddings", "engine": "llama.cpp"}}))
+    elif kind == "multimodal":
+        root = runs.multimodal_root() / "resume-multimodal"
+        root.mkdir(parents=True)
+        (root / "run.json").write_text(json.dumps({"plan": {
+            "model": "org/multimodal", "task": "multimodal-understanding",
+            "engine": "llama.cpp"}}))
+    elif kind in ("vision.cpp", "detection", "depth"):
+        root = runs.detection_root() if kind == "detection" else runs.vision_root()
+        directory = root / run_id.partition(":")[2]
+        directory.mkdir(parents=True)
+        engine = {"vision.cpp": "vision.cpp", "detection": "ultralytics-ggml",
+                  "depth": "depth-anything.cpp"}[kind]
+        (directory / "run.json").write_text(json.dumps({
+            "plan": {"model": f"org/{kind}", "task": "image-classification",
+                     "engine": engine},
+            "runtime_snapshot": {"identity": "frozen"}}))
+    vision_calls = []
+    for name in ("_execute_text", "_run_voice", "_run_media", "_run_retrieval",
+                 "_run_multimodal"):
+        monkeypatch.setattr(cli, name, lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(cli, "_run_vision",
+                        lambda _args, saved, **kwargs:
+                        vision_calls.append((saved, kwargs)) or 0)
+    monkeypatch.setattr(cli, "_check_applicable", lambda *_args: None)
+    args = cli.build_parser().parse_args(["run", "--resume", run_id, "--dry-run"])
+    assert cli.cmd_run(args) == 0
+    if kind in ("vision.cpp", "detection", "depth"):
+        assert vision_calls[0][1]["runtime_snapshot"] == {"identity": "frozen"}
+
+
+def test_start_vision_resume_binds_the_saved_runtime_snapshot(monkeypatch):
+    from agentquantix import runtime_control
+    from agentquantix.pipeline import detection_release
+
+    snapshot = {"identity": "frozen"}
+    runtime = object()
+    calls = {}
+    monkeypatch.setattr(runtime_control, "ensure_runtime",
+                        lambda *args, **kwargs: calls.update(kwargs) or runtime)
+    monkeypatch.setattr(detection_release, "run_release",
+                        lambda *_args, **_kwargs: {"run_id": "detection", "candidates": []})
+    plan = {"engine": "ultralytics-ggml", "status": "ready", "blockers": [],
+            "runtime_revision": "a" * 40, "runtime_repository": "Asher-1/ultralytics-ggml"}
+
+    actions.start_vision(plan, user_approved=True, runtime_snapshot=snapshot)
+
+    assert calls["frozen"] == snapshot
+
+
+def test_unknown_resume_id_has_clean_cli_error(monkeypatch, capsys):
+    monkeypatch.setattr(config, "migrate_legacy_state", lambda: [])
+    assert cli.main(["run", "--resume", "vision:missing"]) == 1
+    assert "no recorded run matches 'vision:missing'" in capsys.readouterr().out
 
 
 def test_local_manifest_verification_detects_the_bundle_kind(tmp_path):

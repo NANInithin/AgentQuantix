@@ -29,6 +29,8 @@ from .pipeline.job import Job
 from .runtimes import RuntimeDecisionRequired, RuntimeErrorBase
 from .tasks import MEDIA, MULTIMODAL, RETRIEVAL, TEXT, VISION, VOICE, TASKS
 
+_ACTIVE_RESUME_IDS = []
+
 
 def _print(*args):
     """Print without dying on a console that cannot encode the character.
@@ -39,10 +41,11 @@ def _print(*args):
     """
     text = " ".join(str(a) for a in args)
     try:
-        print(text)
+        print(text, flush=True)
     except UnicodeEncodeError:
         print(text.encode(sys.stdout.encoding or "ascii",
-                          errors="replace").decode(sys.stdout.encoding or "ascii"))
+                          errors="replace").decode(sys.stdout.encoding or "ascii"),
+              flush=True)
 
 
 # =====================================================
@@ -96,6 +99,17 @@ def cmd_research(args):
 
 def _json(value):
     _print(json.dumps(value, indent=2, default=str))
+
+
+def _announce_resume(run_id):
+    if run_id and run_id not in _ACTIVE_RESUME_IDS:
+        _ACTIVE_RESUME_IDS.append(run_id)
+        _print(f"Resume command if interrupted: `aqx run --resume {run_id}`")
+
+
+def _completed_resume(run_id):
+    if run_id:
+        _print(f"Resume with: `aqx run --resume {run_id}`")
 
 
 def cmd_show(args):
@@ -498,6 +512,8 @@ def _execute_text(args, jobs, options, result=None, resumed=False):
             _print("Cancelled.")
             return 0
 
+    for job in jobs:
+        _announce_resume(f"text:{job.base_name}")
     outcome = run_mod.run_jobs(jobs, options=options,
                                clean_forks=not args.keep_fork)
     failed = bool(outcome.get("incomplete")) or any(
@@ -532,6 +548,7 @@ def _execute_text(args, jobs, options, result=None, resumed=False):
             _print(f"  the quants are uploaded, but the model card step failed: "
                    f"{type(e).__name__}: {e}")
             _print(f"  retry it on its own with: aqx card {job.base_name}")
+        _completed_resume(f"text:{job.base_name}")
     return 1 if failed else 0
 
 
@@ -681,12 +698,16 @@ def _run_voice(args, repo, family=None, saved=None, task=None):
     if not _confirm(args, "Run this voice release? This downloads, builds and may publish. [y/N] "):
         _print("Nothing started.")
         return 0
+    from .pipeline import voice_release
+    run_id = f"voice:{voice_release.work_dir(repo).name}"
+    _announce_resume(run_id)
     result = actions.run_voice(
         plan, publish=args.publish is not False, human_review=args.review,
         family=voice_args["family"], language=args.language, speaker=args.speaker,
         pocket_language=args.pocket_language, max_roundtrip_wer=args.max_roundtrip_wer,
         max_wer_regression=args.max_wer_regression)
     _json(result)
+    _completed_resume(run_id)
     return 0 if all(item.get("published") or item.get("reason") in VOICE_NON_ERRORS
                     for item in result["results"].values()) else 1
 
@@ -743,8 +764,12 @@ def _run_retrieval(args, route=None, saved=None):
     if not _confirm(args, "Run this retrieval release? This downloads, builds and validates. [y/N] "):
         _print("Nothing started.")
         return 0
+    from .pipeline import retrieval_release
+    run_id = f"retrieval:{retrieval_release._slug(plan['model'])}"
+    _announce_resume(run_id)
     result = actions.start_retrieval(plan, user_approved=True, publish=bool(args.publish))
     _json(result)
+    _completed_resume(result.get("run_id", run_id))
     return int(any(item.get("status") != "passed" for item in result.get("candidates", [])))
 
 
@@ -767,12 +792,16 @@ def _run_multimodal(args, route=None, saved=None):
     if not _confirm(args, "Run this multimodal release? This downloads, builds and validates. [y/N] "):
         _print("Nothing started.")
         return 0
+    from .pipeline import multimodal_release
+    run_id = f"multimodal:{multimodal_release._slug(plan['model'])}"
+    _announce_resume(run_id)
     result = actions.start_multimodal(plan, user_approved=True, publish=bool(args.publish))
     _json(result)
+    _completed_resume(result.get("run_id", run_id))
     return int(any(item.get("status") != "passed" for item in result.get("candidates", [])))
 
 
-def _run_vision(args, route=None, saved=None):
+def _run_vision(args, route=None, saved=None, runtime_snapshot=None):
     if saved is None:
         if route is None:
             raise ValueError("vision execution requires a resolved route")
@@ -790,8 +819,13 @@ def _run_vision(args, route=None, saved=None):
     if not _confirm(args, "Run this vision release? This downloads, builds and validates. [y/N] "):
         _print("Nothing started.")
         return 0
-    result = actions.start_vision(plan, user_approved=True, publish=bool(args.publish))
+    run_id = actions.vision_run_id(plan)
+    _announce_resume(run_id)
+    result = actions.start_vision(
+        plan, user_approved=True, publish=bool(args.publish),
+        runtime_snapshot=runtime_snapshot)
     _json(result)
+    _completed_resume(result.get("run_id", run_id))
     return int(not any(item.get("status") == "passed"
                        for item in result.get("candidates", [])))
 
@@ -824,9 +858,12 @@ def _run_media(args, repo, route=None, saved=None):
     if not _confirm(args, "Build and validate this exact media plan? [y/N] "):
         return 0
     publish = bool(args.publish)
+    run_id = f"media:{plan['plan_id']}"
+    _announce_resume(run_id)
     result = actions.start_media(plan, user_approved=True, publish=publish,
                                  preserve_failed=bool(args.preserve_failed))
     _json(result)
+    _completed_resume(result.get("run_id", run_id))
     if actions.media_failed(result):
         return 1
     if publish and any(not c.get("published") for c in result.get("candidates", [])
@@ -852,7 +889,8 @@ def _resume(args):
     if record.pipeline == MULTIMODAL:
         return _run_multimodal(args, saved=record.details["plan"])
     if record.pipeline == VISION:
-        return _run_vision(args, saved=record.details["plan"])
+        return _run_vision(args, saved=record.details["plan"],
+                            runtime_snapshot=record.details.get("runtime_snapshot"))
     plan = json.loads((Path(record.location) / "plan.json").read_text(encoding="utf-8"))
     return _run_media(args, None, saved=plan)
 
@@ -1214,6 +1252,7 @@ def main(argv=None):
         _print(f"Moved {', '.join(migrated)} to {config.AQX_HOME} "
                "(state now survives upgrades).")
 
+    _ACTIVE_RESUME_IDS.clear()
     args = build_parser().parse_args(argv)
     try:
         from .runtime_control import execution_session
@@ -1232,7 +1271,12 @@ def main(argv=None):
         _print(f"aqx: {error}")
         return 1
     except KeyboardInterrupt:
-        _print("\nInterrupted. Nothing is lost - re-run to resume.")
+        if _ACTIVE_RESUME_IDS:
+            commands = ", ".join(f"`aqx run --resume {run_id}`"
+                                 for run_id in _ACTIVE_RESUME_IDS)
+            _print(f"\nInterrupted. Resume with: {commands}")
+        else:
+            _print("\nInterrupted. Nothing is lost - use `aqx runs` to find a resume id.")
         return 130
 
 

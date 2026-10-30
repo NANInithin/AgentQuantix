@@ -215,20 +215,37 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
     runtime_guard(runtime.revision)
     root = work_dir(plan["model"])
     root.mkdir(parents=True, exist_ok=True)
+    runtime_snapshot = runtime.snapshot()
     result_path = root / "result.json"
-    if result_path.is_file():
-        saved = json.loads(result_path.read_text(encoding="utf-8"))
-        old = saved.get("plan") or {}
-        same_run = all(old.get(key) == plan.get(key) for key in (
-            "model", "task", "family", "source_revision", "quants", "runtime_revision"))
-        if same_run and all(Path(item["path"]).is_file() for item in saved.get("candidates", [])):
-            if publish and not saved.get("published"):
-                saved["publication"] = publish_bundle(
-                    root, old, saved["candidates"], converter_provenance=saved.get("converter"))
-                saved["published"] = True
-                _write(result_path, saved)
-            return saved
-    _write(root / "run.json", {"created": time.time(), "plan": plan})
+    run_path = root / "run.json"
+    progress = json.loads(run_path.read_text(encoding="utf-8")) if run_path.is_file() else {}
+    result_saved = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else {}
+    saved = result_saved if result_saved.get("candidates") else progress
+    old = saved.get("plan") or {}
+    same_run = all(old.get(key) == plan.get(key) for key in (
+        "model", "task", "family", "source_revision", "quants", "runtime_revision")) and (
+            (saved.get("runtime_snapshot") or {}).get("identity")
+            == runtime_snapshot.get("identity"))
+    candidates = []
+    if same_run:
+        candidates = [
+            item for item in saved.get("candidates", [])
+            if Path(item.get("path", "")).is_file()
+            and item.get("sha256") == _hash(item["path"])]
+    if (result_saved and same_run and len(candidates) == len(result_saved.get("candidates", []))
+            and all(precision.casefold() in {
+                item["precision"].casefold() for item in candidates}
+                    for precision in plan["quants"])):
+        if publish and not result_saved.get("published"):
+            result_saved["publication"] = publish_bundle(
+                root, old, result_saved["candidates"],
+                converter_provenance=result_saved.get("converter"))
+            result_saved["published"] = True
+            _write(result_path, result_saved)
+        return result_saved
+    run_record = {"created": progress.get("created", time.time()), "plan": plan,
+                  "runtime_snapshot": runtime_snapshot, "candidates": candidates}
+    _write(run_path, run_record)
     source = root / "source"
     if download_source is None:
         from huggingface_hub import snapshot_download
@@ -257,6 +274,16 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
     import numpy as np
     results, baseline = [], None
     for precision in precisions:
+        previous = next((item for item in candidates
+                         if item["precision"].casefold() == precision.casefold()), None)
+        if previous:
+            if precision.casefold() == "f32":
+                outputs_path = root / "outputs" / "f32" / "outputs.npz"
+                with np.load(outputs_path) as outputs:
+                    baseline = {**previous["quality"], "outputs": [
+                        outputs[key] for key in sorted(outputs.files)]}
+            results.append(previous)
+            continue
         candidate = root / "models" / f"{precision}.gguf"
         candidate.parent.mkdir(parents=True, exist_ok=True)
         command = vision.converter_command(python, converter, source_weight, candidate,
@@ -267,7 +294,10 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
             else:
                 _run(command)
         start = time.monotonic()
-        quality = (evaluate or _evaluate)(plan["task"], family, candidate, binary, root, baseline)
+        output_root = root / "outputs" / precision.casefold()
+        output_root.mkdir(parents=True, exist_ok=True)
+        quality = (evaluate or _evaluate)(
+            plan["task"], family, candidate, binary, output_root, baseline)
         quality.setdefault("elapsed_seconds", time.monotonic() - start)
         quality["source_dtype"] = policy["source_dtype"]
         quality["precision_reason"] = policy["precision_reason"]
@@ -278,14 +308,17 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
         passed = gate(plan["task"], quality, baseline, is_baseline=baseline is None)
         if baseline is None:
             baseline = quality
+            np.savez_compressed(output_root / "outputs.npz", *quality["outputs"])
         quality_record = {key: value for key, value in quality.items() if key != "outputs"}
         results.append({"precision": precision, "path": str(candidate), "sha256": _hash(candidate),
                         "bytes": candidate.stat().st_size, "quality": quality_record,
                         "status": "passed" if passed else "quality-rejected"})
         _write(root / "quality.json", {item["precision"]: item["quality"] for item in results})
+        run_record["candidates"] = results
+        _write(run_path, run_record)
     release_plan = {**plan, **policy, "converter_provenance": package_provenance}
     result = {"pipeline": "vision", "run_id": root.name, "plan": release_plan,
-              "runtime_snapshot": runtime.snapshot(), "converter": package_provenance,
+              "runtime_snapshot": runtime_snapshot, "converter": package_provenance,
               "candidates": results, "published": False}
     _write(root / "result.json", result)
     if publish and any(item["status"] == "passed" for item in results):

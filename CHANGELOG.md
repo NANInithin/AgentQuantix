@@ -8,6 +8,8 @@
   every TaskSpec and distinguishing accepted evidence from catalog-only routes.
 - Defer timeseries.cpp forecasting pending a source license and upstream fixes;
   see [forecasting status](docs/FORECASTING_STATUS.md).
+- Resolve detection and depth runs through the shared `vision:` run index and
+  resume vision-engine releases against their frozen runtime snapshots.
 
 ## 0.5.8 — unreleased development
 
