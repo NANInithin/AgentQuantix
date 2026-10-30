@@ -220,6 +220,12 @@ Voice releases are split into two runtime tracks:
 Start with `aqx runtime show audio.cpp` and `aqx plan <repo>`. See [USAGE.md](USAGE.md)
 for the complete build, review, publication, and verification workflow.
 
+Depth Anything V2 Metric Hypersim Small and DA3-Small use the pinned
+depth-anything.cpp release pipeline. DA2 relative Small remains on vision.cpp;
+SAM3 remains blocked by gated weights and unverifiable conversion provenance.
+The tested depth matrix and its small-sample limits are in
+[depth and SAM status](docs/DEPTH_SAM_STATUS.md).
+
 ---
 
 ## Harnesses

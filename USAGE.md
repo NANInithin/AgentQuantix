@@ -445,6 +445,18 @@ Every successful release publishes all accepted quant files, required
 companions, `bundle.json`, `quality.json`, and `README.md` in one Hub commit,
 then verifies the remote sizes and SHA-256 values.
 
+## Depth task releases
+
+Use `aqx plan depth-anything.cpp:da2-metric-hypersim-small` or
+`aqx plan depth-anything.cpp:da3-small`, then run the approved plan with
+`aqx run <family-target> --no-publish --yes`. The pipeline verifies the pinned
+weight checksum, builds the pinned CPU runtime, evaluates the license-filtered
+COCO sample against the PyTorch reference, and accepts only precisions that
+pass their family gates. F32 is the baseline; F16, Q8_0 and Q4_K are produced
+from its GGUF by the native quantizer. SAM3 remains blocked. See
+[depth and SAM status](docs/DEPTH_SAM_STATUS.md) for the thresholds and
+acceptance limitations.
+
 ---
 
 ## If it stops

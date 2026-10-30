@@ -25,7 +25,11 @@ ultralytics-ggml and rf-detr.cpp family-routed detection; see
 [detection task status](DETECTION_STATUS.md). The RF-DETR nano F32 baseline
 failed reference recall (0.9478 < 0.95), so no object-detection precision or
 family is accepted on this sample in 0.5.7; keep the family cataloged for
-run-time gating. The next milestone is **0.5.8**.
+run-time gating. 0.5.8 adds depth-anything.cpp for DA2 metric Hypersim Small
+and DA3-Small; DA2 relative Small remains on vision.cpp. SAM3 remains blocked
+by gated official weights and unverifiable ungated conversion provenance.
+See [depth and SAM status](DEPTH_SAM_STATUS.md) for native results. The next
+milestone is **0.5.9**.
 
 0.5.2 summary: `agentquantix/tasks/` (registry + metadata router),
 `agentquantix/runs.py` (`text:`/`voice:`/`media:` run ids over existing records),
@@ -265,9 +269,9 @@ implementation or native acceptance.
 The sequential Linux CPU results are recorded in
 [multimodal status](MULTIMODAL_STATUS.md). The approved plan continues with
 expanded audio (0.5.5), vision.cpp (0.5.6),
-YOLO/RF-DETR (0.5.7), dedicated depth/SAM3 (0.5.8), forecasting/hardening
-(0.5.9), and the consolidated 0.6.0 release. Do not claim the full roadmap is
-implemented.
+YOLO/RF-DETR (0.5.7), dedicated depth with SAM3 blocked (0.5.8),
+forecasting/hardening (0.5.9), and the consolidated 0.6.0 release. Do not
+claim the full roadmap is implemented.
 
 ## Native acceptance and upstream cautions
 
