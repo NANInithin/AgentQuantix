@@ -36,6 +36,17 @@ The shared runtime lifecycle (0.5.1) and the shared task router and commands
 [engine audit](docs/ENGINE_AUDIT_0_5_2.md) and the approved
 [0.5.1–0.6.0 roadmap](docs/RELEASE_0_6_0_PLAN.md).
 
+The 0.5.5 audio.cpp expansion adds native source separation, voice conversion
+and forced alignment to the existing voice pipeline. Task and family evidence,
+native quality gates, licensing limits and tested precision results are in
+[audio task status](docs/AUDIO_TASKS_STATUS.md). Music/SFX generation,
+diarization and MIDI remain untested; unsupported or blocked tasks do not fall
+through to text quantization.
+
+The accepted Linux CPU examples use audio.cpp v0.8.0: BS-RoFormer Q8_0,
+MeanVC2 F32/Q4_K and Qwen3 Forced Aligner's nine converter precisions. HTDemucs
+was rejected by its SI-SDR gate; RNNoise and ZipEnhancer worsened SNR.
+
 ```
 $ aqx research
 
@@ -76,7 +87,9 @@ metadata and installed engine catalogs to llama.cpp text, embeddings, or
 reranking; clip.cpp image-feature extraction or zero-shot image classification;
 the voice TTS/ASR backends; or stable-diffusion.cpp media. Use `--task` when the
 route reports a genuine ambiguity. Retrieval tasks are implemented in 0.5.3,
-and libmtmd multimodal understanding is implemented in 0.5.4. Dedicated vision
+libmtmd multimodal understanding is implemented in 0.5.4, and audio.cpp
+separation, voice conversion and forced alignment are implemented in 0.5.5.
+Dedicated vision
 and forecasting tasks that remain on the roadmap are reported as blocked rather
 than sent through another pipeline. Use `--task multimodal-understanding` to
 select the multimodal pipeline for vision/audio sources; `image-text-to-text`

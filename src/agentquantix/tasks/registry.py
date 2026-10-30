@@ -27,6 +27,7 @@ class TaskSpec:
     milestone: str = ""
     review: str = "none"          # human gate required before publication
     publication: str = ""
+    note: str = ""
 
     @property
     def implemented(self):
@@ -62,6 +63,15 @@ TASKS = {spec.id: spec for spec in (
     TaskSpec("automatic-speech-recognition", "audio", VOICE, ("whisper.cpp", "audio.cpp"),
              ("automatic-speech-recognition",), "0.4", "none",
              "one atomic bundle commit after the fixed-corpus WER/CER regression gate"),
+    TaskSpec("audio-source-separation", "audio", VOICE, ("audio.cpp",), (),
+             "0.5.5", "none",
+             "atomic bundle of passing precisions after native task gates"),
+    TaskSpec("voice-conversion", "audio", VOICE, ("audio.cpp",), (),
+             "0.5.5", "none",
+             "atomic bundle of passing precisions after native task gates"),
+    TaskSpec("forced-alignment", "audio", VOICE, ("audio.cpp",), (),
+             "0.5.5", "none",
+             "atomic bundle of passing precisions after native task gates"),
     *(TaskSpec(task, modality, MEDIA, ("stable-diffusion.cpp",), _MEDIA_HUB_TAGS.get(task, ()),
                "0.5.0 (experimental)", review, _MEDIA_PUBLICATION)
       for task, (modality, review) in _MEDIA_TASKS.items()),
@@ -82,11 +92,14 @@ TASKS = {spec.id: spec for spec in (
              ("visual-question-answering", "document-question-answering", "image-to-text",
               "video-text-to-text", "audio-text-to-text"), "0.5.4", "none",
              "one atomic bundle commit of passing text quants plus the F16 projector after native multimodal task gates"),
-    TaskSpec("audio-generation", "audio", None, ("audio.cpp",), ("text-to-audio",), "0.5.5"),
+    TaskSpec("audio-generation", "audio", None, ("audio.cpp",), ("text-to-audio",),
+             "post-0.6.0", note="no permissively licensed audio.cpp generation package under the evaluation size limit was natively accepted"),
     TaskSpec("audio-to-audio", "audio", None, ("audio.cpp",), ("audio-to-audio",), "0.5.5"),
-    TaskSpec("audio-classification", "audio", None, ("audio.cpp",), ("audio-classification",), "0.5.5"),
+    TaskSpec("audio-classification", "audio", None, ("audio.cpp",), ("audio-classification",),
+             "post-0.6.0", note="audio.cpp exposes no classification task at the pinned revision"),
     TaskSpec("voice-activity-detection", "audio", None, ("audio.cpp", "whisper.cpp"),
-             ("voice-activity-detection",), "0.5.5"),
+             ("voice-activity-detection",), "post-0.6.0",
+             note="audio.cpp VAD models are bundled runtime assets, not releasable sources"),
     TaskSpec("image-segmentation", "vision", None, ("vision.cpp", "ultralytics-ggml", "rf-detr.cpp"),
              ("image-segmentation",), "0.5.6"),
     TaskSpec("super-resolution", "vision", None, ("vision.cpp",), (), "0.5.6"),
@@ -168,9 +181,16 @@ def capabilities(engine=None, task=None):
         for backend in (*voice.CORE_BACKENDS, *catalog["backends"]):
             if engine not in (None, backend.backend):
                 continue
+            task_by_track = {
+                voice.TTS: "text-to-speech",
+                voice.ASR: "automatic-speech-recognition",
+                voice.SEP: "audio-source-separation",
+                voice.VC: "voice-conversion",
+                voice.ALIGN: "forced-alignment",
+            }
             cells.append(Capability(
                 backend.backend, backend.family,
-                "text-to-speech" if backend.track == voice.TTS else "automatic-speech-recognition",
+                task_by_track[backend.track],
                 catalog["revision"] if backend.backend == "audio.cpp" else None,
                 convert=backend.converter or None, quantize=list(backend.supported_quants),
                 package=backend.model_format,

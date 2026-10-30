@@ -30,6 +30,9 @@ from . import archsupport, config
 
 TTS = "tts"
 ASR = "asr"
+SEP = "sep"
+VC = "vc"
+ALIGN = "align"
 # Fallback for planning before llama.cpp has been cloned.  When a checkout is
 # present, available_quants() asks its quantize.cpp table instead so forks and
 # newly-added upstream types are discovered rather than hard-coded here.
@@ -271,10 +274,12 @@ def _audio_cpp_backends(specs=None) -> tuple[VoiceBackend, ...]:
             tracks.append((TTS, "clon"))
         if "asr" in tasks:
             tracks.append((ASR, "asr"))
+        tracks.extend((track, task) for task, track in (
+            ("sep", SEP), ("vc", VC), ("align", ALIGN)) if task in tasks)
         for track, runtime_task in tracks:
             clone = "speaker_reference" in spec.get(
                 "capabilities", {}).get("clone", [])
-            speaker = ("required" if runtime_task == "clon" else
+            speaker = ("required" if runtime_task in ("clon", "vc") else
                        "optional" if clone else "none")
             family = str(spec["family"])
             backends.append(VoiceBackend(
@@ -424,6 +429,11 @@ def _audio_cpp_backend_for(repo_id: str, track: str | None = None,
     if family:
         exact = [backend for backend in candidates
                  if backend.family.casefold() == family.casefold()]
+        if len(exact) > 1 and track is None:
+            primary = [backend for backend in exact
+                       if backend.track in (TTS, ASR)]
+            if len(primary) == 1:
+                return primary[0]
         return exact[0] if len(exact) == 1 else None
 
     value = (repo_id or "").casefold()
@@ -432,6 +442,11 @@ def _audio_cpp_backend_for(repo_id: str, track: str | None = None,
              or value == f"audio.cpp:{backend.family}".casefold()
              or any(value == package.casefold()
                     for package in backend.package_ids)]
+    if len(exact) > 1 and track is None:
+        primary = [backend for backend in exact
+                   if backend.track in (TTS, ASR)]
+        if len(primary) == 1:
+            exact = primary
     if len(exact) == 1:
         return exact[0]
 
@@ -442,6 +457,11 @@ def _audio_cpp_backend_for(repo_id: str, track: str | None = None,
     ]
     if len(package_repo_matches) == 1:
         return package_repo_matches[0]
+    if len(package_repo_matches) > 1 and track is None:
+        primary = [backend for backend in package_repo_matches
+                   if backend.track in (TTS, ASR)]
+        if len(primary) == 1:
+            return primary[0]
 
     # A third-party GGUF repository is not a convertible source checkpoint,
     # and GGUF schemas are runtime-specific. Only catalog package ids/repos
@@ -467,12 +487,25 @@ def _audio_cpp_backend_for(repo_id: str, track: str | None = None,
             score += 2
         if backend.track == ASR and any(word in value for word in ("asr", "stt")):
             score += 2
+        if backend.track == SEP and any(word in value for word in ("sep", "separation")):
+            score += 2
+        if backend.track == VC and any(word in value for word in ("vc", "conversion")):
+            score += 2
+        if backend.track == ALIGN and "align" in value:
+            score += 2
         if score:
             scored.append((score, backend))
     scored.sort(key=lambda item: item[0], reverse=True)
     if not scored or scored[0][0] < 12:
         return None
     if len(scored) > 1 and scored[0][0] == scored[1][0]:
+        tied = [backend for score, backend in scored
+                if score == scored[0][0]]
+        if track is None:
+            primary = [backend for backend in tied
+                       if backend.track in (TTS, ASR)]
+            if len(primary) == 1:
+                return primary[0]
         return None
     return scored[0][1]
 
@@ -811,6 +844,52 @@ def audiocpp_tts_command(runtime: Path | str, bundle: VoiceBundle,
     return command
 
 
+def _audiocpp_threads() -> str:
+    return "4"
+
+
+def audiocpp_sep_command(runtime: Path | str, backend: VoiceBackend,
+                         model: Path | str, audio: Path | str,
+                         out_dir: Path | str) -> list[str]:
+    if backend.track != SEP or backend.backend != "audio.cpp":
+        raise VoiceValidationError(
+            "audiocpp_cli can only validate an audio.cpp separation bundle")
+    return [str(runtime), "--task", "sep", "--family", backend.family,
+            "--model", str(model), "--backend", "best", "--threads",
+            _audiocpp_threads(), "--audio", str(audio), "--out-dir",
+            str(out_dir), "--metrics"]
+
+
+def audiocpp_vc_command(runtime: Path | str, backend: VoiceBackend,
+                        model: Path | str, audio: Path | str,
+                        voice_ref: Path | str, out: Path | str,
+                        seed: int = 42) -> list[str]:
+    if backend.track != VC or backend.backend != "audio.cpp":
+        raise VoiceValidationError(
+            "audiocpp_cli can only validate an audio.cpp voice-conversion bundle")
+    return [str(runtime), "--task", "vc", "--family", backend.family,
+            "--model", str(model), "--backend", "best", "--threads",
+            _audiocpp_threads(), "--audio", str(audio), "--voice-ref",
+            str(voice_ref), "--out", str(out), "--seed", str(seed),
+            "--metrics"]
+
+
+def audiocpp_align_command(runtime: Path | str, backend: VoiceBackend,
+                           model: Path | str, audio: Path | str,
+                           text: str, language: str,
+                           words_out: Path | str) -> list[str]:
+    if backend.track != ALIGN or backend.backend != "audio.cpp":
+        raise VoiceValidationError(
+            "audiocpp_cli can only validate an audio.cpp forced-alignment bundle")
+    command = [str(runtime), "--task", "align", "--family", backend.family,
+               "--model", str(model), "--backend", "best", "--threads",
+               _audiocpp_threads(), "--audio", str(audio), "--text", text]
+    if language:
+        command += ["--language", language]
+    command += ["--words-out", str(words_out), "--metrics"]
+    return command
+
+
 def audiocpp_asr_command(runtime: Path | str, backend: VoiceBackend,
                          model: Path | str, audio: Path | str,
                          output: Path | str,
@@ -822,7 +901,7 @@ def audiocpp_asr_command(runtime: Path | str, backend: VoiceBackend,
                "--family", backend.family, "--model", str(model),
                "--backend", "best", "--audio", str(audio),
                "--text-out", str(output), "--metrics"]
-    if language:
+    if language and (not backend.languages or len(backend.languages) > 1):
         command += ["--language", language]
     return command
 
@@ -959,13 +1038,14 @@ def resample_pcm16_wav(source: Path | str, destination: Path | str,
 
 
 def run_checked(command: list[str], *, output: Path | None = None,
-                timeout: int = 600) -> dict:
+                timeout: int = 600, cwd: Path | str | None = None) -> dict:
     """Run a real inference binary and measure latency to its first output."""
     began = time.monotonic()
     first_output = None
     with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as log:
         process = subprocess.Popen([str(part) for part in command], text=True,
-                                   stdout=log, stderr=subprocess.STDOUT)
+                                   stdout=log, stderr=subprocess.STDOUT,
+                                   cwd=cwd)
         try:
             while process.poll() is None:
                 if (first_output is None and output is not None and output.exists()
@@ -1178,8 +1258,9 @@ def render_model_card(bundle: VoiceBundle, target_repo: str,
                       license_name: str | None = None) -> str:
     manifest = bundle.manifest()
     quality = bundle.quality or {}
-    package_members = any(member.role == "package-member"
-                          for member in bundle.companions)
+    package_id = bundle.configuration.get("audio_cpp_package")
+    package_members = (bool(package_id) or any(
+        member.role == "package-member" for member in bundle.companions))
     runtime_artifact = bundle.primary.remote_path
     if package_members:
         parent = Path(runtime_artifact).parent.as_posix()
@@ -1197,6 +1278,20 @@ def render_model_card(bundle: VoiceBundle, target_repo: str,
                    + (f" -mm {next((m.remote_path for m in bundle.companions if m.role == 'mmproj'), '')}"
                       if any(m.role == "mmproj" for m in bundle.companions) else "")
                    + " -p \"Hello world\" --output out.wav")
+    elif bundle.backend.track == SEP:
+        command = (f"audiocpp_cli --task sep --family {bundle.backend.family} "
+                   f"--model {runtime_artifact} --backend best --threads 4 "
+                   "--audio input.wav --out-dir separated --metrics")
+    elif bundle.backend.track == VC:
+        command = (f"audiocpp_cli --task vc --family {bundle.backend.family} "
+                   f"--model {runtime_artifact} --backend best --threads 4 "
+                   "--audio input.wav --voice-ref reference.wav --out converted.wav "
+                   "--seed 42 --metrics")
+    elif bundle.backend.track == ALIGN:
+        command = (f"audiocpp_cli --task align --family {bundle.backend.family} "
+                   f"--model {runtime_artifact} --backend best --threads 4 "
+                   "--audio input.wav --text \"transcript\" --language en "
+                   "--words-out words.json --metrics")
     elif bundle.backend.backend == "audio.cpp":
         command = (f"audiocpp_cli --task asr --family {bundle.backend.family} "
                    f"--model {runtime_artifact} --backend best "
@@ -1247,6 +1342,9 @@ Supported languages: {language}
 Expected sample rate: {f'{bundle.backend.sample_rate} Hz' if bundle.backend.sample_rate else 'runtime-reported; see quality.json'}
 
 Speaker reference: {bundle.backend.speaker_reference}
+
+{f'prebuilt audio.cpp package; not converted by AgentQuantix. Package id: `{package_id}`; revision: `{bundle.source_revision or "unknown"}`.' if package_id else ''}
+{('speaker similarity not measured' if bundle.backend.track == VC else 'no independent timing reference' if bundle.backend.track == ALIGN else '')}
 
 ## Bundle files
 

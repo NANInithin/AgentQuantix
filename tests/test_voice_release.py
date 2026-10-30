@@ -344,6 +344,39 @@ def test_audiocpp_conversion_uses_namespaced_sources_and_inspects(
     assert commands[1][:2] == [converter, "--inspect"]
 
 
+def test_audiocpp_conversion_uses_gguf_namespace_contract(
+        tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "model.safetensors").write_bytes(b"weights")
+    audio_dir = tmp_path / "audio.cpp"
+    spec = audio_dir / "model_specs" / "qwen3_forced_aligner.json"
+    spec.parent.mkdir(parents=True)
+    spec.write_text(
+        (voice.AUDIOCPP_SPECS_DIR / "qwen3_forced_aligner.json").read_text(
+            encoding="utf-8"), encoding="utf-8")
+    converter = audio_dir / "audiocpp_gguf"
+    commands = []
+
+    def run(command, _label):
+        commands.append(command)
+        if "--output" in command:
+            output = voice_release.Path(command[command.index("--output") + 1])
+            output.write_bytes(b"x" * 2048)
+
+    monkeypatch.setattr(voice_release, "_run", run)
+    backend = voice.backend_for(
+        "Qwen/Qwen3-ForcedAligner-0.6B", track=voice.ALIGN,
+        family="qwen3_forced_aligner")
+    voice_release.convert_audiocpp_model(
+        source, backend, converter, audio_dir, tmp_path / "models", "F16",
+        match_gguf_namespaces=True)
+    inputs = [str(commands[0][index + 1]) for index, value in
+              enumerate(commands[0]) if value == "--input"]
+
+    assert inputs == [str(source / "model.safetensors")]
+
+
 def test_audiocpp_prepares_official_pytorch_component_with_pinned_utility(
         tmp_path, monkeypatch):
     source = tmp_path / "source"

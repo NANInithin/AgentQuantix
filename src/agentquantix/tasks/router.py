@@ -54,7 +54,13 @@ def hub_metadata(repo_id):
 
 def _voice_task(backend):
     from .. import voice
-    return "text-to-speech" if backend.track == voice.TTS else "automatic-speech-recognition"
+    return {
+        voice.TTS: "text-to-speech",
+        voice.ASR: "automatic-speech-recognition",
+        voice.SEP: "audio-source-separation",
+        voice.VC: "voice-conversion",
+        voice.ALIGN: "forced-alignment",
+    }[backend.track]
 
 
 def _explicit(route, task, engine, family):
@@ -63,16 +69,23 @@ def _explicit(route, task, engine, family):
     route.task, route.reasons = spec.id, [f"task {spec.id} was selected explicitly"]
     if not spec.implemented:
         route.blocker = (f"{spec.id} is a recognised task whose {', '.join(spec.engines)} adapter "
-                         f"is scheduled for {spec.milestone} and is not implemented yet")
+                         f"is scheduled for {spec.milestone} and is not implemented yet"
+                         + (f": {spec.note}" if spec.note else ""))
         return route
     route.pipeline = spec.pipeline
     if spec.pipeline == VOICE:
-        track = voice.TTS if spec.id == "text-to-speech" else voice.ASR
+        track = {
+            "text-to-speech": voice.TTS,
+            "automatic-speech-recognition": voice.ASR,
+            "audio-source-separation": voice.SEP,
+            "voice-conversion": voice.VC,
+            "forced-alignment": voice.ALIGN,
+        }[spec.id]
         backend = voice.backend_for(route.repo_id, track=track, family=family)
         if backend:
             route.engine, route.family = backend.backend, backend.family
         else:
-            route.engine = engine
+            route.engine = engine or spec.engines[0]
     elif spec.pipeline == MEDIA:
         route.engine, route.family = "stable-diffusion.cpp", family
     elif spec.pipeline in (RETRIEVAL, MULTIMODAL):
@@ -166,9 +179,14 @@ def route(repo_id, *, task=None, engine=None, family=None, metadata=None, fetch=
     if not implemented:
         spec = TASKS[signals[0][1]]
         result.task, result.reasons = spec.id, [signals[0][2]]
-        result.blocker = (f"{repo_id} is a {spec.id} model; its {', '.join(spec.engines)} adapter "
-                          f"is scheduled for {spec.milestone} and is not implemented yet. "
-                          "It is not sent through the text-generation pipeline.")
+        if spec.id == "audio-to-audio" and tag == "audio-to-audio":
+            result.blocker = ("audio-to-audio is ambiguous; pass --task "
+                              "audio-source-separation or --task voice-conversion")
+        else:
+            result.blocker = (f"{repo_id} is a {spec.id} model; its {', '.join(spec.engines)} adapter "
+                              f"is scheduled for {spec.milestone} and is not implemented yet. "
+                              "It is not sent through the text-generation pipeline."
+                              + (f" {spec.note}" if spec.note else ""))
         return result
     pipelines = list(dict.fromkeys(s[0] for s in implemented))
     if len(pipelines) > 1:

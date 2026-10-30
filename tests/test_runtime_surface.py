@@ -144,6 +144,7 @@ def parser():
 
 def test_cli_exposes_only_implemented_runtime_actions():
     for command in ("list", "show llama.cpp", "check llama.cpp", "install llama.cpp --temporary --yes",
+                    f"install audio.cpp --persistent --yes --revision {SHA}",
                     "update llama.cpp --persistent --yes", "rollback llama.cpp --yes",
                     "adopt llama.cpp existing --yes", "prune llama.cpp"):
         args = parser().parse_args(["runtime", *command.split()])
@@ -166,6 +167,44 @@ def test_cli_runtime_update_reuses_storage_and_approved_exact_target(surface, mo
     assert kwargs["revision"] == TARGET
     assert kwargs["persistent"] is True
     assert kwargs["update"] is True
+
+
+def test_cli_install_revision_passes_exact_sha_to_prepare(surface, monkeypatch):
+    surface.manager.installed = True
+    monkeypatch.setattr(runtime_cli.sys, "stdin", SimpleNamespace(isatty=lambda: False))
+    revision = "4af143229384fb6da3f373dc87de145ae954609b"
+    args = parser().parse_args([
+        "runtime", "install", "audio.cpp", "--persistent", "--yes",
+        "--revision", revision,
+    ])
+    assert args.func(args) == 0
+    kwargs = surface.calls[-1][2]
+    assert kwargs["revision"] == {
+        "revision": revision, "ref": revision, "channel": "pinned",
+        "repository": "0xShug0/audio.cpp",
+    }
+    assert kwargs["persistent"] is True
+    assert kwargs["update"] is True
+
+
+def test_cli_install_revision_rejects_tags_before_upstream_check(surface, capsys):
+    args = parser().parse_args([
+        "runtime", "install", "audio.cpp", "--persistent", "--yes",
+        "--revision", "v0.8.0",
+    ])
+    assert args.func(args) == 1
+    assert "40-hex commit SHA" in capsys.readouterr().out
+    assert surface.calls == []
+
+
+def test_cli_install_revision_help_requires_exact_sha(capsys):
+    with pytest.raises(SystemExit) as error:
+        parser().parse_args(["runtime", "install", "audio.cpp", "--help"])
+    assert error.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "--revision REVISION" in help_text
+    assert "40-hex commit SHA" in help_text
+    assert "tags and branches are not accepted" in help_text
 
 
 def test_cli_failed_update_check_keeps_runtime_without_prepare(surface, monkeypatch):

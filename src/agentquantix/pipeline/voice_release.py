@@ -9,17 +9,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import json
+import math
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
+import wave
 
 from .. import archsupport, config, voice
 from . import build as build_mod, sanity
 
 
 AUDIOCPP_REVISION = "v0.8.0"
+AUDIOCPP_REVISION_SHA = "4af143229384fb6da3f373dc87de145ae954609b"
 TTS_QUALITY_CACHE_SCHEMA = 1
 
 
@@ -219,13 +224,19 @@ def source_metadata(repo_id: str, api=None, family: str | None = None) -> dict:
         raise voice.VoiceValidationError(reason)
     if (repo_id.casefold().startswith("audio.cpp:")
             or any(repo_id.casefold() == item.casefold()
-                   for item in backend.package_ids)):
+                   for item in backend.package_ids)
+            or _audiocpp_package_reference(repo_id, backend)):
+        spec = voice.audio_cpp_catalog()["registry"].get(backend.family, {})
         return {
             "repo_id": repo_id,
             "revision": f"audio.cpp-{AUDIOCPP_REVISION}",
             "source_bytes": None,
             "gated": False,
             "private": False,
+            "license": (_audiocpp_source_license(repo_id, backend, spec)
+                        if backend.track in (voice.SEP, voice.VC, voice.ALIGN)
+                        else None),
+            "package_ids": list(backend.package_ids),
         }
     if api is None:
         from huggingface_hub import HfApi
@@ -247,6 +258,12 @@ def source_metadata(repo_id: str, api=None, family: str | None = None) -> dict:
         lfs = getattr(sibling, "lfs", None) or {}
         total += (getattr(sibling, "size", None)
                   or (lfs.get("size") if isinstance(lfs, dict) else 0) or 0)
+    card_data = getattr(info, "card_data", None)
+    license_name = (getattr(card_data, "license", None)
+                    or (card_data.get("license")
+                        if isinstance(card_data, dict) else None))
+    if str(license_name or "").casefold() in {"", "other", "unknown", "n/a"}:
+        license_name = None
     return {
         "repo_id": repo_id,
         "revision": getattr(info, "sha", None),
@@ -254,7 +271,64 @@ def source_metadata(repo_id: str, api=None, family: str | None = None) -> dict:
         "source_files": sorted(source_files) if source_files else None,
         "gated": bool(getattr(info, "gated", False)),
         "private": bool(getattr(info, "private", False)),
+        "license": license_name,
     }
+
+
+def _audiocpp_source_license(repo_id: str, backend: voice.VoiceBackend,
+                             spec: dict | None = None) -> str | None:
+    spec = spec or voice.audio_cpp_catalog()["registry"].get(backend.family, {})
+    packages = spec.get("packages", [])
+    for key in ("license", "license_name"):
+        if value := spec.get(key):
+            if str(value).casefold() not in {"other", "unknown", "n/a"}:
+                return str(value)
+    for package in packages:
+        for key in ("license", "license_name"):
+            if value := package.get(key):
+                if str(value).casefold() not in {"other", "unknown", "n/a"}:
+                    return str(value)
+    defaults = spec.get("package_defaults", {}).get("download", {})
+    package_repo = None
+    package_revision = "main"
+    for package in packages:
+        if package.get("format") != "gguf":
+            continue
+        download = {**defaults, **package.get("download", {})}
+        candidate = str(download.get("repo", ""))
+        if candidate and (repo_id.startswith("audio.cpp:")
+                          or candidate.casefold() == repo_id.casefold()):
+            package_repo = candidate
+            package_revision = str(download.get("revision", "main"))
+            break
+    if not package_repo:
+        return None
+    try:
+        from huggingface_hub import hf_hub_download
+        readme = Path(hf_hub_download(
+            repo_id=package_repo, filename="README.md",
+            revision=package_revision, token=config.TOKEN))
+        rows = readme.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return None
+    family = backend.family.casefold()
+    for row in rows:
+        if not row.lstrip().startswith("|") or family not in row.casefold():
+            continue
+        cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        license_cell = cells[-1]
+        linked = re.search(r"\[([^\]]+)\]\([^)]+\)", license_cell)
+        value = linked.group(1) if linked else license_cell.strip("` ")
+        canonical = re.search(
+            r"(?i)\b(Apache-2\.0|MIT|BSD-2-Clause|BSD-3-Clause|"
+            r"CC-BY-4\.0|CC-BY-3\.0|CC0-1\.0)\b", value)
+        if canonical:
+            value = canonical.group(1)
+        if value and value.casefold() not in {"-", "unknown", "n/a"}:
+            return value
+    return None
 
 
 def audiocpp_source_plan(repo_id: str, backend: voice.VoiceBackend,
@@ -452,7 +526,8 @@ def _audiocpp_spec(audio_dir: Path, family: str) -> tuple[Path, dict]:
     return path, spec
 
 
-def _audiocpp_tensor_inputs(source: Path, spec: dict) -> list[str]:
+def _audiocpp_tensor_inputs(source: Path, spec: dict, *,
+                            match_gguf_namespaces: bool = False) -> list[str]:
     """Resolve the generic safetensors input contract from a model spec."""
     source_contract = next((item for item in spec.get("sources", [])
                             if item.get("format") == "safetensors"), None)
@@ -460,6 +535,13 @@ def _audiocpp_tensor_inputs(source: Path, spec: dict) -> list[str]:
         raise voice.VoiceValidationError(
             f"audio.cpp {spec['family']} has no safetensors conversion contract; "
             "use one of the GGUF packages declared by that backend catalog")
+    gguf_contract = next((item for item in spec.get("sources", [])
+                          if item.get("format") == "gguf"), None)
+    if match_gguf_namespaces and gguf_contract is None:
+        raise voice.VoiceValidationError(
+            f"audio.cpp {spec['family']} has no GGUF conversion contract")
+    output_tensors = (gguf_contract.get("tensors", {})
+                      if gguf_contract is not None else {})
     roots = source_contract.get("roots", {})
     inputs = []
     missing = []
@@ -477,7 +559,21 @@ def _audiocpp_tensor_inputs(source: Path, spec: dict) -> list[str]:
         path = (source / root_value / relative).resolve()
         if not path.is_file():
             missing.append(f"{namespace}={path}")
-        inputs.append(f"{namespace}={path}")
+        output_namespace = namespace
+        if match_gguf_namespaces:
+            output_tensor = output_tensors.get(namespace)
+            if output_tensor is None:
+                raise voice.VoiceValidationError(
+                    f"audio.cpp {spec['family']} safetensors input "
+                    f"{namespace!r} has no GGUF tensor mapping")
+            output_namespace = (output_tensor.get("prefix", "")
+                                if isinstance(output_tensor, dict) else "")
+            if not isinstance(output_namespace, str):
+                raise voice.VoiceValidationError(
+                    f"audio.cpp {spec['family']} has an invalid GGUF prefix "
+                    f"for {namespace!r}")
+        inputs.append(
+            f"{output_namespace}={path}" if output_namespace else str(path))
     if missing:
         raise voice.VoiceValidationError(
             f"{spec['family']} source is missing audio.cpp-declared tensor "
@@ -488,8 +584,9 @@ def _audiocpp_tensor_inputs(source: Path, spec: dict) -> list[str]:
     return inputs
 
 
-def _prepare_audiocpp_tensor_sources(source: Path, spec: dict,
-                                     audio_dir: Path) -> list[str]:
+def _prepare_audiocpp_tensor_sources(
+        source: Path, spec: dict, audio_dir: Path, *,
+        match_gguf_namespaces: bool = False) -> list[str]:
     """Adapt source formats through audio.cpp's own pinned utilities.
 
     Some official repositories use a safe PyTorch weights-only checkpoint for
@@ -506,7 +603,8 @@ def _prepare_audiocpp_tensor_sources(source: Path, spec: dict,
     source_contract = next((item for item in spec.get("sources", [])
                             if item.get("format") == "safetensors"), None)
     if source_contract is None:
-        return _audiocpp_tensor_inputs(source, spec)
+        return _audiocpp_tensor_inputs(
+            source, spec, match_gguf_namespaces=match_gguf_namespaces)
 
     roots = source_contract.get("roots", {})
     for namespace, value in source_contract.get("tensors", {}).items():
@@ -542,12 +640,14 @@ def _prepare_audiocpp_tensor_sources(source: Path, spec: dict,
                 f"audio.cpp preparation package {package_id} did not produce "
                 f"a valid {expected.name}")
 
-    return _audiocpp_tensor_inputs(source, spec)
+    return _audiocpp_tensor_inputs(
+        source, spec, match_gguf_namespaces=match_gguf_namespaces)
 
 
 def convert_audiocpp_model(source: Path, backend: voice.VoiceBackend,
                            converter: Path, audio_dir: Path, output_dir: Path,
-                           quant: str) -> Path:
+                           quant: str, *,
+                           match_gguf_namespaces: bool = False) -> Path:
     """Create and inspect one self-contained audio.cpp-native GGUF."""
     quant = quant.upper()
     if quant not in voice.AUDIOCPP_QUANTS:
@@ -560,7 +660,8 @@ def convert_audiocpp_model(source: Path, backend: voice.VoiceBackend,
         command = [converter]
         spec_path, spec = _audiocpp_spec(audio_dir, backend.family)
         for tensor_input in _prepare_audiocpp_tensor_sources(
-                source, spec, audio_dir):
+                source, spec, audio_dir,
+                match_gguf_namespaces=match_gguf_namespaces):
             command += ["--input", tensor_input]
         command += [
             "--root", source,
@@ -1009,6 +1110,257 @@ def score_audiocpp_asr(backend: voice.VoiceBackend, model: Path,
     }
 
 
+def _mono_audio(path: Path, sample_rate: int) -> tuple[object, dict]:
+    import numpy as np
+    source_facts = voice.inspect_wav(path)
+    source_rate = source_facts["sample_rate"]
+    source = Path(path)
+    with tempfile.TemporaryDirectory(prefix="aqx-audio-resample-") as temp_dir:
+        if source_facts["sample_width"] != 2:
+            with wave.open(str(source), "rb") as wav:
+                raw = wav.readframes(wav.getnframes())
+            pcm = np.asarray(
+                list(voice._decode_samples(raw, source_facts["sample_width"])),
+                dtype=np.float64)
+            channels = source_facts["channels"]
+            if channels > 1:
+                pcm = pcm.reshape(-1, channels).mean(axis=1)
+            converted = np.rint(np.clip(pcm, -1.0, 1.0) * 32767).astype("<i2")
+            source = Path(temp_dir) / "source-pcm16.wav"
+            with wave.open(str(source), "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(source_rate)
+                wav.writeframes(converted.tobytes())
+        normalized = voice.resample_pcm16_wav(
+            source, Path(temp_dir) / "resampled.wav", sample_rate)
+        with wave.open(str(normalized), "rb") as wav:
+            samples = (np.frombuffer(wav.readframes(wav.getnframes()),
+                                     dtype="<i2").astype(np.float64)
+                       / 32768.0)
+    facts = {
+        "sample_rate": sample_rate,
+        "source_sample_rate": int(source_rate),
+        "seconds": len(samples) / sample_rate,
+        "rms": float(np.sqrt(np.mean(np.square(samples)))) if len(samples) else 0.0,
+        "peak": float(np.max(np.abs(samples))) if len(samples) else 0.0,
+        "finite": bool(np.isfinite(samples).all()),
+    }
+    return samples, facts
+
+
+def _fit_audio(samples, length: int):
+    import numpy as np
+    values = np.asarray(samples, dtype=np.float64)
+    if len(values) > length:
+        return values[:length]
+    if len(values) < length:
+        return np.pad(values, (0, length - len(values)))
+    return values
+
+
+def _si_sdr(reference, estimate) -> float:
+    import numpy as np
+    reference = np.asarray(reference, dtype=np.float64)
+    estimate = _fit_audio(estimate, len(reference))
+    reference = reference - reference.mean()
+    estimate = estimate - estimate.mean()
+    denominator = float(np.dot(reference, reference))
+    if denominator <= 1e-20:
+        raise voice.VoiceValidationError("SI-SDR reference is silent")
+    target = float(np.dot(estimate, reference) / denominator) * reference
+    noise = estimate - target
+    ratio = float(np.dot(target, target)) / max(
+        float(np.dot(noise, noise)), 1e-20)
+    return 10.0 * math.log10(max(ratio, 1e-20))
+
+
+def _separation_stems(out_dir: Path) -> tuple[Path, Path]:
+    files = sorted(out_dir.rglob("*.wav"))
+    vocal = next((path for path in files if "vocal" in path.name.casefold()), None)
+    other = [path for path in files if path != vocal]
+    accompaniment = next((path for path in other
+                          if any(word in path.name.casefold()
+                                 for word in ("instrumental", "accompaniment"))), None)
+    if vocal is None:
+        raise voice.VoiceValidationError(
+            f"audio.cpp separation emitted no vocal stem in {out_dir}")
+    if accompaniment is None and not other:
+        raise voice.VoiceValidationError(
+            f"audio.cpp separation emitted no accompaniment stems in {out_dir}")
+    return vocal, accompaniment or other[0]
+
+
+def score_audiocpp_separation(backend: voice.VoiceBackend, model: Path,
+                              runtime: Path, options: VoiceReleaseOptions,
+                              audio_dir: Path) -> dict:
+    import numpy as np
+
+    fixture_dir = config.VOICE_FIXTURES_DIR / "separation"
+    mixture, mixture_facts = _mono_audio(
+        fixture_dir / "mixture.wav", 44100)
+    speech, _ = _mono_audio(fixture_dir / "speech.wav", 44100)
+    accompaniment, _ = _mono_audio(
+        fixture_dir / "accompaniment.wav", 44100)
+    speech = _fit_audio(speech, len(mixture))
+    accompaniment = _fit_audio(accompaniment, len(mixture))
+    out_dir = model.parent / "quality" / model.stem / "stems"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    command = voice.audiocpp_sep_command(
+        runtime, backend, model, fixture_dir / "mixture.wav", out_dir)
+    execution = voice.run_checked(
+        command, timeout=options.runtime_timeout, cwd=audio_dir)
+    vocal_path, accompaniment_path = _separation_stems(out_dir)
+    vocal, vocal_facts = _mono_audio(vocal_path, 44100)
+    vocal = _fit_audio(vocal, len(speech))
+    if accompaniment_path.name.casefold() in ("instrumental.wav", "accompaniment.wav"):
+        inst, inst_facts = _mono_audio(accompaniment_path, 44100)
+        accompaniment_estimate = _fit_audio(inst, len(accompaniment))
+        accompaniment_paths = [str(accompaniment_path)]
+    else:
+        inst_paths = [path for path in sorted(out_dir.rglob("*.wav"))
+                      if path != vocal_path]
+        inst_facts = {}
+        estimates = [_fit_audio(_mono_audio(path, 44100)[0], len(accompaniment))
+                     for path in inst_paths]
+        accompaniment_estimate = np.sum(estimates, axis=0)
+        accompaniment_paths = [str(path) for path in inst_paths]
+    vocal_score = _si_sdr(speech, vocal)
+    accompaniment_score = _si_sdr(accompaniment, accompaniment_estimate)
+    vocal_mixture = _si_sdr(speech, mixture)
+    accompaniment_mixture = _si_sdr(accompaniment, mixture)
+    result = {
+        "audio_seconds": mixture_facts["seconds"],
+        "vocal_sisdr_db": round(vocal_score, 6),
+        "vocal_mixture_sisdr_db": round(vocal_mixture, 6),
+        "vocal_improvement_db": round(vocal_score - vocal_mixture, 6),
+        "accompaniment_sisdr_db": round(accompaniment_score, 6),
+        "accompaniment_mixture_sisdr_db": round(accompaniment_mixture, 6),
+        "accompaniment_improvement_db": round(
+            accompaniment_score - accompaniment_mixture, 6),
+        "output_paths": {
+            "vocal": str(vocal_path),
+            "accompaniment": accompaniment_paths,
+        },
+        "output_facts": {"vocal": vocal_facts, "accompaniment": inst_facts},
+        "elapsed_seconds": execution["elapsed_seconds"],
+        "command": command,
+        "cwd": str(audio_dir),
+    }
+    return result
+
+
+def score_audiocpp_vc(backend: voice.VoiceBackend, model: Path,
+                      runtime: Path, options: VoiceReleaseOptions,
+                      audio_dir: Path) -> dict:
+    fixture_dir = config.VOICE_FIXTURES_DIR
+    audio = fixture_dir / "jfk.wav"
+    voice_ref = options.speaker or fixture_dir / "vc-reference.wav"
+    output = model.parent / "quality" / model.stem / "converted.wav"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.unlink(missing_ok=True)
+    command = voice.audiocpp_vc_command(
+        runtime, backend, model, audio, voice_ref, output)
+    execution = voice.run_checked(
+        command, timeout=options.runtime_timeout, cwd=audio_dir)
+    _, facts = _mono_audio(output, 16000)
+    source, source_facts = _mono_audio(audio, 16000)
+    duration_delta = abs(facts["seconds"] - source_facts["seconds"])
+    waveform_valid = (facts["finite"] and facts["rms"] > 1e-3
+                      and duration_delta <= source_facts["seconds"] * 0.20)
+    asr_audio = output.with_name("converted-16khz.wav")
+    asr_result = None
+    if waveform_valid:
+        asr_runtime, asr_model = _tiny_whisper()
+        voice.resample_pcm16_wav(output, asr_audio)
+        fixture = load_fixtures(voice.ASR)[0]
+        asr_result = sanity.validate_asr_runtime(
+            asr_runtime, asr_model, asr_audio, fixture["transcript"],
+            output.with_name("converted-asr"),
+            language=fixture.get("language"),
+            timeout=options.runtime_timeout)
+    return {
+        "finite": facts["finite"],
+        "rms": round(facts["rms"], 6),
+        "peak": round(facts["peak"], 6),
+        "waveform_valid": waveform_valid,
+        "sample_rate": facts["sample_rate"],
+        "source_sample_rate": facts["source_sample_rate"],
+        "duration_seconds": round(facts["seconds"], 6),
+        "input_duration_seconds": round(source_facts["seconds"], 6),
+        "duration_delta_seconds": round(duration_delta, 6),
+        "roundtrip_wer": asr_result["wer"] if asr_result else None,
+        "transcript": asr_result["transcript"] if asr_result else None,
+        "output_path": str(output),
+        "asr_audio_path": str(asr_audio) if asr_result else None,
+        "elapsed_seconds": execution["elapsed_seconds"],
+        "asr_elapsed_seconds": (
+            asr_result["elapsed_seconds"] if asr_result else None),
+        "command": command,
+        "cwd": str(audio_dir),
+    }
+
+
+def _alignment_words(path: Path, sample_rate: int) -> list[dict]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    words = data.get("words", data) if isinstance(data, dict) else data
+    if not isinstance(words, list):
+        raise voice.VoiceValidationError(
+            "audio.cpp alignment output has no word list")
+    result = []
+    for item in words:
+        if not isinstance(item, dict):
+            raise voice.VoiceValidationError(
+                "audio.cpp alignment output contains an invalid word")
+        if "start_sample" in item:
+            start = float(item["start_sample"]) / sample_rate
+            end = float(item["end_sample"]) / sample_rate
+        else:
+            start = float(item.get("start", item.get("start_seconds")))
+            end = float(item.get("end", item.get("end_seconds")))
+        result.append({"word": str(item.get("word", "")),
+                       "start": start, "end": end})
+    return result
+
+
+def score_audiocpp_align(backend: voice.VoiceBackend, model: Path,
+                         runtime: Path, options: VoiceReleaseOptions,
+                         audio_dir: Path) -> dict:
+    fixture_dir = config.VOICE_FIXTURES_DIR
+    fixture = load_fixtures(voice.ASR)[0]
+    text = fixture["transcript"]
+    audio = fixture_dir / fixture["audio"]
+    words_out = model.parent / "quality" / model.stem / "words.json"
+    words_out.parent.mkdir(parents=True, exist_ok=True)
+    words_out.unlink(missing_ok=True)
+    command = voice.audiocpp_align_command(
+        runtime, backend, model, audio, text, fixture.get("language") or "en",
+        words_out)
+    execution = voice.run_checked(
+        command, timeout=options.runtime_timeout, cwd=audio_dir)
+    facts = voice.inspect_wav(audio)
+    words = _alignment_words(words_out, facts["sample_rate"])
+    expected_count = len(voice.normalize_transcript(text))
+    starts = [word["start"] for word in words]
+    ends = [word["end"] for word in words]
+    valid = (len(words) == expected_count
+             and all(0 <= start < end <= facts["seconds"]
+                     for start, end in zip(starts, ends))
+             and all(left <= right for left, right in zip(starts, starts[1:]))
+             and all(left <= right for left, right in zip(ends, ends[1:])))
+    return {
+        "word_count": len(words),
+        "expected_word_count": expected_count,
+        "valid": valid,
+        "duration_seconds": facts["seconds"],
+        "words": words,
+        "output_path": str(words_out),
+        "elapsed_seconds": execution["elapsed_seconds"],
+        "command": command,
+        "cwd": str(audio_dir),
+    }
+
+
 def feasibility(bundle: voice.VoiceBundle, quality: dict | None = None,
                 ram_gb: float | None = None, vram_gb: float | None = None) -> dict:
     quality = quality or {}
@@ -1207,6 +1559,12 @@ def run_audiocpp_tts_release(repo_id: str, target_repo: str,
                 source, backend, converter, audio_dir, models, quant)
             primary_member = voice.BundleMember(primary, "primary", quant=quant)
             bundle_source, bundle_revision = repo_id, revision
+        bundle_configuration = {
+            "sample_rate": 16_000,
+            "audio_cpp_revision": _git_revision(audio_dir),
+            "package_format": "standalone GGUF with embedded model spec",
+            "audio_cpp_package": package_id,
+        }
         bundle = voice.VoiceBundle(
             backend=backend,
             primary=primary_member,
@@ -1368,13 +1726,20 @@ def run_asr_release(repo_id: str, target_repo: str,
             "baseline": baseline, "results": results}
 
 
-def run_audiocpp_asr_release(repo_id: str, target_repo: str,
-                             options: VoiceReleaseOptions) -> dict:
-    """Convert and quality-gate any ASR family in audio.cpp's catalog."""
+def _run_audiocpp_release(repo_id: str, target_repo: str,
+                          options: VoiceReleaseOptions, track: str,
+                          score, gate) -> dict:
     from ..runtime_control import prepare_voice_runtimes
-    prepare_voice_runtimes(repo_id, "audio.cpp", voice.ASR, persist=True)
-    backend = voice.backend_for(repo_id, track=voice.ASR, family=options.family)
+    backend = voice.backend_for(repo_id, track=track, family=options.family)
     assert backend is not None
+    source_info = (source_metadata(repo_id, family=options.family)
+                   if track in (voice.SEP, voice.VC, voice.ALIGN) else {})
+    license_name = source_info.get("license")
+    if track in (voice.SEP, voice.VC, voice.ALIGN) and options.publish \
+            and not license_name:
+        raise voice.VoiceValidationError(
+            "licence undetermined; cannot publish")
+    prepare_voice_runtimes(repo_id, "audio.cpp", track, persist=True)
     package_mode = _audiocpp_package_reference(repo_id, backend)
     if package_mode:
         audio_dir, runtime, converter = ensure_audiocpp_tools()
@@ -1383,39 +1748,53 @@ def run_audiocpp_asr_release(repo_id: str, target_repo: str,
         revision = f"audio.cpp-{AUDIOCPP_REVISION}"
     else:
         backend, source, revision, runtime, converter, audio_dir, models = \
-            prepare_audiocpp_source(repo_id, voice.ASR, options.family)
+            prepare_audiocpp_source(repo_id, track, options.family)
     requested = options.quants or list(voice.available_quants(repo_id, backend))
     baseline_quant = next((quant for quant in ("BF16", "F16", "F32", "ORIG")
                            if quant in requested), requested[0])
     package_artifacts = {}
 
     def prepare(quant):
+        started = time.perf_counter()
         if not package_mode:
             assert source is not None
+            conversion_options = (
+                {"match_gguf_namespaces": True}
+                if track in (voice.SEP, voice.VC, voice.ALIGN) else {})
             model = convert_audiocpp_model(
-                source, backend, converter, audio_dir, models, quant)
-            return model, (model,), None
+                source, backend, converter, audio_dir, models, quant,
+                **conversion_options)
+            return model, (model,), None, time.perf_counter() - started
         runtime_model, paths, package_id = install_audiocpp_package(
             audio_dir, backend, repo_id, models, quant)
-        package_artifacts[quant] = (runtime_model, paths, package_id)
-        return runtime_model, paths, package_id
+        elapsed = time.perf_counter() - started
+        package_artifacts[quant] = (runtime_model, paths, package_id, elapsed)
+        return runtime_model, paths, package_id, elapsed
 
-    baseline_model, _, _ = prepare(baseline_quant)
-    baseline = score_audiocpp_asr(backend, baseline_model, runtime, options)
+    baseline_model, _, _, baseline_prepare_seconds = prepare(baseline_quant)
+    baseline = score(backend, baseline_model, runtime, options, audio_dir)
+    if track != voice.ASR:
+        baseline["model_prepare_seconds"] = round(baseline_prepare_seconds, 6)
     results = {}
     accepted = []
     for quant in requested:
         if quant == baseline_quant:
-            model, paths, package_id = (package_artifacts.get(quant)
-                                        or (baseline_model,
-                                            (baseline_model,), None))
+            model, paths, package_id, prepare_seconds = (
+                package_artifacts.get(quant)
+                or (baseline_model, (baseline_model,), None,
+                    baseline_prepare_seconds))
         else:
-            model, paths, package_id = prepare(quant)
+            model, paths, package_id, prepare_seconds = prepare(quant)
         quality = (baseline if quant == baseline_quant else
-                   score_audiocpp_asr(backend, model, runtime, options))
+                   score(backend, model, runtime, options, audio_dir))
         quality = dict(quality)
-        quality["regression"] = voice.asr_regression(
-            quality["wer"], baseline["wer"], options.max_wer_regression)
+        if track == voice.ASR:
+            quality["regression"] = gate(
+                quality, baseline, quant == baseline_quant)
+        else:
+            quality["task_gate"] = gate(
+                quality, baseline, quant == baseline_quant)
+            quality["model_prepare_seconds"] = round(prepare_seconds, 6)
         primary = next((path for path in paths
                         if path.suffix.casefold() == ".gguf"), paths[0])
         if package_id:
@@ -1427,34 +1806,47 @@ def run_audiocpp_asr_release(repo_id: str, target_repo: str,
             path, "package-member",
             hub_path=(str(path.relative_to(models)) if package_mode else None),
             quant=quant) for path in paths if path != primary)
+        bundle_configuration = {
+            "sample_rate": 16_000,
+            "audio_cpp_revision": _git_revision(audio_dir),
+            "package_format": "standalone GGUF with embedded model spec",
+            "audio_cpp_package": package_id,
+        }
+        if track != voice.ASR:
+            bundle_configuration["source_license"] = license_name
+        role = {
+            voice.ASR: "asr-model",
+            voice.SEP: "separation-model",
+            voice.VC: "vc-model",
+            voice.ALIGN: "alignment-model",
+        }[track]
         bundle = voice.VoiceBundle(
             backend=backend,
             primary=voice.BundleMember(
-                primary, "asr-model",
+                primary, role,
                 hub_path=(str(primary.relative_to(models))
                           if package_mode else None), quant=quant),
             companions=companions,
             source_repo=bundle_source, source_revision=bundle_revision,
             quant=quant,
-            configuration={
-                "sample_rate": 16_000,
-                "audio_cpp_revision": _git_revision(audio_dir),
-                "package_format": "standalone GGUF with embedded model spec",
-                "audio_cpp_package": package_id,
-            },
+            configuration=bundle_configuration,
             quality=quality,
             runtime_model=model if package_mode else None,
         )
-        passed = quality["regression"]["passed"]
+        passed = (quality["regression"]["passed"] if track == voice.ASR
+                  else quality["task_gate"]["passed"])
         entry = {"quality": quality, "feasibility": feasibility(bundle, quality),
                  "published": False,
                  "reason": ("accepted and waiting for atomic bundle publication"
-                            if passed else "WER regression gate failed")}
+                            if passed else (
+                                "WER regression gate failed" if track == voice.ASR
+                                else "native task quality gate failed"))}
         if passed:
             accepted.append(bundle)
         results[quant] = entry
     if accepted and options.publish:
-        publication = publish_bundle(_aggregate_bundles(accepted), target_repo)
+        publication = publish_bundle(_aggregate_bundles(accepted), target_repo,
+                                     license_name=license_name)
         for bundle in accepted:
             results[bundle.quant]["publication"] = publication
             results[bundle.quant]["published"] = True
@@ -1462,3 +1854,120 @@ def run_audiocpp_asr_release(repo_id: str, target_repo: str,
     return {"backend": backend.id, "source": repo_id, "target": target_repo,
             "baseline_quant": baseline_quant, "baseline": baseline,
             "results": results}
+
+
+def _asr_quality_gate(candidate: dict, baseline: dict,
+                      is_baseline: bool, options: VoiceReleaseOptions) -> dict:
+    return voice.asr_regression(
+        candidate["wer"], baseline["wer"], options.max_wer_regression)
+
+
+def _separation_quality_gate(candidate: dict, baseline: dict,
+                             is_baseline: bool) -> dict:
+    if is_baseline:
+        metrics = {
+            "vocal_improvement_db": candidate["vocal_improvement_db"],
+            "accompaniment_improvement_db":
+                candidate["accompaniment_improvement_db"],
+        }
+        return {**metrics, "minimum_improvement_db": 6.0,
+                "passed": all(value >= 6.0 for value in metrics.values())}
+    deltas = {
+        "vocal_delta_db": candidate["vocal_sisdr_db"]
+                         - baseline["vocal_sisdr_db"],
+        "accompaniment_delta_db": candidate["accompaniment_sisdr_db"]
+                                  - baseline["accompaniment_sisdr_db"],
+    }
+    baseline_passed = (baseline["vocal_improvement_db"] >= 6.0
+                       and baseline["accompaniment_improvement_db"] >= 6.0)
+    return {**deltas, "minimum_delta_db": -1.0,
+            "baseline_passed": baseline_passed,
+            "passed": (baseline_passed
+                       and all(value >= -1.0 for value in deltas.values()))}
+
+
+def _vc_quality_gate(candidate: dict, baseline: dict,
+                     is_baseline: bool) -> dict:
+    waveform_passed = candidate.get("waveform_valid", True)
+    if is_baseline:
+        return {"roundtrip_wer": candidate["roundtrip_wer"],
+                "maximum_wer": 0.35,
+                "waveform_valid": waveform_passed,
+                "passed": (waveform_passed
+                           and candidate["roundtrip_wer"] is not None
+                           and candidate["roundtrip_wer"] <= 0.35)}
+    if baseline["roundtrip_wer"] is None:
+        return {"roundtrip_wer": candidate["roundtrip_wer"],
+                "baseline_wer": None, "maximum_wer": None,
+                "waveform_valid": waveform_passed,
+                "baseline_passed": False, "passed": False}
+    limit = baseline["roundtrip_wer"] + 0.10
+    baseline_passed = (baseline.get("waveform_valid", True)
+                       and baseline["roundtrip_wer"] <= 0.35)
+    return {"roundtrip_wer": candidate["roundtrip_wer"],
+            "baseline_wer": baseline["roundtrip_wer"],
+            "maximum_wer": round(limit, 6),
+            "waveform_valid": waveform_passed,
+            "baseline_passed": baseline_passed,
+            "passed": (baseline_passed and waveform_passed
+                       and candidate["roundtrip_wer"] is not None
+                       and candidate["roundtrip_wer"] <= limit + 1e-12)}
+
+
+def _alignment_quality_gate(candidate: dict, baseline: dict,
+                            is_baseline: bool) -> dict:
+    if is_baseline:
+        return {"word_count": candidate["word_count"],
+                "valid": candidate.get("valid", True),
+                "passed": candidate.get("valid", True)}
+    candidate_boundaries = [value for word in candidate["words"]
+                            for value in (word["start"], word["end"])]
+    baseline_boundaries = [value for word in baseline["words"]
+                           for value in (word["start"], word["end"])]
+    deltas = [abs(left - right) for left, right
+              in zip(candidate_boundaries, baseline_boundaries)]
+    mean_delta = sum(deltas) / len(deltas) if deltas else float("inf")
+    max_delta = max(deltas, default=float("inf"))
+    return {"mean_boundary_delta_seconds": round(mean_delta, 6),
+            "max_boundary_delta_seconds": round(max_delta, 6),
+            "maximum_mean_delta_seconds": 0.05,
+            "maximum_boundary_delta_seconds": 0.20,
+            "valid": candidate.get("valid", True),
+            "baseline_valid": baseline.get("valid", True),
+            "passed": (baseline.get("valid", True)
+                       and candidate.get("valid", True)
+                       and mean_delta <= 0.05 + 1e-12
+                       and max_delta <= 0.20 + 1e-12)}
+
+
+def run_audiocpp_asr_release(repo_id: str, target_repo: str,
+                             options: VoiceReleaseOptions) -> dict:
+    def score_asr(backend, model, runtime, score_options, _audio_dir):
+        return score_audiocpp_asr(backend, model, runtime, score_options)
+
+    def gate_asr(candidate, baseline, is_baseline):
+        return _asr_quality_gate(candidate, baseline, is_baseline, options)
+
+    return _run_audiocpp_release(
+        repo_id, target_repo, options, voice.ASR, score_asr, gate_asr)
+
+
+def run_audiocpp_sep_release(repo_id: str, target_repo: str,
+                             options: VoiceReleaseOptions) -> dict:
+    return _run_audiocpp_release(
+        repo_id, target_repo, options, voice.SEP,
+        score_audiocpp_separation, _separation_quality_gate)
+
+
+def run_audiocpp_vc_release(repo_id: str, target_repo: str,
+                            options: VoiceReleaseOptions) -> dict:
+    return _run_audiocpp_release(
+        repo_id, target_repo, options, voice.VC, score_audiocpp_vc,
+        _vc_quality_gate)
+
+
+def run_audiocpp_align_release(repo_id: str, target_repo: str,
+                               options: VoiceReleaseOptions) -> dict:
+    return _run_audiocpp_release(
+        repo_id, target_repo, options, voice.ALIGN, score_audiocpp_align,
+        _alignment_quality_gate)

@@ -195,9 +195,35 @@ def start_text(models, options, *, user_approved, on_event=None):
 # =====================================================
 # voice
 # =====================================================
-def voice_plan(repo_id, *, target_repo=None, quants=None, family=None, hunt_forks=True,
-               language=None, speaker=None):
-    allowed, reason, backend = voice.execution_gate(repo_id, family=family)
+def _audio_cpp_catalog_blocker(track):
+    if track not in (voice.SEP, voice.VC, voice.ALIGN):
+        return None
+    from . import runtime_control
+    handle = runtime_control.selected_runtime("audio.cpp")
+    if handle is None:
+        return None
+    from .pipeline import voice_release
+    if handle.revision in (
+            voice_release.AUDIOCPP_REVISION,
+            voice_release.AUDIOCPP_REVISION_SHA):
+        return None
+    return (f"audio.cpp runtime {handle.revision} does not match the vendored "
+            f"model-spec catalog {voice_release.AUDIOCPP_REVISION}; install with "
+            "aqx runtime install audio.cpp --persistent --revision "
+            f"{voice_release.AUDIOCPP_REVISION_SHA}")
+
+
+def voice_plan(repo_id, *, target_repo=None, quants=None, task=None, family=None,
+               hunt_forks=True, language=None, speaker=None):
+    task_tracks = {
+        "text-to-speech": voice.TTS,
+        "automatic-speech-recognition": voice.ASR,
+        "audio-source-separation": voice.SEP,
+        "voice-conversion": voice.VC,
+        "forced-alignment": voice.ALIGN,
+    }
+    allowed, reason, backend = voice.execution_gate(
+        repo_id, track=task_tracks.get(task), family=family)
     if not allowed:
         leads = voice_release.find_backend_forks(repo_id) if hunt_forks else []
         return {"model": repo_id, "status": "blocked", "blocker": reason,
@@ -205,6 +231,11 @@ def voice_plan(repo_id, *, target_repo=None, quants=None, family=None, hunt_fork
                 "next": ("A lead must still prove its converter, model spec, bundle "
                          "contract, and smoke inference before execution."
                          if leads else "No installed backend or current fork/PR lead was found.")}
+    if blocker := _audio_cpp_catalog_blocker(backend.track):
+        return {"model": repo_id, "status": "blocked",
+                "task": task, "track": backend.track, "backend": backend.id,
+                "engine": backend.backend, "family": backend.family,
+                "blocker": blocker}
     available = voice.available_quants(repo_id, backend)
     requested = [voice.normalize_quant(backend, quant) for quant in (quants or available)]
     if unsupported := [quant for quant in requested if quant not in available]:
@@ -215,10 +246,28 @@ def voice_plan(repo_id, *, target_repo=None, quants=None, family=None, hunt_fork
     suffix = "GGUF" if backend.model_format.endswith("gguf") else "GGML"
     source_name = repo_id.split("/")[-1].replace(":", "-")
     tts = backend.track == voice.TTS
+    task = {
+        voice.TTS: "text-to-speech",
+        voice.ASR: "automatic-speech-recognition",
+        voice.SEP: "audio-source-separation",
+        voice.VC: "voice-conversion",
+        voice.ALIGN: "forced-alignment",
+    }[backend.track]
+    quality_gates = {
+        voice.TTS: ("audio integrity, silence/clipping, ASR round-trip WER/CER, "
+                    "then human listening review"),
+        voice.ASR: "fixed-corpus WER/CER regression versus base precision",
+        voice.SEP: ("both vocal and accompaniment SI-SDR improvements >= 6 dB "
+                    "versus mixture; other precisions within 1.0 dB of baseline"),
+        voice.VC: ("finite non-silent waveform within 20% of input duration; "
+                   "ASR round-trip WER <= 0.35 and within 0.10 of baseline"),
+        voice.ALIGN: ("word count and monotonic in-range boundaries; other precisions "
+                      "within mean 0.05 s and max 0.20 s of baseline"),
+    }
     result = {
         "model": repo_id,
         "status": "blocked" if missing_inputs else "ready",
-        "task": "text-to-speech" if tts else "automatic-speech-recognition",
+        "task": task,
         "target_repo": target_repo or f"{config.namespace()}/{source_name}-{suffix}",
         "track": backend.track, "backend": backend.id, "engine": backend.backend,
         "family": backend.family, "backend_status": backend.status,
@@ -235,14 +284,16 @@ def voice_plan(repo_id, *, target_repo=None, quants=None, family=None, hunt_fork
         "language": language, "speaker": speaker,
         "source_revision": source["revision"], "source_bytes": source["source_bytes"],
         "source_gated": source["gated"],
-        "quality_gate": ("audio integrity, silence/clipping, ASR round-trip WER/CER, "
-                         "then human listening review" if tts else
-                         "fixed-corpus WER/CER regression versus base precision"),
+        "quality_gate": quality_gates[backend.track],
         "review": "listening" if tts else "none",
         "publication": ("one atomic bundle commit of accepted quants after automated "
                         "gates and a recorded listening review" if tts else
-                        "one atomic bundle commit after the WER/CER regression gate"),
+                        "one atomic bundle commit after the WER/CER regression gate"
+                        if backend.track == voice.ASR else
+                        "atomic bundle of passing precisions after native task gates"),
     }
+    if backend.track in (voice.SEP, voice.VC, voice.ALIGN):
+        result["source_license"] = source.get("license")
     if missing_inputs:
         result["blocker"] = ("source repository is missing backend-declared tensor inputs: "
                              + ", ".join(item["required_path"] for item in missing_inputs))
@@ -270,8 +321,13 @@ def run_voice(plan, *, publish=True, human_review=None, family=None, **settings)
         pocket_language=settings["pocket_language"],
         human_review=Path(human_review) if human_review else None,
         family=family or plan.get("family"))
-    release = (voice_release.run_tts_release if plan["track"] == voice.TTS
-               else voice_release.run_asr_release)
+    release = {
+        voice.TTS: voice_release.run_tts_release,
+        voice.ASR: voice_release.run_asr_release,
+        voice.SEP: voice_release.run_audiocpp_sep_release,
+        voice.VC: voice_release.run_audiocpp_vc_release,
+        voice.ALIGN: voice_release.run_audiocpp_align_release,
+    }[plan["track"]]
     result = release(plan["model"], plan["target_repo"], options)
     return {"pipeline": VOICE, "run_id": run_id, **result}
 
@@ -348,7 +404,8 @@ def inspect(model, *, task=None, engine=None, family=None, hunt_forks=True):
         assessment = assessments_for([item.repo_id])[0]
         result.update(text=report.detail(assessment), assessment=assessment)
     elif item.pipeline == VOICE:
-        result["voice"] = voice_plan(item.repo_id, family=voice_family(item, family),
+        result["voice"] = voice_plan(item.repo_id, task=item.task,
+                                     family=voice_family(item, family),
                                      hunt_forks=hunt_forks)
     elif item.pipeline == RETRIEVAL:
         result["retrieval"] = retrieval_plan(item.repo_id, task=item.task, engine=item.engine)
@@ -392,7 +449,8 @@ def plan(models, *, task=None, engine=None, family=None, hunt_forks=True,
         output["text"] = text_plan(text_models, text or text_options())
     for name, r in ready:
         if r.pipeline == VOICE:
-            entry = voice_plan(r.repo_id, family=voice_family(r, family), hunt_forks=hunt_forks,
+            entry = voice_plan(r.repo_id, task=r.task,
+                               family=voice_family(r, family), hunt_forks=hunt_forks,
                                **{k: v for k, v in (voice_args or {}).items()
                                   if k in ("target_repo", "quants", "language", "speaker")})
         elif r.pipeline == MEDIA:
@@ -484,7 +542,8 @@ def publish(run_id, quant, *, user_approved):
     if selected is None:
         raise ValueError(f"{quant} has no accepted listening review in {record.id}")
     # Every accepted quant is republished together so bundle.json stays complete.
-    current = voice_plan(saved["model"], target_repo=saved.get("target_repo"), quants=accepted,
+    current = voice_plan(saved["model"], target_repo=saved.get("target_repo"),
+                         quants=accepted, task=saved.get("task"),
                          family=saved.get("family"), hunt_forks=False,
                          language=saved.get("language"), speaker=saved.get("speaker"))
     return run_voice(current, publish=True, family=saved.get("family"))

@@ -11,6 +11,13 @@ For explicit llama.cpp multimodal understanding, use
 `--task multimodal-understanding` with `aqx plan` or `aqx run`. This supports
 the implemented vision, document, video and ASR-style audio routes.
 `image-text-to-text` and `any-to-any` remain on text-generation by default.
+The audio.cpp voice pipeline also supports catalog-declared separation,
+voice-conversion and forced-alignment tasks; use `--task` when a Hub
+`audio-to-audio` tag does not identify the intended task.
+Select these routes with `--task audio-source-separation`,
+`--task voice-conversion` or `--task forced-alignment`. Native acceptance is
+model-specific; see [audio task status](docs/AUDIO_TASKS_STATUS.md) for
+accepted precisions, rejected families and licensing limits.
 
 Three ways to drive it. The CLI is the ground truth — the Claude Code skill and
 the API-key loop call exactly the same code, so nothing behaves differently
@@ -381,6 +388,36 @@ types accepted by `audiocpp_gguf` (`orig`, `f16`, `bf16`, `q8_0`, and the
 `q2_k` through `q6_k` family). A virtual `audio.cpp:<family>`, exact package id,
 or package repository is narrowed to the precisions actually published for
 that package. whisper.cpp plans all ten types printed by its native quantizer.
+
+### Separation, voice conversion and forced alignment
+
+The pinned audio.cpp catalog declares the families and packages available for
+these tasks. Use `--task` for ambiguous sources; an unmatched Hub
+`audio-to-audio` tag is deliberately blocked until you choose separation or
+voice conversion:
+
+```powershell
+aqx plan audio.cpp:bs_roformer --task audio-source-separation
+aqx run audio.cpp:bs_roformer --task audio-source-separation --no-publish -y
+aqx run audio.cpp:meanvc2 --task voice-conversion --no-publish -y
+aqx run Qwen/Qwen3-ForcedAligner-0.6B --task forced-alignment --no-publish -y
+```
+
+Separation gates both vocal and accompaniment SI-SDR improvement against the
+known-stem mixture baseline; later precisions must stay within 1 dB per stem.
+Voice conversion requires a finite, non-silent waveform within 20% of the
+input duration and an ASR round-trip WER at or below 0.35, with a 0.10
+precision-regression allowance. Speaker similarity is not measured. Alignment
+checks word count, monotonic in-range boundaries and precision agreement (mean
+boundary delta at most 0.05 seconds, maximum at most 0.20 seconds); there is
+no independent timing reference.
+
+Prebuilt package cards identify the package id and revision and state that the
+artifact was not converted by AgentQuantix. Source license information is
+recorded in the plan; publication is blocked if the license cannot be
+determined. `--no-publish` can still be used for evaluation. See
+[audio task status](docs/AUDIO_TASKS_STATUS.md) for tested families, precisions,
+results and limitations.
 
 If no installed catalog resolves the model, planning automatically searches
 publisher-owned forks and open PRs for llama.cpp, audio.cpp, whisper.cpp, and

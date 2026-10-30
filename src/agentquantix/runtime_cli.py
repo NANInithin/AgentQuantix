@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 
 from .agent import runtime_tools
@@ -64,6 +65,11 @@ def command(args):
             details["user_approved"] = True
             _print(runtime_tools.call(action + "_runtime", details))
             return 0
+        revision = getattr(args, "revision", None)
+        if action == "install" and revision is not None:
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", revision):
+                raise ValueError("--revision requires an exact 40-hex commit SHA; tags and branches are not accepted")
+            revision = revision.lower()
         check = runtime_tools.call("check_runtime_updates", {"engine": args.engine})
         _print(check)
         if action == "check":
@@ -72,6 +78,10 @@ def command(args):
         # The target displayed here is the one passed unchanged to preparation.
         # The manager resolves/fetches exact SHAs rather than a moving branch.
         target = check.get("target")
+        if action == "install" and revision is not None:
+            target = {"revision": revision, "ref": revision, "channel": "pinned",
+                      "repository": RUNTIMES[args.engine].repository}
+            _print({"status": "pinned", "target": target})
         if not target:
             status = runtime_tools.call("get_runtime_status", {"engine": args.engine})
             if action == "install" and status.get("installed"):
@@ -102,7 +112,8 @@ def command(args):
                 return 0
         result = runtime_tools.call("prepare_runtime", {
             "engine": args.engine, "persistent": persistent, "user_approved": True,
-            "update_approved": action == "update", "target_revision": target,
+            "update_approved": action == "update" or (action == "install" and revision is not None),
+            "target_revision": target,
             "compute_backend": args.compute_backend, "targets": args.target,
         })
         _print(result)
@@ -127,6 +138,8 @@ def add_parser(subparsers):
             item.set_defaults(persistent=None)
             item.add_argument("--compute-backend", default="auto")
             item.add_argument("--target", action="append", default=[], help="additional native executable target")
+            if name == "install":
+                item.add_argument("--revision", help="pin an exact 40-hex commit SHA; tags and branches are not accepted")
             item.add_argument("--yes", "-y", action="store_true", help="approve this runtime setup/update; independent of model --yes")
         elif name in ("adopt", "rollback", "prune"):
             item.add_argument("--yes", "-y", action="store_true", help="approve this runtime maintenance action")

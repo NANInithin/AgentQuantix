@@ -16,7 +16,10 @@ evaluation is complete for the tested models. SmolVLM2-500M-Video-Instruct
 passed F16 and all four configured text quants; Qwen3-ASR-0.6B also passed its
 full evaluated matrix. See [multimodal status](MULTIMODAL_STATUS.md).
 Remaining gaps include Windows/MSVC, GPU/Metal and real Hub publication. The
-next milestone is **0.5.5: expanded audio**.
+0.5.5 implementation adds audio.cpp source separation, voice conversion and
+forced alignment to the shared voice pipeline. See
+[audio task status](AUDIO_TASKS_STATUS.md) for the native matrix and remaining
+limitations. The next milestone is **0.5.6: vision.cpp**.
 
 0.5.2 summary: `agentquantix/tasks/` (registry + metadata router),
 `agentquantix/runs.py` (`text:`/`voice:`/`media:` run ids over existing records),
@@ -116,6 +119,35 @@ post-0.5.3 engine builders and task pipelines are not implemented yet.
   `/home/ubuntu/spike/acceptance/`.
 - Windows/MSVC, GPU/Metal and real Hub publication remain untested. See
   [multimodal status](MULTIMODAL_STATUS.md).
+
+### Expanded audio 0.5.5
+
+- audio.cpp separation (`sep`), voice conversion (`vc`) and forced alignment
+  (`align`) are catalog-derived voice tracks. New task specs use native task
+  gates and atomic bundles; the existing ASR path remains on the shared
+  generic release flow.
+- The real lifecycle runtime was pinned to audio.cpp v0.8.0,
+  `4af143229384fb6da3f373dc87de145ae954609b`. Linux CPU acceptance passed
+  BS-RoFormer Q8_0, MeanVC2 F32/Q4_K and Qwen3 Forced Aligner's full nine-type
+  source-conversion matrix. HTDemucs F16/Q8_0 failed the vocal SI-SDR gate.
+  The Qwen run initially found an input-namespace bug; commit `8b83640` fixes
+  it using the model-spec GGUF prefix contract, and the rerun passed. Its
+  package fallback was not needed.
+- The pinned Moonshine Streaming Tiny Q8_0 ASR regression passed at WER 0.0.
+  Its first run found that the generic command sent `--language en` to a
+  single-language runtime that rejects the option. The catalog-driven command
+  now omits a redundant language flag only for single-language backends;
+  multilingual Qwen3-ASR still receives its language. The failed and passing
+  run logs and result JSON are preserved under
+  `/home/ubuntu/spike/acceptance/`.
+- Separation uses the deterministic speech-plus-chord mixture and true stems;
+  VC uses a deterministic pitch-shifted JFK reference; alignment reuses JFK
+  and its transcript. See `fixtures/voice/` and
+  `scripts/generate_audio_task_fixtures.py`.
+- Audio task acceptance data, negative results, licenses, package/source
+  provenance and per-precision metrics are in
+  [AUDIO_TASKS_STATUS.md](AUDIO_TASKS_STATUS.md). Native acceptance and
+  cross-platform/Hub publication limitations are recorded there.
 
 ### Existing pipeline integration
 

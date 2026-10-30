@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.5 — unreleased development
+
+- Extend the catalog-driven audio.cpp voice pipeline with source separation,
+  voice conversion and forced alignment. Each task has native quality gates,
+  precision regression checks and atomic bundles.
+- Add deterministic CC0 separation and voice-reference fixtures. Keep audio
+  generation, classification and standalone VAD explicitly blocked with
+  licensing or upstream-support reasons.
+- Record source licensing and disclose prebuilt package provenance and
+  measurement limits in task plans and model cards.
+- Native Linux CPU acceptance on audio.cpp v0.8.0 accepts BS-RoFormer Q8_0,
+  MeanVC2 F32/Q4_K, all nine Qwen3 aligner precisions, and the Moonshine
+  Streaming Tiny Q8_0 ASR regression; HTDemucs fails the separation gate. No
+  enhancement path improved SNR.
+- The Moonshine regression exposed a redundant language option for
+  single-language ASR backends. The command now omits that flag when catalog
+  metadata declares a single language.
+- See [audio task status](docs/AUDIO_TASKS_STATUS.md) for native results and
+  untested categories.
+
 ## 0.5.4 — unreleased development
 
 - Add the `multimodal-understanding` llama.cpp pipeline for explicit vision and
