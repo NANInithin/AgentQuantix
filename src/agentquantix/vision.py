@@ -29,6 +29,13 @@ def family_for(repo_id, config=None, family=None, *, engine=None, task=None):
         return next((item for item in catalog
                      if item["family"].casefold() == requested), None)
     repo = (repo_id or "").casefold()
+    if ":" in repo:
+        target_engine, target_family = repo.split(":", 1)
+        targeted = next((item for item in catalog
+                         if item.get("engine", "vision.cpp").casefold() == target_engine
+                         and item["family"].casefold() == target_family), None)
+        if targeted:
+            return targeted
     match = next((item for item in catalog
                   if any(repo == value.casefold() for value in item["repos"])), None)
     if match:
@@ -37,11 +44,14 @@ def family_for(repo_id, config=None, family=None, *, engine=None, task=None):
     model_type = str(config.get("model_type") or "").casefold()
     architectures = {str(value).casefold()
                      for value in config.get("architectures", [])}
+    depth_type = str(config.get("depth_estimation_type") or "").casefold()
     return next((item for item in catalog
-                 if (model_type and model_type in {value.casefold()
-                                                   for value in item["model_types"]})
-                 or bool(architectures & {value.casefold()
-                                          for value in item["architectures"]})), None)
+                 if ((model_type and model_type in {value.casefold()
+                                                    for value in item["model_types"]})
+                     or bool(architectures & {value.casefold()
+                                              for value in item["architectures"]}))
+                 and (item.get("depth_estimation_type") != "metric" or depth_type == "metric")
+                 and (item.get("depth_estimation_type") != "relative" or depth_type != "metric")), None)
 
 
 def _tensor_dtypes(safetensors_path):

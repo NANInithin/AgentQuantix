@@ -30,10 +30,55 @@
     "converter_arch": "depth-anything",
     "cli_command": "depth-anything",
     "source_files": ["*.safetensors", "*.pt", "*.pth"],
-    "repos": ["depth-anything/Depth-Anything-V2-Small-hf"],
+    "repos": ["depth-anything/Depth-Anything-V2-Small-hf", "depth-anything/Depth-Anything-V2-Small"],
     "model_types": ["depth_anything"],
     "architectures": ["DepthAnythingForDepthEstimation"],
+    "depth_estimation_type": "relative",
     "licence_notes": "Apache-2.0"
+  },
+  {
+    "engine": "depth-anything.cpp",
+    "family": "da2-metric-hypersim-small",
+    "task": "depth-estimation",
+    "converter_arch": "vits",
+    "cli_command": "depth",
+    "source_files": ["depth_anything_v2_metric_hypersim_vits.pth"],
+    "repos": ["depth-anything/Depth-Anything-V2-Metric-Hypersim-Small"],
+    "model_types": ["depth_anything"],
+    "architectures": ["DepthAnythingForDepthEstimation"],
+    "depth_estimation_type": "metric",
+    "max_depth": 20,
+    "source": {
+      "kind": "huggingface",
+      "repo": "depth-anything/Depth-Anything-V2-Metric-Hypersim-Small",
+      "revision": "3bc65d4e14a6786a61acec16453c50e12bf5f338",
+      "weight_file": "depth_anything_v2_metric_hypersim_vits.pth",
+      "sha256": "b782898d8a3e8be1f639de33837ed85e9b4b73e40f8f5e5cd99067588d722545",
+      "size": 99222290,
+      "licence": "Apache-2.0"
+    },
+    "licence_notes": "Metric depth in metres; indoor Hypersim training; max depth 20 m; weights Apache-2.0"
+  },
+  {
+    "engine": "depth-anything.cpp",
+    "family": "da3-small",
+    "task": "depth-estimation",
+    "converter_arch": "da3",
+    "cli_command": "depth",
+    "source_files": ["model.safetensors", "config.json"],
+    "repos": ["depth-anything/DA3-SMALL"],
+    "model_types": ["depth_anything_3"],
+    "architectures": ["DepthAnything3"],
+    "source": {
+      "kind": "huggingface",
+      "repo": "depth-anything/DA3-SMALL",
+      "revision": "e08cab65ca0ec38e7826075418411ab90cab4da3",
+      "weight_file": "model.safetensors",
+      "sha256": "364492e38a3a06d221ac75da7f6621ada3f2361cd24fde11ba79091e9f40efcf",
+      "size": 137248940,
+      "licence": "Apache-2.0"
+    },
+    "licence_notes": "Relative depth plus camera pose and intrinsics; confidence output not evaluated; weights Apache-2.0"
   },
   {
     "engine": "ultralytics-ggml",

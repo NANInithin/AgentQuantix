@@ -33,6 +33,7 @@ _TARGETS = {
     "vision.cpp": ("vision-cli",),
     "ultralytics-ggml": ("yolo-cli",),
     "rf-detr.cpp": ("rfdetr-cli",),
+    "depth-anything.cpp": ("da3-cli",),
 }
 _NONFINITE = re.compile(
     r"(?<![\w/\\.\-])(?:nan|[+-]?inf(?:inity)?)(?![\w/\\.\-])"
@@ -87,6 +88,21 @@ def _vision_cmake():
     return cmake, output
 
 
+def _depth_avx512f_enabled(cpuinfo_path="/proc/cpuinfo", system=None):
+    if (system or platform.system()) != "Linux":
+        return False
+    try:
+        lines = Path(cpuinfo_path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        key, separator, values = line.partition(":")
+        if (separator and key.strip().casefold() in ("flags", "features")
+                and "avx512f" in values.casefold().split()):
+            return True
+    return False
+
+
 def fingerprint(engine, compute_backend="auto", required_targets=None):
     """Return the effective native configuration used to key a candidate build.
 
@@ -99,9 +115,11 @@ def fingerprint(engine, compute_backend="auto", required_targets=None):
     backend = compute_backend
     if backend == "auto":
         backend = ("cpu" if engine in ("clip.cpp", "vision.cpp",
-                                      "ultralytics-ggml", "rf-detr.cpp") else
+                                      "ultralytics-ggml", "rf-detr.cpp",
+                                      "depth-anything.cpp") else
                    "cuda" if native_build.has_cuda_toolkit() else "cpu")
-    if engine in ("clip.cpp", "vision.cpp", "ultralytics-ggml", "rf-detr.cpp") and backend != "cpu":
+    if engine in ("clip.cpp", "vision.cpp", "ultralytics-ggml", "rf-detr.cpp",
+                  "depth-anything.cpp") and backend != "cpu":
         raise RuntimeBuildError(f"{engine} CUDA is not verified")
     if engine != "stable-diffusion.cpp" and backend not in ("cpu", "cuda"):
         raise RuntimeBuildError(f"{engine}: compute backend not yet verified: {backend}")
@@ -139,6 +157,13 @@ def fingerprint(engine, compute_backend="auto", required_targets=None):
                  "-DGGML_VULKAN=OFF", "-DGGML_NATIVE=ON", "-DBUILD_SHARED_LIBS=ON",
                  "-DRFDETR_BUILD_CLI=ON", "-DRFDETR_BUILD_TESTS=OFF",
                  "-DGGML_CCACHE=ON"]
+    elif engine == "depth-anything.cpp":
+        avx512f = _depth_avx512f_enabled()
+        flags = ["-DCMAKE_BUILD_TYPE=Release", "-DDA_BUILD_CLI=ON",
+                 "-DDA_BUILD_TESTS=OFF", "-DDA_GGML_CUDA=OFF",
+                 "-DDA_GGML_METAL=OFF", "-DDA_GGML_VULKAN=OFF",
+                 "-DDA_GGML_LLAMAFILE=ON",
+                 f"-DDA_HAS_AVX512F={'ON' if avx512f else 'OFF'}"]
     elif engine == "audio.cpp":
         flags = ["-DCMAKE_BUILD_TYPE=Release", "-DAUDIOCPP_DEPLOYMENT_BUILD=ON",
                  "-DAUDIOCPP_MODEL_SET=full",
@@ -206,6 +231,8 @@ def _git(source, *arguments):
 
 def _find_binary(build_dir, name):
     roots = [Path(build_dir) / "bin", Path(build_dir)]
+    if name == "da3-cli":
+        roots.insert(1, Path(build_dir) / "examples" / "cli")
     for root in roots:
         for candidate in (root / f"{name}.exe", root / "Release" / f"{name}.exe",
                           root / name, root / "Release" / name):
@@ -224,6 +251,8 @@ def _submodules_for(engine):
     if engine == "ultralytics-ggml":
         return ["cpp_ggml/third_party/ggml"]
     if engine == "rf-detr.cpp":
+        return ["third_party/ggml"]
+    if engine == "depth-anything.cpp":
         return ["third_party/ggml"]
     return []
 
@@ -245,6 +274,11 @@ def _resources(engine, source, build_dir):
         "whisper.cpp": ("models/convert-h5-to-ggml.py", "models/convert-pt-to-ggml.py"),
         "ultralytics-ggml": ("cpp_ggml/scripts/convert_yolo_to_gguf.py",),
         "rf-detr.cpp": ("scripts/convert_rfdetr_to_gguf.py",),
+        "depth-anything.cpp": (
+            "scripts/convert_da2_to_gguf.py", "scripts/convert_da3_to_gguf.py",
+            "scripts/da2_reference.py", "scripts/da3_reference.py",
+            "scripts/gguf_keys.py",
+        ),
     }.get(engine, ())
     resources = {name: {"path": str(Path(source) / name), "sha256": _hash(Path(source) / name)}
                  for name in paths if (Path(source) / name).is_file()}

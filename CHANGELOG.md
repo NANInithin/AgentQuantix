@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.8 — unreleased development
+
+- Add pinned `depth-anything.cpp` support for DA2 metric Hypersim Small and
+  DA3-Small. Convert F32, derive F16/Q8_0/Q4_K with the native quantizer,
+  evaluate against the PyTorch references on the license-filtered COCO sample,
+  fail closed on baseline gates, and publish accepted precisions atomically.
+- Keep DA2 relative Small on vision.cpp. Keep SAM3 blocked because official
+  weights are gated and no ungated source has verifiable conversion provenance.
+- See [depth and SAM status](docs/DEPTH_SAM_STATUS.md) for the native result
+  matrix, source and engine licenses, and sample limitations.
+
 ## 0.5.7 — unreleased development
 
 - Add family-routed `ultralytics-ggml` and `rf-detr.cpp` detection support with
