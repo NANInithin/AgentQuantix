@@ -4,7 +4,7 @@
 
 | Task | Catalog family | Engine | Status |
 |---|---|---|---|
-| Object detection | `rfdetr-nano` | `rf-detr.cpp` | F32 rejected; F16 and Q8_0 pass |
+| Object detection | `rfdetr-nano` | `rf-detr.cpp` | Rejected on this sample; no precision passes |
 | Instance segmentation | `rfdetr-seg-nano` | `rf-detr.cpp` | F32 and F16 pass |
 | Keypoint detection | `yolo26n-pose` | `ultralytics-ggml` | F32, F16 and Q8_0 pass |
 | Image classification | `yolo26n-cls` | `ultralytics-ggml` | F32, F16 and Q8_0 pass narrow parity |
@@ -21,6 +21,9 @@ at run time with pinned SHA-256 values. The small annotation subset is
 attributed under CC BY 4.0; per-image license and URL details are in
 [`fixtures/detection/LICENSE.md`](../src/agentquantix/fixtures/detection/LICENSE.md).
 Results are a small-sample estimate, not broad model validation.
+The `rfdetr-nano` family remains in the catalog so the run-time quality gate
+can decide on each evaluation. It is not an accepted object-detection family
+in 0.5.7 on this sample.
 
 D(0.25) retains reference and native detections scoring at least 0.25, performs
 class-agnostic greedy matching by descending box IoU, and accepts matches at
@@ -61,18 +64,23 @@ PyTorch reference; lower precisions are compared with native F32.
 | Family | Precision | Result | Key D(0.25)/quality evidence |
 |---|---|---|---|
 | RF-DETR nano | F32 | Reject | Recall 0.9478; precision 0.9909; class agreement 1.0; mean IoU 0.9967; mAP50 0.7514 vs reference 0.7498 |
-| RF-DETR nano | F16, Q8_0 | Pass | Both pass the fixed lower-precision gates |
-| RF-DETR nano | Q4_0, Q4_1, Q5_0, Q5_1 | Reject | Fail at least one fixed lower-precision gate |
+| RF-DETR nano | F16, Q8_0 | Reject | Each matches F32 closely, but a lower precision cannot pass when its F32 baseline fails reference parity |
+| RF-DETR nano | Q4_0, Q4_1, Q5_0, Q5_1 | Reject | Baseline failed; each also fails at least one lower-precision gate |
 | RF-DETR seg-nano | F32, F16 | Pass | F32 recall/precision 0.9735/0.9910; box/mask IoU 0.9863/0.9895; mask mAP50 0.5441 vs 0.5566 reference |
 | RF-DETR seg-nano | Q4_0, Q4_1, Q5_0, Q5_1, Q8_0 | Reject | Fail at least one fixed lower-precision gate |
 | YOLO26n pose | F32, F16, Q8_0 | Pass | F32 recall/precision 1.0/1.0; mean IoU 0.9993; keypoint error 0.521 px |
 | YOLO26n classification | F32, F16, Q8_0 | Narrow parity pass | F32 top-1 1.0 and top-5 overlap 0.92; Q8_0 overlap 0.90 |
 
 RF-DETR nano F32 misses the 0.95 reference-recall gate; its matched-box
-quality and COCO mAP50 delta pass. Classification is only a ten-image
-reference-parity result, not a classification-quality evaluation. YOLO26n
-pose's COCO mAP50 is low on this selected subset, so the result is limited to
-the stated reference-parity gates.
+quality and COCO mAP50 delta pass. The run records `baseline_failed: true`
+with `ref_recall<0.95`; every precision is quality-rejected, the run status is
+`rejected`, and no bundle is produced. Thus 0.5.7 has no accepted
+object-detection family on this sample. The spike follow-up parity result in
+the preceding table did not replace the release gate's evaluation; the native
+run-time result is authoritative for release status. Classification is only
+a ten-image reference-parity result, not a classification-quality evaluation.
+YOLO26n pose's COCO mAP50 is low on this selected subset, so the result is
+limited to the stated reference-parity gates.
 
 Native results and per-run wall/RSS records are retained under
 `/home/ubuntu/spike/acceptance/detect-*-results.json`; detailed native logs
