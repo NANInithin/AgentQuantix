@@ -197,9 +197,11 @@ def run_release(plan, *, user_approved, publish=False, runtime=None,
     if result_path.is_file():
         saved = json.loads(result_path.read_text(encoding="utf-8"))
         old = saved.get("plan") or {}
+        saved_runtime_identity = (saved.get("runtime_snapshot") or {}).get("identity")
+        runtime_identity = runtime.snapshot().get("identity")
         same_run = all(old.get(key) == plan.get(key) for key in (
             "model", "task", "family", "source", "quants", "runtime_revision",
-            "evaluation_version"))
+            "evaluation_version")) and saved_runtime_identity == runtime_identity
         if same_run and all(
                 item.get("status") == "conversion-or-evaluation-failed"
                 or (Path(item["path"]).is_file() and

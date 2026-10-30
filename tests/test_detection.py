@@ -286,6 +286,19 @@ def test_partial_precision_publish_is_atomic_and_resumable(monkeypatch, tmp_path
                                    evaluate=lambda *_: pytest.fail("resume reevaluated"))
     assert resumed["published"] is True
 
+    reevaluated = []
+    changed_runtime = SimpleNamespace(
+        revision=runtime.revision, source=runtime_source,
+        binaries=runtime.binaries,
+        snapshot=lambda: {"revision": "pinned", "identity": "different"})
+    changed = release.run_release(
+        plan, user_approved=True, runtime=changed_runtime,
+        convert=lambda *_: pytest.fail("identity change should reuse conversions"),
+        evaluate=lambda _plan, _family, path, *_: (
+            reevaluated.append(path.stem) or {"passed": True}))
+    assert reevaluated == ["f32", "f16", "q8_0"]
+    assert changed["runtime_snapshot"]["identity"] == "different"
+
     failed_plan = {**plan, "model": "unmatched-repo"}
     def baseline_failure(_plan, _family, path, _binary, _root, _baseline, _python):
         if path.stem == "f32":
