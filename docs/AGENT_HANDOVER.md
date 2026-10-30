@@ -20,8 +20,9 @@ Remaining gaps include Windows/MSVC, GPU/Metal and real Hub publication. The
 forced alignment to the shared voice pipeline. See
 [audio task status](AUDIO_TASKS_STATUS.md) for the native matrix and remaining
 limitations. 0.5.6 adds vision.cpp prompted masks, image segmentation and
-relative depth; see [vision task status](VISION_STATUS.md). The next milestone
-is **0.5.7**.
+relative depth; see [vision task status](VISION_STATUS.md). 0.5.7 adds
+ultralytics-ggml and rf-detr.cpp family-routed detection; see
+[detection task status](DETECTION_STATUS.md). The next milestone is **0.5.8**.
 
 0.5.2 summary: `agentquantix/tasks/` (registry + metadata router),
 `agentquantix/runs.py` (`text:`/`voice:`/`media:` run ids over existing records),

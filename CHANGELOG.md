@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.7 — unreleased development
+
+- Add family-routed `ultralytics-ggml` and `rf-detr.cpp` detection support with
+  SHA-verified sources, pinned converters, D(0.25) parity gates and atomic
+  publication of passing precisions.
+- Keep YOLO detection, instance segmentation, semantic segmentation, depth,
+  YOLO-World and OBB blocked or unoffered according to the 0.5.7 spike gates.
+- See [detection task status](docs/DETECTION_STATUS.md) for spike evidence,
+  licences, native acceptance results and sample limits.
+
 ## 0.5.6 — unreleased development
 
 - Add a vision.cpp pipeline for MobileSAM prompted masks, BiRefNet image
