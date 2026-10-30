@@ -61,9 +61,17 @@ actual decision; never invent one. publish_release requires matching human
 review and fresh remote checksum verification. For joint audio-video, the human
 must watch and listen. A video without audio cannot pass an audio-video recipe.
 
+## Vision releases
+
+MobileSAM, BiRefNet and Depth Anything V2 use the pinned vision.cpp family
+catalog and source-aware F32/F16 conversion. Mask and segmentation outputs must
+pass their fixed-fixture quality gates. Depth Anything is relative depth only;
+never claim metric depth. Inpainting and super-resolution remain unimplemented
+because tested outputs did not beat their naive baselines.
+
 ## Voice releases
 
-TTS and ASR are different products. Qwen3-TTS and Pocket TTS run through llama.cpp's `llama-tts`; Whisper ASR runs through the separate whisper.cpp `whisper-cli`. A separately built, pinned audio.cpp supplies every TTS and ASR family declared by that revision's `model_specs` catalog. Do not maintain or describe a two-model audio.cpp allowlist: its catalog is the capability source of truth, including tasks, packages, source tensor mappings, languages, speaker requirements, and validated precisions.
+TTS and ASR are different products. Qwen3-TTS and Pocket TTS run through llama.cpp's `llama-tts`; Whisper ASR runs through the separate whisper.cpp `whisper-cli`. A separately built, pinned audio.cpp supplies every TTS, ASR, separation, voice-conversion and forced-alignment family family declared by that revision's `model_specs` catalog. Do not maintain or describe a two-model audio.cpp allowlist: its catalog is the capability source of truth, including tasks, packages, source tensor mappings, languages, speaker requirements, and validated precisions.
 
 audio.cpp families use their own GGUF schema and catalog-specific quant set; never send them through llama.cpp's text sweep or claim their GGUFs are interchangeable with llama.cpp files. Repository names are resolved against the catalog automatically. If a custom or renamed checkpoint is ambiguous, pass the audio.cpp family explicitly instead of adding a model-specific branch.
 

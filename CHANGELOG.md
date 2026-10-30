@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.6 — unreleased development
+
+- Add a vision.cpp pipeline for MobileSAM prompted masks, BiRefNet image
+  segmentation and Depth Anything V2 relative depth, with source-aware F32/F16
+  conversion, automated quality gates and atomic passing-precision bundles.
+- Keep inpainting and super-resolution unimplemented: native outputs did not
+  beat the naive baseline under PSNR/SSIM, and no perceptual gate is established.
+- See [vision task status](docs/VISION_STATUS.md) for spike evidence and native
+  acceptance limits.
+
 ## 0.5.5 — unreleased development
 
 - Extend the catalog-driven audio.cpp voice pipeline with source separation,

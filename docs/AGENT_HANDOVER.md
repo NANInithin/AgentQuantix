@@ -19,7 +19,9 @@ Remaining gaps include Windows/MSVC, GPU/Metal and real Hub publication. The
 0.5.5 implementation adds audio.cpp source separation, voice conversion and
 forced alignment to the shared voice pipeline. See
 [audio task status](AUDIO_TASKS_STATUS.md) for the native matrix and remaining
-limitations. The next milestone is **0.5.6: vision.cpp**.
+limitations. 0.5.6 adds vision.cpp prompted masks, image segmentation and
+relative depth; see [vision task status](VISION_STATUS.md). The next milestone
+is **0.5.7**.
 
 0.5.2 summary: `agentquantix/tasks/` (registry + metadata router),
 `agentquantix/runs.py` (`text:`/`voice:`/`media:` run ids over existing records),
@@ -148,6 +150,22 @@ post-0.5.3 engine builders and task pipelines are not implemented yet.
   provenance and per-precision metrics are in
   [AUDIO_TASKS_STATUS.md](AUDIO_TASKS_STATUS.md). Native acceptance and
   cross-platform/Hub publication limitations are recorded there.
+
+### Vision 0.5.6
+
+- The pinned vision.cpp v0.3.0 lifecycle runtime is
+  `b766b0acc30f6706f1bfe46769635e361172ce96`; Linux CPU acceptance passed
+  MobileSAM F32/F16, BiRefNet F16 and Depth Anything V2 Small F32/F16. MobileSAM
+  F16 achieved point IoU 0.985356, box IoU 0.993852 and pixel agreement
+  0.999980. BiRefNet's F16 source was not promoted and passed with IoU 0.994884
+  and boundary F-score 1.0. Depth F16 achieved three-scene Spearman
+  0.999982-0.999985 and scale-shift AbsRel 0.000853-0.001219.
+- Use the retained result JSONs and the full native table in
+  [VISION_STATUS.md](VISION_STATUS.md). Only relative depth is supported; the
+  tested synthetic fixtures do not establish real-photo quality.
+- Conversion runs in a dedicated Python 3.12.16 environment under the runtime
+  tool directory, with CPU Torch wheels. Keep this environment isolated from
+  AgentQuantix's Python floor.
 
 ### Existing pipeline integration
 

@@ -43,6 +43,11 @@ native quality gates, licensing limits and tested precision results are in
 diarization and MIDI remain untested; unsupported or blocked tasks do not fall
 through to text quantization.
 
+The 0.5.6 vision.cpp pipeline adds prompted masks, image segmentation and
+relative depth estimation. It is limited to the tested synthetic fixtures;
+Depth Anything results are relative, not metric. See
+[vision task status](docs/VISION_STATUS.md).
+
 The accepted Linux CPU examples use audio.cpp v0.8.0: BS-RoFormer Q8_0,
 MeanVC2 F32/Q4_K and Qwen3 Forced Aligner's nine converter precisions. HTDemucs
 was rejected by its SI-SDR gate; RNNoise and ZipEnhancer worsened SNR.
