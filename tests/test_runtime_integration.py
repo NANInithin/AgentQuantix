@@ -371,6 +371,19 @@ def test_failed_update_without_decision_policy_does_not_silently_fallback(integr
         assert runtime_control.handle_for("llama.cpp") is None
 
 
+def test_failed_in_place_update_does_not_offer_missing_install_fallback(integration, monkeypatch):
+    decisions = []
+    monkeypatch.setattr(integration, "prepare", lambda *args, **kwargs:
+                        (_ for _ in ()).throw(RuntimeErrorBase("in-place build failed")))
+    monkeypatch.setattr(integration, "inspect", lambda *args, **kwargs: None)
+    with runtime_control.execution_session(
+            manager=integration,
+            decide=lambda details: decisions.append(details) or pytest.fail("fallback must not be offered")):
+        with pytest.raises(RuntimeErrorBase, match="in-place build failed"):
+            runtime_control.ensure_runtime("llama.cpp")
+    assert decisions == []
+
+
 def test_failed_future_update_keeps_resumed_job_on_frozen_runtime(integration, tmp_path, monkeypatch, capsys):
     frozen = runtime_handle(tmp_path).snapshot()
     target = {"revision": "b" * 40}

@@ -2,6 +2,8 @@
 
 ## 0.5.9 — unreleased development
 
+- Store persistent native engines in flat per-engine checkouts and update them
+  in place; use flat build-specific temporary checkouts and migrate legacy installs.
 - Preserve upstream voice licenses, notices, and required provenance in bundle publications.
 - Bind TTS listening reviews to the generated fixture audio and quality cache.
 - Stream native voice inference output and per-fixture progress to stderr.

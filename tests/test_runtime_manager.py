@@ -1,5 +1,6 @@
 """Offline lifecycle tests: user decisions, revision pins and failure isolation."""
 import json
+import os
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ import pytest
 from agentquantix.runtimes import (RUNTIMES, RuntimeDecisionRequired,
                                    RuntimeErrorBase, RuntimeManager, RuntimeSession,
                                    current_session, selected_source)
+from agentquantix.runtimes.spec import canonical_hash
 
 
 OLD = "a" * 40
@@ -199,14 +201,23 @@ def test_missing_runtime_requests_storage_before_cloning(lifecycle):
     with pytest.raises(RuntimeDecisionRequired) as raised:
         lifecycle.manager.prepare("llama.cpp", builder=build)
     assert raised.value.details["kind"] == "storage"
+    assert raised.value.details["persistent_root"] == str(
+        lifecycle.manager.original_path("llama.cpp"))
+    assert raised.value.details["temporary_root"] == str(lifecycle.manager.temp_root)
     assert not lifecycle.git.calls
 
 
 @pytest.mark.parametrize("persistent", [True, False])
 def test_original_build_storage_policy_and_exact_checkout(lifecycle, persistent):
     handle = lifecycle.manager.prepare("llama.cpp", builder=build, persistent=persistent)
-    expected = lifecycle.manager.work_root if persistent else lifecycle.manager.temp_root
-    assert expected in handle.source.parents
+    if persistent:
+        assert handle.source == lifecycle.manager.original_path("llama.cpp")
+        assert handle.build_dir == handle.source / "build"
+        assert not (lifecycle.manager.work_root / ".aqx-runtime-builds").exists()
+    else:
+        key = canonical_hash(handle.manifest["build_fingerprint"])[:8]
+        assert handle.source == lifecycle.manager.temp_root / f"llama.cpp-{NEW[:12]}-{key}"
+        assert handle.build_dir == handle.source / "build"
     assert handle.manifest["origin_kind"] == "upstream"
     assert handle.manifest["storage_policy"] == ("persistent" if persistent else "temporary")
     assert handle.manifest["resources"]["converter"]["sha256"]
@@ -233,36 +244,218 @@ def test_new_revision_requires_update_approval_and_decline_reuses_current(lifecy
     assert handle.identity == old.identity
 
 
-def test_failed_candidate_preserves_active_version_and_logs_failure(lifecycle):
+def test_failed_in_place_update_clears_active_and_logs_failure(lifecycle):
     old = installed(lifecycle)
     lifecycle.upstream.revision = OLD
 
     def fail(*args):
         raise RuntimeError("compiler failed")
 
-    with pytest.raises(RuntimeErrorBase, match="active installation preserved"):
+    with pytest.raises(RuntimeErrorBase, match="failure.json"):
         lifecycle.manager.prepare("llama.cpp", builder=fail, update=True)
-    assert lifecycle.manager.inspect("llama.cpp").identity == old.identity
-    logs = list(lifecycle.manager.work_root.rglob("failure.json"))
-    assert len(logs) == 1
-    assert json.loads(logs[0].read_text())["previous_identity"] == old.identity
+    assert lifecycle.manager.inspect("llama.cpp") is None
+    failure = lifecycle.manager.state_root / "llama.cpp" / "failure.json"
+    assert json.loads(failure.read_text())["previous_identity"] == old.identity
+    rebuilt = lifecycle.manager.prepare("llama.cpp", builder=build, persistent=True)
+    assert rebuilt.revision == OLD and rebuilt.source == old.source
 
 
-def test_successful_update_and_rollback_are_side_by_side(lifecycle):
+def test_successful_persistent_update_is_in_place_without_rollback(lifecycle):
     first = installed(lifecycle)
     lifecycle.upstream.revision = OLD
     second = lifecycle.manager.prepare("llama.cpp", builder=build, update=True)
-    assert first.source != second.source and first.source.is_dir()
-    assert lifecycle.manager.rollback("llama.cpp").identity == first.identity
+    assert first.source == second.source == lifecycle.manager.original_path("llama.cpp")
+    assert second.revision == OLD
+    state = json.loads((lifecycle.manager.state_root / "llama.cpp" / "installation.json").read_text())
+    assert "previous" not in state
+    with pytest.raises(RuntimeErrorBase, match="installed in place"):
+        lifecycle.manager.rollback("llama.cpp")
 
 
-def test_frozen_resume_does_not_follow_active_runtime(lifecycle):
+def test_keyboard_interrupt_during_persistent_build_is_recorded(lifecycle):
+    installed(lifecycle)
+    lifecycle.upstream.revision = OLD
+
+    def interrupt(*_args):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        lifecycle.manager.prepare("llama.cpp", builder=interrupt, update=True)
+    failure = lifecycle.manager.state_root / "llama.cpp" / "failure.json"
+    assert json.loads(failure.read_text())["error"] == ""
+    assert lifecycle.manager.inspect("llama.cpp") is None
+
+
+def test_persistent_update_refuses_tracked_changes(lifecycle):
+    handle = installed(lifecycle)
+    lifecycle.upstream.revision = OLD
+    lifecycle.git.dirty[str(handle.source)] = " M tracked.cpp"
+    with pytest.raises(RuntimeErrorBase, match="has local changes; commit/stash them first"):
+        lifecycle.manager.prepare("llama.cpp", builder=build, update=True)
+
+
+def test_persistent_install_refuses_non_checkout_at_original_path(lifecycle, monkeypatch):
+    source = lifecycle.manager.original_path("llama.cpp")
+    source.mkdir(parents=True)
+    original_git = lifecycle.manager._git
+
+    def no_checkout(path, *args, **kwargs):
+        if Path(path) == source and args[:3] == ("config", "--local", "--get"):
+            raise RuntimeErrorBase("not a git checkout")
+        return original_git(path, *args, **kwargs)
+
+    monkeypatch.setattr(lifecycle.manager, "_git", no_checkout)
+    with pytest.raises(RuntimeErrorBase, match="exists but is not a checkout of ggml-org/llama.cpp"):
+        lifecycle.manager.prepare("llama.cpp", builder=build, persistent=True)
+
+
+def test_live_lease_blocks_in_place_update_and_stale_lease_is_removed(lifecycle, monkeypatch):
+    import agentquantix.runtimes.manager as manager_module
+
+    handle = installed(lifecycle)
+    lifecycle.upstream.revision = OLD
+    leases = lifecycle.manager.state_root / "leases" / handle.identity
+    leases.mkdir(parents=True)
+    stale = leases / "dead.json"
+    stale.write_text('{"pid": 87654321}', encoding="utf-8")
+    active_lease = leases / "live.json"
+    active_lease.write_text('{"pid": 12345}', encoding="utf-8")
+    monkeypatch.setattr(manager_module, "_pid_alive", lambda pid: pid == 12345)
+    with pytest.raises(RuntimeErrorBase, match="in use by a running aqx job \\(pid 12345\\)"):
+        lifecycle.manager.prepare("llama.cpp", builder=build, update=True)
+    assert not stale.exists()
+    active_lease.unlink()
+    monkeypatch.setattr(manager_module, "_pid_alive", lambda _pid: False)
+    updated = lifecycle.manager.prepare("llama.cpp", builder=build, update=True)
+    assert updated.revision == OLD
+    assert not active_lease.exists()
+
+
+def test_revision_only_update_keeps_persistent_build_directory(lifecycle):
+    first = installed(lifecycle)
+    marker = first.build_dir / "incremental-marker"
+    marker.write_text("retain", encoding="utf-8")
+    lifecycle.upstream.revision = OLD
+    second = lifecycle.manager.prepare("llama.cpp", builder=build, update=True)
+    assert second.source == first.source
+    assert marker.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="exercises the POSIX signal-zero path")
+def test_pid_alive_checks_current_and_missing_posix_pid():
+    from agentquantix.runtimes.manager import _pid_alive
+
+    assert _pid_alive(os.getpid())
+    assert not _pid_alive(987654321)
+
+
+def test_pid_alive_uses_windows_process_api(monkeypatch):
+    import ctypes
+    from ctypes import wintypes
+    import agentquantix.runtimes.manager as manager_module
+
+    class Function:
+        restype = None
+
+        def __init__(self, callback):
+            self.callback = callback
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+    class Kernel:
+        OpenProcess = Function(lambda *_args: 123)
+        GetExitCodeProcess = Function(
+            lambda _handle, output: (ctypes.cast(
+                output, ctypes.POINTER(wintypes.DWORD)).contents.__setattr__("value", 259) or 1))
+        CloseHandle = Function(lambda *_args: 1)
+
+    monkeypatch.setattr(manager_module.os, "name", "nt")
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: Kernel, raising=False)
+    assert manager_module._pid_alive(1234)
+
+
+def test_frozen_persistent_resume_reports_in_place_revision_change(lifecycle):
     first = installed(lifecycle)
     lifecycle.upstream.revision = OLD
     installed(lifecycle, update=True)
-    handle = lifecycle.manager.prepare("llama.cpp", builder=build, frozen=first.snapshot())
-    assert handle.identity == first.identity
+    persistent_root = lifecycle.manager.original_path("llama.cpp")
+    with pytest.raises(RuntimeErrorBase) as error:
+        lifecycle.manager.prepare("llama.cpp", builder=build, frozen=first.snapshot())
+    assert str(error.value) == (
+        f"this job was started with llama.cpp {first.revision[:12]}, but "
+        f"{persistent_root} is now {OLD[:12]}; re-run without --resume, or reinstall "
+        f"{first.revision[:12]} with `aqx runtime install llama.cpp --persistent --revision "
+        f"{first.revision}`")
     assert lifecycle.manager.inspect("llama.cpp").revision == OLD
+
+
+def _legacy_active(lifecycle):
+    root = lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp" / OLD / "legacy-key"
+    source = root / "source"
+    source.mkdir(parents=True)
+    lifecycle.git.revisions[str(source)] = OLD
+    output = build(source, source / "build")
+    manifest = lifecycle.manager._manifest("llama.cpp", source, output, revision=OLD,
+        build_fingerprint=_default_candidate_fingerprint(), storage_policy="persistent",
+        ownership_kind="managed", root=root)
+    return lifecycle.manager._activate("llama.cpp", manifest, record_previous=False), root
+
+
+def test_legacy_persistent_root_moves_to_flat_path_when_destination_absent(lifecycle):
+    legacy, root = _legacy_active(lifecycle)
+    lifecycle.upstream.revision = OLD
+
+    def probe(source, build_dir):
+        return build(source, build_dir)
+
+    handle = lifecycle.manager.prepare("llama.cpp",
+        builder=lambda *_args: pytest.fail("successful probe should avoid rebuilding"),
+        probe=probe, persistent=True)
+    assert handle.revision == legacy.revision
+    assert handle.source == lifecycle.manager.original_path("llama.cpp")
+    assert handle.manifest["root"] == str(handle.source)
+    assert not root.exists()
+    assert not (lifecycle.manager.work_root / ".aqx-runtime-builds").exists()
+
+
+def test_legacy_move_rebuilds_in_place_when_probe_fails(lifecycle):
+    _, root = _legacy_active(lifecycle)
+    lifecycle.upstream.revision = OLD
+    built = []
+
+    def rebuild(source, build_dir):
+        built.append(source)
+        return build(source, build_dir)
+
+    handle = lifecycle.manager.prepare("llama.cpp", builder=rebuild,
+        probe=lambda *_args: None, persistent=True)
+    assert built == [lifecycle.manager.original_path("llama.cpp")]
+    assert handle.revision == OLD
+    assert handle.source == lifecycle.manager.original_path("llama.cpp")
+    assert not root.exists()
+
+
+def test_legacy_relocation_prompts_and_acceptance_updates_flat_path(lifecycle):
+    legacy, root = _legacy_active(lifecycle)
+    destination = lifecycle.manager.original_path("llama.cpp")
+    destination.mkdir(parents=True)
+    lifecycle.git.revisions[str(destination)] = OLD
+    with pytest.raises(RuntimeDecisionRequired) as raised:
+        lifecycle.manager.prepare("llama.cpp", builder=build, persistent=True)
+    details = raised.value.details
+    assert details["comparison"] == "relocate"
+    assert details["target"]["revision"] == OLD
+    assert details["persistent_root"] == str(destination)
+    assert details["legacy_root"] == str(root)
+    declined = lifecycle.manager.prepare("llama.cpp", builder=build,
+        persistent=True, update=False)
+    assert declined.source == legacy.source
+    assert root.exists()
+    handle = lifecycle.manager.prepare("llama.cpp", builder=build, persistent=True, update=True)
+    assert handle.source == destination
+    assert handle.revision == OLD
+    assert not root.exists()
 
 
 def test_adopted_original_is_never_cloned_or_modified(lifecycle):
@@ -307,6 +500,11 @@ def test_binary_resource_and_source_drift_are_detected(lifecycle):
 
 def test_temporary_cleanup_respects_leases_and_preserves_manifest(lifecycle):
     handle = lifecycle.manager.prepare("llama.cpp", builder=build, persistent=False)
+    assert handle.source.parent == lifecycle.manager.temp_root
+    assert handle.source.name.startswith(f"llama.cpp-{handle.revision[:12]}-")
+    assert handle.build_dir == handle.source / "build"
+    assert (handle.source / "aqx-manifest.json").is_file()
+    assert (handle.source / "aqx-setup.json").is_file()
     lease = lifecycle.manager.lease(handle)
     assert not lifecycle.manager.cleanup_temporary(handle)
     lifecycle.manager.release(lease)
@@ -334,6 +532,18 @@ def test_failed_session_retains_temporary_runtime_for_resume(lifecycle):
     assert handle.source.is_dir()
 
 
+def test_failed_temporary_build_writes_failure_and_keeps_flat_root(lifecycle):
+    def fail(*_args):
+        raise RuntimeError("compiler failed")
+
+    with pytest.raises(RuntimeErrorBase, match="aqx-failure.json"):
+        lifecycle.manager.prepare("llama.cpp", builder=fail, persistent=False)
+    roots = list(lifecycle.manager.temp_root.glob("llama.cpp-*"))
+    assert len(roots) == 1
+    assert roots[0].is_dir()
+    assert (roots[0] / "aqx-failure.json").is_file()
+
+
 def test_additional_required_target_builds_same_sha_without_updating(lifecycle):
     first = installed(lifecycle)
 
@@ -347,21 +557,15 @@ def test_additional_required_target_builds_same_sha_without_updating(lifecycle):
     handle = lifecycle.manager.prepare("llama.cpp", builder=extended, update=False,
                                       required_binaries=["tts"])
     assert handle.revision == first.revision and "tts" in handle.binaries
-    assert handle.source != first.source
+    assert handle.source == first.source
 
 
-def test_prune_preserves_active_previous_and_external_roots(lifecycle):
-    first = installed(lifecycle)
-    lifecycle.upstream.revision = OLD
-    second = installed(lifecycle, update=True)
-    lifecycle.upstream.revision = "c" * 40
-    third = installed(lifecycle, update=True)
+def test_prune_never_removes_flat_persistent_install(lifecycle):
+    handle = installed(lifecycle)
     result = lifecycle.manager.prune("llama.cpp")
-    assert str(first.manifest["root"]) in result["candidates"]
-    assert first.source.is_dir()
+    assert str(handle.source) not in result["candidates"]
     lifecycle.manager.prune("llama.cpp", dry_run=False)
-    assert not first.source.exists()
-    assert second.source.is_dir() and third.source.is_dir()
+    assert handle.source.is_dir()
 
 
 def test_migration_temporary_adopts_legacy_build_without_deleting_it(lifecycle):
@@ -397,87 +601,39 @@ def test_migration_copy_preserves_legacy_source_and_rebuilds_bound_cache(lifecyc
     handle = lifecycle.manager.migrate("llama.cpp", source, builder=rebuilt,
         probe=lambda *args: None, persistent=True, legacy_build_dir=legacy_build)
     assert len(calls) == 1
-    assert lifecycle.manager.work_root in handle.source.parents
+    assert handle.source == lifecycle.manager.original_path("llama.cpp")
     assert source.is_dir() and legacy_build.is_dir()
     assert handle.manifest["ownership_kind"] == "managed"
-    from agentquantix.runtimes.spec import canonical_hash
-    expected_root = (lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp"
-                     / OLD[:12] / canonical_hash(handle.manifest["build_fingerprint"])[:16])
-    assert Path(handle.manifest["root"]) == expected_root
+    assert Path(handle.manifest["root"]) == lifecycle.manager.original_path("llama.cpp")
 
 
-def test_new_install_uses_short_candidate_root(lifecycle):
-    from agentquantix.runtimes.spec import canonical_hash
+def test_persistent_migration_refuses_existing_original_path(lifecycle):
+    source = lifecycle.manager.temp_root / "aqx-media-backends/old/source"
+    source.mkdir(parents=True)
+    destination = lifecycle.manager.original_path("llama.cpp")
+    destination.mkdir(parents=True)
+    with pytest.raises(RuntimeErrorBase, match="adopt or update the persistent llama.cpp checkout"):
+        lifecycle.manager.migrate("llama.cpp", source, builder=build,
+            probe=lambda *_args: None, persistent=True)
+
+
+def test_new_install_clones_into_flat_persistent_root(lifecycle):
     handle = installed(lifecycle)
-    expected_root = (lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp"
-                     / NEW[:12] / canonical_hash(handle.manifest["build_fingerprint"])[:16])
-    assert Path(handle.manifest["root"]) == expected_root
+    assert handle.source == lifecycle.manager.original_path("llama.cpp")
+    assert handle.build_dir == handle.source / "build"
+    assert (lifecycle.manager.state_root / "llama.cpp" / "setup.json").is_file()
+    assert not (handle.source / "setup.json").exists()
+    assert not (lifecycle.manager.work_root / ".aqx-runtime-builds").exists()
 
 
-def test_manifestless_legacy_candidate_is_left_while_install_uses_short_root(lifecycle):
-    from agentquantix.runtimes.spec import canonical_hash
-    fingerprint = _default_candidate_fingerprint()
-    key = canonical_hash(fingerprint)
-    legacy = lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp" / NEW / key
-    legacy.mkdir(parents=True)
-    failed_build = legacy / "failure.json"
-    failed_build.write_text("preserve failed candidate", encoding="utf-8")
-
-    handle = installed(lifecycle)
-
-    expected_root = (lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp"
-                     / NEW[:12] / key[:16])
-    assert Path(handle.manifest["root"]) == expected_root
-    assert failed_build.read_text(encoding="utf-8") == "preserve failed candidate"
-    assert not (legacy / "manifest.json").exists()
-
-
-def test_existing_legacy_candidate_with_manifest_is_reused(lifecycle, monkeypatch):
-    from agentquantix.runtimes.spec import canonical_hash
-    fingerprint = _default_candidate_fingerprint()
-    key = canonical_hash(fingerprint)
-    root = lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp" / NEW / key
+def test_prune_removes_manifestless_legacy_failure_candidates(lifecycle):
+    root = lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp" / NEW / "failed-key"
     root.mkdir(parents=True)
-    manifest_path = root / "manifest.json"
-    manifest_path.write_text(json.dumps({
-        "engine": "llama.cpp", "revision": NEW, "source": str(root / "source"),
-        "build_dir": str(root / "source/build"), "root": str(root), "binaries": {},
-        "build_fingerprint": fingerprint, "storage_policy": "persistent",
-        "identity": "legacy-candidate",
-    }), encoding="utf-8")
-    monkeypatch.setattr(lifecycle.manager, "verify", lambda handle: handle)
-
-    def unexpected_build(*_args):
-        pytest.fail("existing candidate should be reused")
-
-    handle = lifecycle.manager.prepare("llama.cpp", builder=unexpected_build, persistent=True)
-    assert Path(handle.manifest["root"]) == root
-    assert not (lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp"
-                / NEW[:12] / key[:16]).exists()
-
-
-@pytest.mark.parametrize("mismatch", ["revision", "key"])
-def test_short_candidate_manifest_collision_is_preserved(lifecycle, mismatch):
-    from agentquantix.runtimes.spec import canonical_hash
-    fingerprint = _default_candidate_fingerprint()
-    key = canonical_hash(fingerprint)
-    root = (lifecycle.manager.work_root / ".aqx-runtime-builds" / "llama.cpp"
-            / NEW[:12] / key[:16])
-    root.mkdir(parents=True)
-    manifest = {"engine": "llama.cpp", "revision": NEW, "build_fingerprint": fingerprint}
-    if mismatch == "revision":
-        manifest["revision"] = OLD
-    else:
-        manifest["build_fingerprint"] = {"different": "fingerprint"}
-    manifest_path = root / "manifest.json"
-    original = json.dumps(manifest)
-    manifest_path.write_text(original, encoding="utf-8")
-
-    with pytest.raises(RuntimeErrorBase, match="runtime directory collision"):
-        lifecycle.manager.prepare("llama.cpp", builder=build, persistent=True)
-
-    assert root.is_dir()
-    assert manifest_path.read_text(encoding="utf-8") == original
+    (root / "failure.json").write_text("failed", encoding="utf-8")
+    result = lifecycle.manager.prune("llama.cpp", dry_run=False)
+    assert str(root) in result["candidates"]
+    assert not root.exists()
+    assert not (lifecycle.manager.work_root / ".aqx-runtime-builds").exists()
 
 
 def test_modified_manifest_and_changed_source_are_rejected(lifecycle):
@@ -513,11 +669,15 @@ def test_no_local_runtime_and_offline_check_does_not_build_moving_ref(lifecycle)
 
 def test_frozen_temporary_runtime_reconstructs_exact_sha_without_activation(lifecycle):
     frozen = lifecycle.manager.prepare("llama.cpp", builder=build, persistent=False)
+    assert frozen.source.parent == lifecycle.manager.temp_root
+    assert frozen.source.name.startswith(f"llama.cpp-{NEW[:12]}-")
     lifecycle.manager.cleanup_temporary(frozen)
     lifecycle.upstream.revision = OLD
     active = installed(lifecycle)
     resumed = lifecycle.manager.prepare("llama.cpp", builder=build, frozen=frozen.snapshot())
     assert resumed.identity == frozen.identity and resumed.revision == NEW
+    assert resumed.source == frozen.source
+    assert resumed.source.parent == lifecycle.manager.temp_root
     assert lifecycle.manager.inspect("llama.cpp").identity == active.identity
 
 
@@ -556,18 +716,20 @@ def test_explicit_persistent_install_promotes_temporary_original(lifecycle):
     regular = lifecycle.manager.prepare("llama.cpp", builder=build, persistent=True, update=False)
     assert regular.manifest["storage_policy"] == "persistent"
     assert regular.revision == temporary.revision
-    assert lifecycle.manager.work_root in regular.source.parents
+    assert regular.source == lifecycle.manager.original_path("llama.cpp")
     assert temporary.source.is_dir()
 
 
 def test_changed_build_configuration_is_not_silently_reused(lifecycle):
     first = lifecycle.manager.prepare("llama.cpp", builder=build, persistent=True,
                                       build_fingerprint={"compute_backend": "cpu"})
+    (first.build_dir / "old-config.txt").write_text("old", encoding="utf-8")
     second = lifecycle.manager.prepare("llama.cpp", builder=build, update=False,
                                        build_fingerprint={"compute_backend": "cuda"})
-    assert second.source != first.source
+    assert second.source == first.source == lifecycle.manager.original_path("llama.cpp")
     assert second.revision == first.revision
     assert second.manifest["build_fingerprint"]["compute_backend"] == "cuda"
+    assert not (second.build_dir / "old-config.txt").exists()
 
 
 @pytest.mark.parametrize("persistent", [True, False])
@@ -583,7 +745,11 @@ def test_offline_complete_source_can_build_without_network_setup(lifecycle, pers
     assert raised.value.details["target"]["channel"] == "local-cache"
     handle = lifecycle.manager.prepare("llama.cpp", builder=build, persistent=persistent)
     assert handle.revision == OLD
-    assert handle.source != source and source.is_dir()
+    assert source.is_dir()
+    if persistent:
+        assert handle.source == source
+    else:
+        assert handle.source != source
     assert not any(args[1] == "clone" or "fetch" in args or "checkout" in args or "update" in args
                    for args in lifecycle.git.calls)
     assert handle.manifest["storage_policy"] == ("persistent" if persistent else "temporary")
@@ -631,7 +797,8 @@ def test_source_setup_commands_are_reported_before_execution(lifecycle, capsys):
 
     progress = [line for line in capsys.readouterr().err.splitlines()
                 if line.startswith("  .. llama.cpp: ")]
-    setup = json.loads((handle.source.parent / "setup.json").read_text(encoding="utf-8"))
+    setup = json.loads((lifecycle.manager.state_root / "llama.cpp" / "setup.json")
+                       .read_text(encoding="utf-8"))
 
     assert len(progress) == 4
     assert progress[0] == "  .. llama.cpp: git clone --no-checkout..."

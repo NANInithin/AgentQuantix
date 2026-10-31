@@ -102,6 +102,11 @@ Separate `origin_kind` (`upstream`, `fork`, `pr`) from `storage_policy`
 A temporary original is still an upstream runtime, not a compatibility fork.
 An adopted external installation remains outside managed automatic cleanup.
 
+Superseded by the flat per-engine layout: persistent originals now live at
+`WORK_ROOT/<spec.directory>` with `build/` inside the checkout, and temporary
+originals use `TEMP_DIR/<engine>-<sha12>-<key8>`. The nested layout below is
+retained as historical design context.
+
 Proposed managed layout under the existing configurable work root:
 
 ```text
@@ -214,8 +219,9 @@ install, update or build runtimes.
 A recorded build identity includes source commit, submodule commits, adapter
 schema, compiler/toolchain, OS/architecture, compute backend, flags, converter
 environment lock, executable/resource hashes, and capability/probe fingerprints.
-Keep active and previous tested installations for rollback. Use per-engine
-interprocess install locks, build locks and active-run leases. Cleanup must
+Superseded for persistent originals: updates happen in place without a previous
+version for rollback. Use per-engine interprocess install locks and active-run
+leases. Cleanup must
 respect active jobs and retained resume references; expose disk inventory and
 explicit pruning rather than accumulating unbounded versions.
 

@@ -83,6 +83,10 @@ approved.
   shared replacements. Do not keep aliases or hidden forwarding paths.
 - Original runtimes: ask whether to keep them for regular use. Yes means
   persistent storage outside `temp`; no means a temporary original build.
+- Persistent originals live directly at `WORK_ROOT/<spec.directory>` and update
+  in place; they have no side-by-side rollback, and a failed update must be
+  rebuilt before the engine can be used again. Temporary originals use one flat
+  `TEMP_DIR/<engine>-<sha12>-<key8>` checkout per build.
 - Compatibility forks and PR builds remain temporary. Classify originals by
   their designated registry upstream, not GitHub's `fork` flag. In particular,
   Asher-1/ultralytics-ggml is the designated original provider of that adapter.
@@ -103,9 +107,10 @@ approved.
   explicit decision/cancellation/error types.
 - `runtimes/manager.py`: upstream discovery; immutable source/build records;
   persistent/temporary decisions; adoption and media-cache migration;
-  side-by-side builds; atomic activation; rollback; OS locks; leases; cleanup
-  and pruning; complete-local-source offline setup; exact-SHA reconstruction
-  of missing temporary installations; retained catalog resources.
+  in-place persistent builds and flat temporary checkouts; atomic activation;
+  OS locks; leases; cleanup and pruning; complete-local-source offline setup;
+  exact-SHA reconstruction of missing temporary installations; retained
+  catalog resources.
 - `runtime_builders.py`: actual build/probe contracts for llama.cpp, audio.cpp,
   whisper.cpp, stable-diffusion.cpp, and clip.cpp. Captures toolchain,
   resources, shared libraries, binary hashes and catalogs.

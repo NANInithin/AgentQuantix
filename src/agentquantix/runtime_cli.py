@@ -60,7 +60,8 @@ def command(args):
                 details["source"] = args.source
             _print(details)
             if not _approve(args, "Verify and register this existing runtime?" if action == "adopt"
-                            else "Restore the previous verified runtime installation?"):
+                            else "Restore a previous verified runtime if one exists? "
+                                 "Persistent in-place installs require reinstalling a pinned revision."):
                 return 0
             details["user_approved"] = True
             _print(runtime_tools.call(action + "_runtime", details))

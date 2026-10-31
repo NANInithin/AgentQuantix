@@ -28,7 +28,7 @@ TOOLS = [
     _tool("adopt_runtime", "Register and verify a user-owned existing original runtime without modifying its checkout or compiling. Requires explicit approval of the source path.",
           {"engine": ENGINE, "source": {"type": "string"},
            "user_approved": {"type": "boolean"}}, ["engine", "source", "user_approved"]),
-    _tool("rollback_runtime", "Restore the previous verified installation. Running jobs keep their recorded runtime; requires explicit rollback approval.",
+    _tool("rollback_runtime", "Restore a previous verified installation when one exists. Persistent in-place installs require reinstalling a pinned revision; running jobs keep their recorded runtime.",
           {"engine": ENGINE, "user_approved": {"type": "boolean"}}, ["engine", "user_approved"]),
     _tool("prune_runtime", "Inventory obsolete managed runtime builds. Defaults to dry_run=true; removal requires explicit user approval. Active, previous, external and leased installations are protected.",
           {"engine": ENGINE, "dry_run": {"type": "boolean", "default": True},

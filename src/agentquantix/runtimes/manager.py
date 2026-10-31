@@ -58,23 +58,33 @@ def _inside(path, root):
     return path != root and root in path.parents
 
 
-def _candidate_root(base, revision, key):
-    base = Path(base)
-    legacy = base / revision / key
-    if (legacy / "manifest.json").is_file():
-        return legacy
-    return base / revision[:12] / key[:16]
+def _pid_alive(pid):
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
 
-
-def _read_short_candidate_manifest(root, revision, key):
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        process = kernel32.OpenProcess(0x1000, False, pid)
+        if not process:
+            return False
+        try:
+            exit_code = wintypes.DWORD()
+            return (bool(kernel32.GetExitCodeProcess(
+                process, ctypes.byref(exit_code))) and exit_code.value == 259)
+        finally:
+            kernel32.CloseHandle(process)
     try:
-        manifest = _read(Path(root) / "manifest.json", {})
-    except (OSError, ValueError):
-        manifest = None
-    if (not isinstance(manifest, dict) or manifest.get("revision") != revision
-            or canonical_hash(manifest.get("build_fingerprint", {})) != key):
-        raise RuntimeErrorBase(f"runtime directory collision at {root}")
-    return manifest
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError as error:
+        return error.errno == 1
+    return True
 
 
 def _request_json(url):
@@ -146,6 +156,44 @@ class RuntimeManager:
     def _lock(self, engine):
         runtime_spec(engine)
         return _lock(self.state_root / "locks" / (engine + ".lock"))
+
+    def _live_leases(self, identity):
+        directory = self.state_root / "leases" / identity
+        alive = []
+        if not directory.is_dir():
+            return alive
+        for path in directory.glob("*.json"):
+            try:
+                lease = _read(path, {})
+            except (OSError, ValueError):
+                lease = {}
+            pid = lease.get("pid") if isinstance(lease, dict) else None
+            if pid == os.getpid():
+                continue
+            if _pid_alive(pid):
+                alive.append(pid)
+            else:
+                path.unlink(missing_ok=True)
+        return sorted(set(alive))
+
+    def _legacy_runtime_root(self, root):
+        return _inside(root, self.work_root / ".aqx-runtime-builds")
+
+    def _remove_legacy_root(self, root):
+        root = Path(root).resolve()
+        base = self.work_root / ".aqx-runtime-builds"
+        if not self._legacy_runtime_root(root):
+            return
+        if root.is_dir():
+            shutil.rmtree(root)
+        parent = root.parent
+        while parent != base and base in parent.parents:
+            if not parent.is_dir() or any(parent.iterdir()):
+                break
+            parent.rmdir()
+            parent = parent.parent
+        if base.is_dir() and not any(base.iterdir()):
+            base.rmdir()
 
     def _git(self, source, *arguments, optional=False):
         result = self.run_command(["git", "-C", str(source), *arguments])
@@ -257,12 +305,18 @@ class RuntimeManager:
         manifest["identity"] = canonical_hash(manifest)
         return manifest
 
-    def _activate(self, engine, manifest):
+    def _activate(self, engine, manifest, *, record_previous=True):
         path = self._state(engine)
         state = _read(path, {})
         previous = state.get("active")
-        if previous and previous["identity"] != manifest["identity"]:
+        same_persistent_root = (previous
+            and previous["storage_policy"] == "persistent"
+            and manifest["storage_policy"] == "persistent"
+            and Path(previous["root"]).resolve() == Path(manifest["root"]).resolve())
+        if previous and previous["identity"] != manifest["identity"] and record_previous and not same_persistent_root:
             state["previous"] = previous
+        elif manifest["storage_policy"] == "persistent" and manifest["ownership_kind"] == "managed":
+            state.pop("previous", None)
         state["active"] = manifest
         if manifest["storage_policy"] == "persistent":
             state["preferred_storage"] = "persistent"
@@ -361,11 +415,7 @@ class RuntimeManager:
 
     def migrate(self, engine, source, *, builder, probe, persistent,
                 build_fingerprint=None, legacy_build_dir=None):
-        """Adopt a legacy temporary original or copy it outside temporary storage.
-
-        The legacy tree is never moved, modified or deleted. CMake caches bound
-        to its old paths require rebuilding in the candidate directory.
-        """
+        """Adopt a legacy temporary original or copy it into regular-use storage."""
         source = Path(source).resolve()
         legacy_build_dir = Path(legacy_build_dir or source / "build").resolve()
         if not persistent:
@@ -377,34 +427,21 @@ class RuntimeManager:
         fingerprint = {"adapter_version": spec.adapter_version, "platform": platform.platform(),
                        "machine": platform.machine(), **(build_fingerprint or {}),
                        "migrated_from": str(source)}
-        base = self.work_root / ".aqx-runtime-builds" / engine
-        key = canonical_hash(fingerprint)
-        legacy_root = base / revision / key
-        root = _candidate_root(base, revision, key)
-        short_root = root != legacy_root
-        candidate_source, candidate_build = root / "source", root / "source/build"
-        if not _inside(root, base):
-            raise RuntimeErrorBase("invalid runtime migration destination")
+        root = self.original_path(engine).resolve()
+        candidate_source, candidate_build = root, root / "build"
         with self._lock(engine):
-            if (root / "manifest.json").is_file():
-                manifest = (_read_short_candidate_manifest(root, revision, key) if short_root
-                            else _read(root / "manifest.json"))
-                handle = RuntimeHandle.from_manifest(manifest)
-                self.verify(handle)
-                return self._activate(engine, handle.manifest)
             if root.exists():
-                # Only a prior interrupted migration's marked managed tree can
-                # be retried by replacement. Never remove arbitrary directories.
-                marker = _read(root / "migration.json", {})
-                if marker.get("source") != str(source) or marker.get("revision") != revision:
-                    raise RuntimeErrorBase("unrecognized existing runtime migration directory")
-                shutil.rmtree(root)
-            root.mkdir(parents=True)
-            _write(root / "migration.json", {"source": str(source), "revision": revision,
-                                            "started_at": _now()})
+                raise RuntimeErrorBase(
+                    f"{root} already exists; adopt or update the persistent {engine} checkout instead")
+            setup_path = self.state_root / engine / "setup.json"
+            failure_path = self.state_root / engine / "failure.json"
+            commands = []
             try:
+                _write(setup_path, {"engine": engine, "revision": revision,
+                                    "source_cache": str(source), "commands": commands})
                 shutil.copytree(source, candidate_source,
-                    ignore=lambda directory, names: ["build"] if Path(directory).resolve() == source and "build" in names else [])
+                    ignore=lambda directory, names: ["build"]
+                    if Path(directory).resolve() == source and "build" in names else [])
                 output = None
                 cache = legacy_build_dir / "CMakeCache.txt"
                 cache_text = cache.read_text(encoding="utf-8", errors="replace") if cache.is_file() else ""
@@ -413,12 +450,10 @@ class RuntimeManager:
                     shutil.copytree(legacy_build_dir, candidate_build)
                     try:
                         output = probe(candidate_source, candidate_build)
-                    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+                    except Exception:
                         output = None
                 if output is None:
                     if candidate_build.exists():
-                        if not _inside(candidate_build, root):
-                            raise RuntimeErrorBase("invalid migrated native build path")
                         shutil.rmtree(candidate_build)
                     output = builder(candidate_source, candidate_build)
                     probed = probe(candidate_source, candidate_build)
@@ -429,12 +464,14 @@ class RuntimeManager:
                 manifest = self._manifest(engine, candidate_source, output, revision=revision,
                     build_fingerprint=fingerprint, storage_policy="persistent",
                     ownership_kind="managed", root=root)
-                _write(root / "manifest.json", manifest)
-                return self._activate(engine, manifest)
-            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
-                _write(root / "failure.json", {"engine": engine, "revision": revision,
-                                              "error": str(error), "failed_at": _now()})
-                raise RuntimeErrorBase(f"runtime migration failed; legacy installation retained: {error}") from error
+                return self._activate(engine, manifest, record_previous=False)
+            except BaseException as error:
+                _write(failure_path, {"engine": engine, "revision": revision,
+                                      "error": str(error), "failed_at": _now()})
+                if not isinstance(error, Exception):
+                    raise
+                raise RuntimeErrorBase(
+                    f"runtime migration failed; legacy installation retained; log: {failure_path}: {error}") from error
 
     def check_update(self, engine):
         """Check metadata only; failed attempts never replace a resolved target."""
@@ -499,56 +536,72 @@ class RuntimeManager:
             if not handle.source.exists() and handle.manifest.get("storage_policy") == "temporary":
                 handle = self.restore_frozen(handle, builder=builder, probe=probe)
             else:
-                self.verify(handle)
+                try:
+                    self.verify(handle)
+                except RuntimeErrorBase as error:
+                    persistent_root = self.original_path(engine).resolve()
+                    if (handle.manifest.get("storage_policy") == "persistent"
+                            and handle.source.resolve() == persistent_root
+                            and handle.source.is_dir()):
+                        current = self._git(handle.source, "rev-parse", "HEAD")
+                        if current != handle.revision:
+                            raise RuntimeErrorBase(
+                                f"this job was started with {engine} {handle.revision[:12]}, but "
+                                f"{persistent_root} is now {current[:12]}; re-run without --resume, "
+                                f"or reinstall {handle.revision[:12]} with `aqx runtime install {engine} "
+                                f"--persistent --revision {handle.revision}`") from error
+                    raise
             if set(required_binaries) - set(handle.binaries):
                 raise RuntimeErrorBase("frozen runtime lacks required binaries; approve a new runtime plan")
-            # Callers/session still perform the metadata update check for resumes.
             if check is None:
                 self.check_update(engine)
             return handle
-        active = self.inspect(engine)
-        if active is None and probe and self.original_path(engine).is_dir():
-            active = self.adopt(engine, self.original_path(engine), probe,
-                                build_fingerprint=build_fingerprint)
+
+        original = self.original_path(engine).resolve()
+        try:
+            active = self.inspect(engine)
+        except RuntimeErrorBase as error:
+            manifest = _read(self._state(engine), {}).get("active")
+            if (manifest and manifest.get("storage_policy") == "persistent"
+                    and Path(manifest["source"]).resolve() == original and original.is_dir()):
+                status = self._git(original, "status", "--porcelain", "--untracked-files=no")
+                if status and not self._expected_ggml_patches(engine, original, status):
+                    raise RuntimeErrorBase(
+                        f"{original} has local changes; commit/stash them first") from error
+            raise
+        if active is None and probe and original.is_dir():
+            try:
+                self._check_original(engine, original)
+            except RuntimeErrorBase as error:
+                raise RuntimeErrorBase(
+                    f"{original} exists but is not a checkout of {spec.repository}; "
+                    "move it away or set AQX_WORK_ROOT") from error
+            status = self._git(original, "status", "--porcelain", "--untracked-files=no")
+            if status and not self._expected_ggml_patches(engine, original, status):
+                raise RuntimeErrorBase(f"{original} has local changes; commit/stash them first")
+            try:
+                fingerprint = {"adapter_version": spec.adapter_version,
+                               "platform": platform.platform(), "machine": platform.machine(),
+                               **(build_fingerprint or {}),
+                               "required_binaries": sorted(required_binaries)}
+                active = self.adopt(engine, original, probe, build_fingerprint=fingerprint)
+            except Exception:
+                active = None
+
         check = check or self.check_update(engine)
         target = revision or check.get("target")
         if target and (not isinstance(target, dict) or not _SHA.fullmatch(target.get("revision", ""))):
             raise RuntimeErrorBase("runtime target must contain an exact immutable revision")
-        missing = set(required_binaries) - set(active.binaries) if active else set()
-        storage_change = bool(active and persistent is not None and
-            (active.manifest["storage_policy"] == "persistent") != persistent)
-        requested_configuration = build_fingerprint or {}
-        configuration_change = bool(active and any(
-            active.manifest.get("build_fingerprint", {}).get(key) != value
-            for key, value in requested_configuration.items()))
-        rebuild = bool(missing or storage_change or configuration_change)
-        if active and not rebuild and (not target or target["revision"] == active.revision or update is False):
-            return active
-        if active and rebuild and (not target or update is False):
-            target = {"revision": active.revision, "repository": spec.repository,
-                      "ref": active.revision, "channel": "installed"}
-        if active and update is None:
-            if target and target["revision"] != active.revision:
-                raise RuntimeDecisionRequired({"kind": "update", "engine": engine,
-                    "message": f"A different {engine} revision is available; build and validate it?",
-                    "installed_revision": active.revision, "target": target,
-                    "comparison": check.get("comparison", "different"),
-                    "choices": ["update", "installed", "cancel"]})
+
         local_source = None
-        if check.get("status") == "unavailable":
-            cached = active.source if active and target and target["revision"] == active.revision else self.original_path(engine)
-            if (not target or target["revision"] == (active.revision if active else None)) and cached.is_dir():
+        if check.get("status") == "unavailable" and active is None:
+            cached = original
+            if cached.is_dir():
                 cached_revision = self._complete_cached_source(engine, cached)
                 local_source = cached
                 target = {"revision": cached_revision, "repository": spec.repository,
                           "ref": cached_revision, "channel": "local-cache"}
-        if not target:
-            raise RuntimeErrorBase(f"{engine}: update check unavailable and no installed runtime is usable")
-        sha = target.get("revision", "")
-        if not _SHA.fullmatch(sha):
-            raise RuntimeErrorBase("runtime installation requires an exact commit SHA")
-        if target.get("repository", spec.repository) != spec.repository:
-            raise RuntimeErrorBase("runtime target repository differs from the approved original")
+
         state = _read(self._state(engine), {})
         if persistent is None:
             preference = state.get("preferred_storage")
@@ -559,96 +612,264 @@ class RuntimeManager:
             else:
                 raise RuntimeDecisionRequired({"kind": "storage", "engine": engine,
                     "message": f"Keep {engine} installed for regular use? Declining builds it in temp.",
-                    "persistent_root": str(self.work_root / ".aqx-runtime-builds" / engine),
-                    "temporary_root": str(self.temp_root / "aqx-runtime-sessions" / engine),
+                    "persistent_root": str(original),
+                    "temporary_root": str(self.temp_root),
                     "target": target, "choices": ["persistent", "temporary", "cancel"]})
+
+        legacy_to_remove = None
+        force_rebuild = False
+        if (persistent and active and active.manifest.get("storage_policy") == "persistent"
+                and self._legacy_runtime_root(active.manifest["root"])):
+            legacy_root = Path(active.manifest["root"]).resolve()
+            old_revision = active.revision
+            with self._lock(engine):
+                live = self._live_leases(active.identity)
+                if live:
+                    raise RuntimeErrorBase(
+                        f"{engine} is in use by a running aqx job (pid {live[0]}); update after it finishes")
+                if original.exists():
+                    if update is None:
+                        relocation_target = {"revision": old_revision, "repository": spec.repository,
+                                             "ref": old_revision, "channel": "installed"}
+                        raise RuntimeDecisionRequired({"kind": "update", "engine": engine,
+                            "message": f"Move {engine} to {original}: rebuild {old_revision[:12]} there (in place)",
+                            "installed_revision": old_revision, "target": relocation_target,
+                            "comparison": "relocate", "legacy_root": str(legacy_root),
+                            "persistent_root": str(original),
+                            "choices": ["update", "installed", "cancel"]})
+                    if update is False:
+                        return active
+                    target = {"revision": old_revision, "repository": spec.repository,
+                              "ref": old_revision, "channel": "installed"}
+                    legacy_to_remove = legacy_root
+                    force_rebuild = True
+                else:
+                    original.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(active.source), str(original))
+                    state = _read(self._state(engine), {})
+                    state.pop("active", None)
+                    state.pop("previous", None)
+                    _write(self._state(engine), state)
+                    old_fingerprint = active.manifest.get("build_fingerprint", {})
+                    try:
+                        relocated_output = probe(original, original / "build") if probe else None
+                    except Exception:
+                        relocated_output = None
+                    required_missing = set(required_binaries) - set(
+                        (relocated_output or {}).get("binaries", {}))
+                    requested = {"adapter_version": spec.adapter_version, "platform": platform.platform(),
+                                 "machine": platform.machine(), **(build_fingerprint or {}),
+                                 "required_binaries": sorted(required_binaries)}
+                    config_changed = any(old_fingerprint.get(key) != value for key, value in requested.items()
+                                         if key != "required_binaries")
+                    if relocated_output and not required_missing and not config_changed:
+                        manifest = self._manifest(engine, original, relocated_output,
+                            revision=old_revision, build_fingerprint=old_fingerprint,
+                            storage_policy="persistent", ownership_kind="managed", root=original)
+                        active = self._activate(engine, manifest, record_previous=False)
+                        self._remove_legacy_root(legacy_root)
+                        if not target or target["revision"] == old_revision or update is False:
+                            return active
+                    else:
+                        active = None
+                        force_rebuild = True
+                        legacy_to_remove = legacy_root
+                        target = {"revision": old_revision, "repository": spec.repository,
+                                  "ref": old_revision, "channel": "installed"}
+
+        missing = set(required_binaries) - set(active.binaries) if active else set()
+        storage_change = bool(active and
+            (active.manifest["storage_policy"] == "persistent") != persistent)
+        requested_configuration = {"adapter_version": spec.adapter_version,
+                                   "platform": platform.platform(),
+                                   "machine": platform.machine(),
+                                   **(build_fingerprint or {}),
+                                   "required_binaries": sorted(required_binaries)}
+        configuration_change = bool(active and any(
+            active.manifest.get("build_fingerprint", {}).get(key) != value
+            for key, value in requested_configuration.items() if key != "required_binaries"))
+        rebuild = bool(missing or storage_change or configuration_change or force_rebuild)
+        if active and not rebuild and (not target or target["revision"] == active.revision or update is False):
+            return active
+        if active and rebuild and (not target or update is False):
+            target = {"revision": active.revision, "repository": spec.repository,
+                      "ref": active.revision, "channel": "installed"}
+        if active and update is None and target and target["revision"] != active.revision:
+            raise RuntimeDecisionRequired({"kind": "update", "engine": engine,
+                "message": f"A different {engine} revision is available; build and validate it?",
+                "installed_revision": active.revision, "target": target,
+                "comparison": check.get("comparison", "different"),
+                "choices": ["update", "installed", "cancel"]})
+
+        if check.get("status") == "unavailable" and active and target and target["revision"] == active.revision:
+            cached = active.source
+            if cached.is_dir():
+                cached_revision = self._complete_cached_source(engine, cached)
+                local_source = cached
+                target = {"revision": cached_revision, "repository": spec.repository,
+                          "ref": cached_revision, "channel": "local-cache"}
+
+        if not target:
+            raise RuntimeErrorBase(f"{engine}: update check unavailable and no installed runtime is usable")
+        sha = target.get("revision", "")
+        if not _SHA.fullmatch(sha):
+            raise RuntimeErrorBase("runtime installation requires an exact commit SHA")
+        if target.get("repository", spec.repository) != spec.repository:
+            raise RuntimeErrorBase("runtime target repository differs from the approved original")
+
         fingerprint = {"adapter_version": spec.adapter_version, "platform": platform.platform(),
                        "machine": platform.machine(), **(build_fingerprint or {}),
                        "required_binaries": sorted(required_binaries)}
         key = canonical_hash(fingerprint)
-        base = (self.work_root / ".aqx-runtime-builds" if persistent else
-                self.temp_root / "aqx-runtime-sessions")
-        candidate_base = base / engine
-        legacy_root = candidate_base / sha / key
-        root = _candidate_root(candidate_base, sha, key)
-        short_root = root != legacy_root
-        source = root / "source"
+        root = original if persistent else self.temp_root / f"{engine}-{sha[:12]}-{key[:8]}"
+        source = root
+        build_dir = root / "build"
+        manifest_path = (self.state_root / engine / (canonical_hash({
+            "engine": engine, "revision": sha, "root": str(root.resolve()),
+            "build_fingerprint": fingerprint}) + ".json") if persistent else
+            root / "aqx-manifest.json")
+        setup_path = self.state_root / engine / "setup.json" if persistent else root / "aqx-setup.json"
+        failure_path = self.state_root / engine / "failure.json" if persistent else root / "aqx-failure.json"
+
         with self._lock(engine):
             previous = self.inspect(engine)
-            manifest_path = root / "manifest.json"
-            if manifest_path.is_file():
-                manifest = (_read_short_candidate_manifest(root, sha, key) if short_root
-                            else _read(manifest_path))
+            if (persistent and previous
+                    and previous.manifest.get("storage_policy") == "persistent"
+                    and previous.source.resolve() == root.resolve()):
+                live = self._live_leases(previous.identity)
+                if live:
+                    raise RuntimeErrorBase(
+                        f"{engine} is in use by a running aqx job (pid {live[0]}); update after it finishes")
+            if not persistent and (root / "aqx-manifest.json").is_file():
+                manifest = _read(root / "aqx-manifest.json", {})
+                if (manifest.get("revision") != sha or
+                        canonical_hash(manifest.get("build_fingerprint", {})) != key):
+                    raise RuntimeErrorBase(f"runtime directory collision at {root}")
                 handle = RuntimeHandle.from_manifest(manifest)
                 self.verify(handle)
                 if set(required_binaries) - set(handle.binaries):
                     raise RuntimeErrorBase("cached runtime lacks required binary targets")
                 return self._activate(engine, handle.manifest)
-            root.mkdir(parents=True, exist_ok=True)
+
+            if persistent and original.exists():
+                try:
+                    self._check_original(engine, original)
+                except RuntimeErrorBase as error:
+                    raise RuntimeErrorBase(
+                        f"{original} exists but is not a checkout of {spec.repository}; "
+                        "move it away or set AQX_WORK_ROOT") from error
+                status = self._git(original, "status", "--porcelain", "--untracked-files=no")
+                expected_patches = bool(status and self._expected_ggml_patches(engine, original, status))
+                if status and not expected_patches:
+                    raise RuntimeErrorBase(f"{original} has local changes; commit/stash them first")
+            else:
+                expected_patches = False
+
+            if persistent:
+                state = _read(self._state(engine), {})
+                state.pop("active", None)
+                state.pop("previous", None)
+                _write(self._state(engine), state)
+
             commands = []
+
+            def record_setup(**extra):
+                _write(setup_path, {"engine": engine, "revision": sha,
+                                    "commands": commands, **extra})
 
             def run(args):
                 print(f"  .. {engine}: {' '.join(map(str, args[:3]))}...",
                       file=sys.stderr, flush=True)
                 result = self.run_command(args)
-                record = {"argv": list(map(str, args)), "returncode": result.returncode,
-                          "stdout": result.stdout, "stderr": result.stderr}
-                commands.append(record)
-                _write(root / "setup.json", {"engine": engine, "revision": sha, "commands": commands})
+                commands.append({"argv": list(map(str, args)), "returncode": result.returncode,
+                                 "stdout": result.stdout, "stderr": result.stderr})
+                record_setup()
                 if result.returncode:
-                    raise RuntimeErrorBase(f"{engine}: native source setup failed; log: {root / 'setup.json'}")
+                    raise RuntimeErrorBase(f"{engine}: native source setup failed; log: {setup_path}")
+
             try:
                 if local_source is not None:
                     if self._complete_cached_source(engine, local_source) != sha:
                         raise RuntimeErrorBase("cached runtime revision changed after selection")
-                    if not source.exists():
-                        shutil.copytree(local_source, source,
-                            ignore=lambda directory, names: ["build"]
-                            if Path(directory).resolve() == local_source and "build" in names else [])
-                    if self._complete_cached_source(engine, source) != sha:
-                        raise RuntimeErrorBase("copied offline runtime source differs from the selected revision")
-                    _write(root / "setup.json", {"engine": engine, "revision": sha,
-                        "source_cache": str(local_source), "network_setup": False})
+                    if local_source.resolve() != source.resolve():
+                        if not source.exists():
+                            shutil.copytree(local_source, source,
+                                ignore=lambda directory, names: ["build"]
+                                if Path(directory).resolve() == local_source and "build" in names else [])
+                        if self._complete_cached_source(engine, source) != sha:
+                            raise RuntimeErrorBase("copied offline runtime source differs from the selected revision")
+                    record_setup(source_cache=str(local_source), network_setup=False)
                 elif not source.exists():
                     run(["git", "clone", "--no-checkout", "--filter=blob:none", spec.url, source])
                 else:
                     self._check_original(engine, source)
-                    status = self._git(source, "status", "--porcelain", "--untracked-files=no")
-                    if status and not self._expected_ggml_patches(engine, source, status):
-                        raise RuntimeErrorBase("candidate source has tracked changes; leaving it untouched")
+
                 if local_source is None:
-                    # Fetch immutable SHA, never checkout a moving branch/tag.
                     run(["git", "-C", source, "fetch", "--depth", "1", "origin", sha])
                     run(["git", "-C", source, "checkout", "--detach", sha])
-                    run(["git", "-C", source, "submodule", "update", "--init", "--recursive"])
+                    submodule_command = ["git", "-C", source, "submodule", "update",
+                                         "--init", "--recursive"]
+                    if expected_patches:
+                        submodule_command.append("--force")
+                    run(submodule_command)
                 if self._git(source, "rev-parse", "HEAD") != sha:
                     raise RuntimeErrorBase("fetched source differs from the approved runtime revision")
-                output = builder(source, source / "build")
+
+                old_fingerprint = previous.manifest.get("build_fingerprint", {}) if previous else {}
+                configuration_changed = bool(previous and any(
+                    old_fingerprint.get(name) != value for name, value in fingerprint.items()
+                    if name != "required_binaries"))
+                if (persistent and (configuration_changed or force_rebuild) and build_dir.exists()):
+                    if build_dir.is_dir():
+                        shutil.rmtree(build_dir)
+                    else:
+                        build_dir.unlink()
+
+                output = builder(source, build_dir)
                 if probe:
-                    probed = probe(source, source / "build")
+                    probed = probe(source, build_dir)
                     if probed:
                         output = {**output, **probed,
                             "binaries": {**output.get("binaries", {}), **probed.get("binaries", {})},
                             "resources": {**output.get("resources", {}), **probed.get("resources", {})},
                             "provenance": {**output.get("provenance", {}), **probed.get("provenance", {})}}
-                if set(required_binaries) - set(output.get("binaries", {})):
+                missing = set(required_binaries) - set(output.get("binaries", {}))
+                if missing:
                     raise RuntimeErrorBase("runtime build lacks required targets: " +
-                        ", ".join(sorted(set(required_binaries) - set(output.get("binaries", {})))))
+                        ", ".join(sorted(missing)))
                 manifest = self._manifest(engine, source, output, revision=sha,
-                    build_fingerprint=fingerprint, storage_policy="persistent" if persistent else "temporary",
+                    build_fingerprint=fingerprint,
+                    storage_policy="persistent" if persistent else "temporary",
                     ownership_kind="managed", root=root)
-                _write(manifest_path, manifest)
-                return self._activate(engine, manifest)
-            except (OSError, ValueError, subprocess.SubprocessError, RuntimeError) as error:
-                _write(root / "failure.json", {"engine": engine, "revision": sha,
+                if not persistent:
+                    _write(manifest_path, manifest)
+                handle = self._activate(engine, manifest, record_previous=not persistent)
+                if legacy_to_remove is not None:
+                    if not self._live_leases(previous.identity if previous else ""):
+                        self._remove_legacy_root(legacy_to_remove)
+                return handle
+            except BaseException as error:
+                failure_path.parent.mkdir(parents=True, exist_ok=True)
+                if not persistent:
+                    root.mkdir(parents=True, exist_ok=True)
+                _write(failure_path, {"engine": engine, "revision": sha,
                     "failed_at": _now(), "error": str(error),
                     "previous_identity": previous.identity if previous else None})
-                raise RuntimeErrorBase(f"{engine}: candidate setup/build failed; active installation preserved; "
-                                       f"log: {root / 'failure.json'} ({error})") from error
+                if not isinstance(error, Exception):
+                    raise
+                raise RuntimeErrorBase(
+                    f"{engine}: runtime setup/build failed; log: {failure_path} ({error})") from error
 
     def rollback(self, engine):
         with self._lock(engine):
             state = _read(self._state(engine), {})
+            active = state.get("active")
+            if (active and active.get("storage_policy") == "persistent"
+                    and Path(active["root"]).resolve() == self.original_path(engine).resolve()):
+                root = self.original_path(engine)
+                raise RuntimeErrorBase(
+                    f"{engine} is installed in place at {root}; reinstall an older version with "
+                    f"`aqx runtime install {engine} --persistent --revision <sha>`")
             if not state.get("previous"):
                 raise RuntimeErrorBase(f"{engine}: no previous installation to restore")
             handle = RuntimeHandle.from_manifest(state["previous"])
@@ -673,14 +894,13 @@ class RuntimeManager:
         if data.get("origin_kind") != "upstream" or data.get("repository") != runtime_spec(handle.engine).repository:
             raise RuntimeErrorBase("frozen runtime does not identify its designated original upstream")
         root = Path(data["root"]).resolve()
-        base = self.temp_root / "aqx-runtime-sessions" / handle.engine
-        if not _inside(root, base) or handle.source.resolve() != root / "source":
+        if (root.parent != self.temp_root or not root.name.startswith(handle.engine + "-")
+                or handle.source.resolve() != root):
             raise RuntimeErrorBase("frozen runtime reconstruction path is outside managed temporary storage")
         spec = runtime_spec(handle.engine)
         with self._lock(handle.engine):
             if handle.source.exists():
                 return self.verify(handle)
-            root.mkdir(parents=True, exist_ok=True)
             commands = []
             try:
                 for command in (
@@ -692,18 +912,21 @@ class RuntimeManager:
                     result = self.run_command(command)
                     commands.append({"argv": list(map(str, command)), "returncode": result.returncode,
                                      "stdout": result.stdout, "stderr": result.stderr})
-                    _write(root / "restore.json", {"identity": handle.identity, "commands": commands})
+                    _write(root / "aqx-setup.json", {"identity": handle.identity, "commands": commands})
                     if result.returncode:
                         raise RuntimeErrorBase(f"runtime reconstruction source setup failed: {handle.engine}")
                 builder(handle.source, handle.build_dir)
                 if probe:
                     probe(handle.source, handle.build_dir)
                 self.verify(handle)
-                _write(root / "manifest.json", data)
+                _write(root / "aqx-manifest.json", data)
                 return handle
-            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
-                _write(root / "restore-failure.json", {"identity": handle.identity,
+            except BaseException as error:
+                root.mkdir(parents=True, exist_ok=True)
+                _write(root / "aqx-failure.json", {"identity": handle.identity,
                     "error": str(error), "failed_at": _now()})
+                if not isinstance(error, Exception):
+                    raise
                 raise RuntimeErrorBase("runtime reconstruction differs from the approved build or failed; "
                     "approve a new runtime plan before reusing affected artifacts: " + str(error)) from error
 
@@ -725,8 +948,7 @@ class RuntimeManager:
         if data["storage_policy"] != "temporary" or data["ownership_kind"] != "managed":
             return False
         root = Path(data["root"]).resolve()
-        permitted = self.temp_root / "aqx-runtime-sessions" / handle.engine
-        if not _inside(root, permitted):
+        if root.parent != self.temp_root or not root.name.startswith(handle.engine + "-"):
             raise RuntimeErrorBase("refusing runtime cleanup outside its temporary managed root")
         with self._lock(handle.engine):
             leases = self.state_root / "leases" / handle.identity
@@ -741,17 +963,15 @@ class RuntimeManager:
             return True
 
     def prune(self, engine, *, dry_run=True):
-        """Inventory/remove obsolete managed versions; active/previous are kept.
-
-        Records and logs remain available for explaining a resumed job's required
-        reconstruction. A stale lease is conservatively retained, never guessed
-        to be abandoned based on its age.
-        """
+        """Inventory/remove obsolete managed runtimes and failed legacy candidates."""
         spec = runtime_spec(engine)
         result = {"engine": engine, "dry_run": dry_run, "candidates": [], "protected": []}
         with self._lock(engine):
             state = _read(self._state(engine), {})
             protected = {item["identity"] for item in (state.get("active"), state.get("previous")) if item}
+            protected_roots = {str(Path(item["root"]).resolve())
+                               for item in (state.get("active"), state.get("previous")) if item}
+            recorded_roots = set()
             records = self.state_root / spec.id
             for path in sorted(records.glob("*.json")):
                 if path.name in ("installation.json", "update-check.json"):
@@ -765,19 +985,50 @@ class RuntimeManager:
                 if identity != canonical_hash(recorded):
                     raise RuntimeErrorBase(f"refusing prune of modified runtime manifest: {path}")
                 root = Path(manifest["root"]).resolve()
+                recorded_roots.add(str(root))
                 if manifest.get("ownership_kind") != "managed" or not root.exists():
                     continue
-                leases = self.state_root / "leases" / identity
-                if identity in protected or (leases.is_dir() and any(leases.glob("*.json"))):
+                if identity in protected or self._live_leases(identity):
                     result["protected"].append(str(root))
                     continue
-                bases = (self.work_root / ".aqx-runtime-builds" / engine,
-                         self.temp_root / "aqx-runtime-sessions" / engine)
-                if not any(_inside(root, base) for base in bases):
+                if root == self.original_path(engine).resolve():
+                    continue
+                legacy_base = self.work_root / ".aqx-runtime-builds" / engine
+                temporary_root = root.parent == self.temp_root and root.name.startswith(engine + "-")
+                if not temporary_root and not _inside(root, legacy_base):
                     raise RuntimeErrorBase("refusing prune outside managed runtime roots")
                 result["candidates"].append(str(root))
                 if not dry_run:
-                    shutil.rmtree(root)
+                    if temporary_root:
+                        shutil.rmtree(root)
+                    else:
+                        self._remove_legacy_root(root)
+
+            legacy_base = self.work_root / ".aqx-runtime-builds" / engine
+            if legacy_base.is_dir():
+                lease_root = self.state_root / "leases"
+                live_lease_ids = []
+                if lease_root.is_dir():
+                    for identity_dir in lease_root.iterdir():
+                        if self._live_leases(identity_dir.name):
+                            live_lease_ids.append(identity_dir.name)
+                leased_roots = set()
+                for identity in live_lease_ids:
+                    record = _read(records / (identity + ".json"), {})
+                    if isinstance(record, dict) and record.get("root"):
+                        leased_roots.add(str(Path(record["root"]).resolve()))
+                for revision_dir in sorted(path for path in legacy_base.iterdir() if path.is_dir()):
+                    for candidate in sorted(path for path in revision_dir.iterdir() if path.is_dir()):
+                        candidate_key = str(candidate.resolve())
+                        if candidate_key in protected_roots or candidate_key in leased_roots:
+                            if candidate_key not in result["protected"]:
+                                result["protected"].append(candidate_key)
+                            continue
+                        if (candidate_key not in recorded_roots
+                                and not (candidate / "manifest.json").is_file()):
+                            result["candidates"].append(candidate_key)
+                            if not dry_run:
+                                self._remove_legacy_root(candidate)
         return result
 
 

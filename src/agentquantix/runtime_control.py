@@ -26,7 +26,10 @@ def _interactive_decision(details):
         answer = input(f"Keep {engine} installed for regular use? [Y/n] ").strip().casefold()
         return {"persistent": answer not in ("n", "no")}
     if details["kind"] == "update":
-        print(f"Installed: {details.get('installed_revision')} ({details.get('comparison', 'different')})")
+        if details.get("comparison") == "relocate":
+            print(f"Installed: {details['legacy_root']}; regular-use location is {details['persistent_root']}")
+        else:
+            print(f"Installed: {details.get('installed_revision')} ({details.get('comparison', 'different')})")
         if details.get("future_only"):
             print("This resumed job will keep its frozen runtime; the update is for future runs.")
         answer = input("Build and validate this runtime update? [y/N/cancel] ").strip().casefold()
@@ -92,12 +95,12 @@ def ensure_runtime(engine, *, compute_backend="auto", frozen=None, revision=None
             if not session.decide:
                 raise RuntimeDecisionRequired({"kind": "storage", "engine": engine,
                     "message": "Choose persistent or temporary use for the existing media runtime",
-                    "persistent_root": str(config.WORK_ROOT / ".aqx-runtime-builds" / engine),
-                    "temporary_root": str(source.parent), "legacy_source": str(source)})
+                    "persistent_root": str(session.manager.original_path(engine)),
+                    "temporary_root": str(session.manager.temp_root), "legacy_source": str(source)})
             answer = session.decide({"kind": "storage", "engine": engine,
                 "message": "Keep the existing media runtime for regular use?",
-                "persistent_root": str(config.WORK_ROOT / ".aqx-runtime-builds" / engine),
-                "temporary_root": str(source.parent), "legacy_source": str(source)})
+                "persistent_root": str(session.manager.original_path(engine)),
+                "temporary_root": str(session.manager.temp_root), "legacy_source": str(source)})
             if not answer or answer.get("cancel") or "persistent" not in answer:
                 raise RuntimeErrorBase("runtime migration cancelled")
             session.manager.migrate(engine, source,

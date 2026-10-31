@@ -8,7 +8,9 @@ existing native engines. Source version remains 0.4.5; this work does not publis
 ## Implemented
 
 - Shared identities, manifests, upstream update discovery, storage decisions,
-  adoption, candidate builds, activation, rollback, locks, leases and pruning.
+  adoption, in-place persistent builds, flat temporary builds, activation,
+  locks, leases and pruning. Rollback remains available only when a previous
+  installation exists; persistent in-place updates do not create one.
 - Native builders for llama.cpp, audio.cpp, whisper.cpp and stable-diffusion.cpp.
   Other engines in the roadmap have registry identities only; their builders
   and task pipelines remain later milestones.
@@ -20,9 +22,9 @@ existing native engines. Source version remains 0.4.5; this work does not publis
 - One metadata check per required engine per execution session, including voice
   scoring dependencies. An unavailable check is disclosed and installed-version
   use continues. Complete clean local source can support offline initial setup.
-- Side-by-side build candidates. Failed source setup, native build or probes do
-  not overwrite the active installation. Interactive execution can continue with
-  the previous installed version after the user chooses that fallback.
+- Persistent updates rebuild in place; temporary updates use a new flat
+  build-specific directory. Failed persistent builds leave no active install
+  and require rebuilding before use.
 - Adoption of existing original checkouts without resetting or modifying them.
   Existing media caches can be copied and verified outside temporary storage;
   source-bound build metadata triggers a candidate rebuild when needed.
@@ -72,11 +74,16 @@ Separate tools provide adoption, rollback and prune inventory/apply actions.
 
 ## Storage
 
-Managed persistent candidates live under
-`WORK_ROOT/.aqx-runtime-builds/<engine>/<sha>/<configuration>/`.
-Existing original checkouts can be adopted at their present location.
-Temporary originals live under
-`TEMP_DIR/aqx-runtime-sessions/<engine>/<sha>/<configuration>/`.
+Persistent originals live directly under
+`WORK_ROOT/<spec.directory>` (the path returned by
+`RuntimeManager.original_path(engine)`), with native build output in that
+checkout's `build/` directory. Persistent updates fetch, checkout, and rebuild
+in place; they do not retain a side-by-side version for rollback. A failed
+in-place update leaves the engine unavailable until it is rebuilt or reinstalled
+at an explicitly selected revision.
+
+Temporary originals use one flat checkout per build at
+`TEMP_DIR/<engine>-<sha[:12]>-<key[:8]>`, with `build/` inside that directory.
 Existing compatibility-fork directories retain their original behavior.
 
 Installation records, checks, leases and retained external catalog resources
