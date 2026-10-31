@@ -669,7 +669,8 @@ def cmd_publish(args):
 # voice / media execution
 # =====================================================
 VOICE_NON_ERRORS = {"human listening review required",
-                    "accepted and waiting for atomic bundle publication"}
+                    "accepted and waiting for atomic bundle publication",
+                    "human listening review is stale: generated audio changed since review"}
 
 
 def _read_json(path):

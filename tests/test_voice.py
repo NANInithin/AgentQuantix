@@ -407,6 +407,8 @@ def test_human_review_is_explicit_and_machine_readable(tmp_path):
         reviewer="Nithin", notes="Clear and correctly paced")
     review = json.loads(path.read_text(encoding="utf-8"))
     assert review["accepted"] is True and review["quant"] == "Q4_K_M"
+    assert "artifacts" not in review
+    assert "quality_cache_sha256" not in review
     with pytest.raises(voice.VoiceValidationError, match="reviewer"):
         voice.write_human_review(tmp_path / "bad.json", quant="Q8_0",
                                  accepted=True, reviewer="")

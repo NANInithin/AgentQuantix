@@ -627,11 +627,33 @@ def review(run_id, quant, *, accepted, reviewer, notes="", watched_video=False, 
     if not listened_audio:
         raise ValueError("a TTS review must attest that the reviewer listened to the "
                          "generated fixture audio (listened_audio / --listened-audio)")
+    root = Path(record.location)
+    missing_audio = (f"no generated TTS audio for {matched} in run {record.id}; "
+                     "run it first or check the id with aqx runs")
+    caches = sorted(root.glob(f"**/quality/{matched}/quality-cache.json"))
+    if not caches:
+        raise ValueError(missing_audio)
+    if len(caches) > 1:
+        matches = [cache.relative_to(root).as_posix() for cache in caches]
+        raise ValueError(f"multiple generated TTS quality caches for {matched} "
+                         f"in run {record.id}: {', '.join(matches)}")
+    cache_path = caches[0]
+    artifacts = {
+        artifact.relative_to(root).as_posix(): voice.sha256(artifact)
+        for artifact in sorted(cache_path.parent.glob("*.wav"))
+        if not artifact.name.endswith("-16khz.wav")
+    }
+    if not artifacts:
+        raise ValueError(missing_audio)
     path = Path(record.location) / "reviews" / f"{matched}.json"
     voice.write_human_review(path, quant=matched, accepted=bool(accepted),
-                             reviewer=reviewer, notes=notes or "")
+                             reviewer=reviewer, notes=notes or "",
+                             artifacts=artifacts,
+                             quality_cache_sha256=voice.sha256(cache_path))
     return {"run_id": record.id, "path": str(path), "recorded": True,
-            "quant": matched, "accepted": bool(accepted)}
+            "quant": matched, "accepted": bool(accepted),
+            "artifacts": artifacts,
+            "quality_cache_sha256": voice.sha256(cache_path)}
 
 
 def publish(run_id, quant, *, user_approved):

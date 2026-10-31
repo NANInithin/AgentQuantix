@@ -1,9 +1,10 @@
 """0.5.2: metadata routing, run ids and the shared CLI/agent actions."""
 import json
+from pathlib import Path
 
 import pytest
 
-from agentquantix import actions, cli, config, runs
+from agentquantix import actions, cli, config, runs, voice
 from agentquantix.pipeline.job import Job
 from agentquantix.tasks import TASKS, capabilities, route
 
@@ -195,15 +196,45 @@ def test_ambiguous_identifiers_return_choices(recorded):
 # =====================================================
 # review / publish gates
 # =====================================================
+def _create_tts_review_evidence(run_id, quant):
+    root = Path(runs.resolve(run_id).location)
+    quality = root / "models" / "candidate" / "quality" / quant
+    quality.mkdir(parents=True, exist_ok=True)
+    cache = quality / "quality-cache.json"
+    cache.write_text('{"quality": {}}\n', encoding="utf-8")
+    audio = quality / "00-short-en.wav"
+    audio.write_bytes(b"generated fixture audio")
+    resampled = quality / "00-short-en-16khz.wav"
+    resampled.write_bytes(b"resampled fixture audio")
+    return root, cache, audio, resampled
+
+
 def test_tts_reviews_require_a_listening_attestation(recorded):
     run_id = "voice:Qwen--Qwen3-TTS-12Hz-1.7B-Base"
     with pytest.raises(ValueError, match="listened"):
         actions.review(run_id, "Q4_K_M", accepted=True, reviewer="Ana")
     with pytest.raises(ValueError, match="reviewer"):
         actions.review(run_id, "Q4_K_M", accepted=True, reviewer=" ", listened_audio=True)
+    root, cache, audio, _ = _create_tts_review_evidence(run_id, "Q4_K_M")
     result = actions.review(run_id, "q4_k_m", accepted=True, reviewer="Ana", listened_audio=True)
     assert result["quant"] == "Q4_K_M" and result["accepted"]
+    artifact = audio.relative_to(root).as_posix()
+    assert result["artifacts"] == {artifact: voice.sha256(audio)}
+    assert result["quality_cache_sha256"] == voice.sha256(cache)
+    review = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
+    assert review["artifacts"] == result["artifacts"]
+    assert review["quality_cache_sha256"] == result["quality_cache_sha256"]
+    assert not any(path.endswith("-16khz.wav") for path in review["artifacts"])
     assert runs.resolve(run_id).details["reviews"] == ["Q4_K_M"]
+
+
+def test_tts_review_requires_generated_audio(recorded):
+    run_id = "voice:Qwen--Qwen3-TTS-12Hz-1.7B-Base"
+    review_path = Path(runs.resolve(run_id).location) / "reviews" / "Q4_K_M.json"
+    with pytest.raises(ValueError, match="no generated TTS audio"):
+        actions.review(run_id, "Q4_K_M", accepted=True, reviewer="Ana",
+                       listened_audio=True)
+    assert not review_path.exists()
 
 
 def test_text_runs_have_no_review_and_publish_during_the_run(recorded):
@@ -233,9 +264,11 @@ def test_voice_publication_needs_an_accepted_review(recorded, monkeypatch):
     runs.write_voice_record("Qwen/Qwen3-TTS-12Hz-1.7B-Base", {
         "model": "Qwen/Qwen3-TTS-12Hz-1.7B-Base", "target_repo": "owner/T-GGUF",
         "task": "text-to-speech", "engine": "llama.cpp"})
+    _create_tts_review_evidence(run_id, "Q4_K_M")
     with pytest.raises(ValueError, match="no accepted listening review"):
         actions.publish(run_id, "Q4_K_M", user_approved=True)
     actions.review(run_id, "Q4_K_M", accepted=True, reviewer="Ana", listened_audio=True)
+    _create_tts_review_evidence(run_id, "Q8_0")
     actions.review(run_id, "Q8_0", accepted=False, reviewer="Ana", listened_audio=True)
     seen = {}
     monkeypatch.setattr(actions, "voice_plan", lambda model, **kwargs: seen.update(kwargs) or {

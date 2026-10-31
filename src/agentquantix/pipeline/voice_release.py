@@ -948,12 +948,17 @@ def _score_existing_tts_artifacts(bundle: voice.VoiceBundle,
                                   fixtures: list[dict],
                                   options: VoiceReleaseOptions,
                                   quality_dir: Path,
-                                  review: dict | None = None) -> dict | None:
+                                  review: dict | None = None,
+                                  review_root: Path | None = None) -> dict | None:
     """Recheck legacy fixture artifacts without rerunning expensive inference.
 
     This fallback is used only after an explicit human review exists. New runs
     write a provenance-aware quality cache and resume from that instead.
     """
+    if review is not None and "artifacts" in review and (
+            review_root is None
+            or not _review_artifacts_match(review, review_root)):
+        return None
     newest_member = max(member.path.stat().st_mtime_ns
                         for member in bundle.members)
     results = []
@@ -1015,7 +1020,8 @@ def score_tts(bundle: voice.VoiceBundle, runtime: Path, options: VoiceReleaseOpt
               fixtures: list[dict] | None = None,
               asr_runtime: Path | None = None,
               asr_model: Path | None = None,
-              existing_review: dict | None = None) -> dict:
+              existing_review: dict | None = None,
+              review_root: Path | None = None) -> dict:
     fixtures = fixtures or load_fixtures(voice.TTS)
     fixtures = [fixture for fixture in fixtures
                 if bundle.backend.supports_language(fixture.get("language"))
@@ -1039,7 +1045,8 @@ def score_tts(bundle: voice.VoiceBundle, runtime: Path, options: VoiceReleaseOpt
         return cached["quality"]
     if existing_review and existing_review.get("accepted"):
         existing = _score_existing_tts_artifacts(
-            bundle, fixtures, options, quality_dir, existing_review)
+            bundle, fixtures, options, quality_dir, existing_review,
+            review_root)
         if existing is not None:
             return existing
     results = []
@@ -1502,6 +1509,10 @@ def publish_bundle(bundle: voice.VoiceBundle, target_repo: str,
             "verified": True}
 
 
+TTS_STALE_REVIEW_REASON = (
+    "human listening review is stale: generated audio changed since review")
+
+
 def _review_for(path: Path, quant: str) -> dict | None:
     candidate = path / f"{quant}.json" if path.is_dir() else path
     try:
@@ -1512,6 +1523,30 @@ def _review_for(path: Path, quant: str) -> dict | None:
     entries = reviews if isinstance(reviews, list) else [data]
     return next((entry for entry in entries
                  if isinstance(entry, dict) and entry.get("quant") == quant), None)
+
+
+def _review_artifacts_match(review: dict | None, run_root: Path) -> bool:
+    if review is None or "artifacts" not in review:
+        return True
+    artifacts = review["artifacts"]
+    if not isinstance(artifacts, dict):
+        return False
+    root = Path(run_root).resolve()
+    for relative, expected in artifacts.items():
+        if not isinstance(relative, str) or not isinstance(expected, str):
+            return False
+        relative_path = Path(relative)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            return False
+        path = (root / relative_path).resolve()
+        if root not in path.parents or not path.is_file():
+            return False
+        try:
+            if voice.sha256(path) != expected:
+                return False
+        except OSError:
+            return False
+    return True
 
 
 def _review_skip_entry(review: dict | None) -> dict:
@@ -1574,9 +1609,12 @@ def run_audiocpp_tts_release(repo_id: str, target_repo: str,
 
     results = {}
     accepted = []
+    review_root = work_dir(repo_id)
     for quant in options.quants or list(voice.available_quants(repo_id, backend)):
         review = (_review_for(Path(options.human_review), quant)
                   if options.human_review is not None else None)
+        review_stale = (review is not None
+                        and not _review_artifacts_match(review, review_root))
         if options.human_review is not None and (
                 review is None or not review.get("accepted")):
             results[quant] = _review_skip_entry(review)
@@ -1627,10 +1665,15 @@ def run_audiocpp_tts_release(repo_id: str, target_repo: str,
         )
         quality = score_tts(
             bundle, runtime, options,
-            existing_review=review)
+            existing_review=review if not review_stale else None,
+            review_root=review_root)
         bundle = voice.VoiceBundle(**{**bundle.__dict__, "quality": quality})
         entry = {"quality": quality, "feasibility": feasibility(bundle, quality)}
-        if not quality["passed"]:
+        if (review is not None and review.get("accepted")
+                and not _review_artifacts_match(review, review_root)):
+            entry["published"] = False
+            entry["reason"] = TTS_STALE_REVIEW_REASON
+        elif not quality["passed"]:
             entry["published"] = False
             entry["reason"] = "automated quality gate failed"
         elif options.human_review is None:
@@ -1674,9 +1717,12 @@ def run_tts_release(repo_id: str, target_repo: str,
             importance, gap_args = _tts_imatrix(base, llama_dir)
         except Exception as error:
             imatrix_error = str(error)
+    review_root = work_dir(repo_id)
     for quant in quants:
         review = (_review_for(Path(options.human_review), quant)
                   if options.human_review is not None else None)
+        review_stale = (review is not None
+                        and not _review_artifacts_match(review, review_root))
         if options.human_review is not None and (
                 review is None or not review.get("accepted")):
             results[quant] = _review_skip_entry(review)
@@ -1701,10 +1747,15 @@ def run_tts_release(repo_id: str, target_repo: str,
         )
         quality = score_tts(
             bundle, runtime, options,
-            existing_review=review)
+            existing_review=review if not review_stale else None,
+            review_root=review_root)
         bundle = voice.VoiceBundle(**{**bundle.__dict__, "quality": quality})
         entry = {"quality": quality, "feasibility": feasibility(bundle, quality)}
-        if not quality["passed"]:
+        if (review is not None and review.get("accepted")
+                and not _review_artifacts_match(review, review_root)):
+            entry["published"] = False
+            entry["reason"] = TTS_STALE_REVIEW_REASON
+        elif not quality["passed"]:
             entry["published"] = False
             entry["reason"] = "automated quality gate failed"
         elif options.human_review is None:

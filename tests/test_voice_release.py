@@ -5,7 +5,7 @@ import wave
 
 import pytest
 
-from agentquantix import voice
+from agentquantix import cli, runtime_control, voice
 from agentquantix.pipeline import voice_release
 
 
@@ -104,6 +104,17 @@ def test_reviewed_legacy_tts_artifacts_resume_without_inference(
     assert result["real_time_factor"] == 5.0
     assert result["minutes_per_audio_hour"] == 300.0
     assert result["performance_from_review"] is True
+    stale_review = {
+        "accepted": True,
+        "artifacts": {
+            (quality / "00-short-en.wav").relative_to(tmp_path).as_posix():
+                "0" * 64,
+        },
+    }
+    assert voice_release._score_existing_tts_artifacts(
+        bundle, [{"id": "short-en", "text": "Hello world", "language": "en"}],
+        voice_release.VoiceReleaseOptions(), quality, stale_review,
+        review_root=tmp_path) is None
 
 
 def test_tts_quality_cache_skips_repeated_inference(tmp_path, monkeypatch,
@@ -162,6 +173,134 @@ def test_tts_quality_cache_skips_repeated_inference(tmp_path, monkeypatch,
         "timeout 900 s",
     ]
     assert second_output.out == second_output.err == ""
+
+
+def _run_tts_release_with_review(tmp_path, monkeypatch, engine, review_state):
+    monkeypatch.setattr(voice_release.config, "TEMP_DIR", tmp_path / "aqx")
+    if engine == "llama.cpp":
+        repo_id = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+        quant = "Q4_K_M"
+        backend = voice.backend_for(repo_id, track=voice.TTS)
+        models = voice_release.work_dir(repo_id) / "models"
+        models.mkdir(parents=True)
+        base = models / "Qwen3-TTS-BF16.gguf"
+        mmproj = models / "mmproj-Qwen3-TTS-Q8_0.gguf"
+        base.write_bytes(b"base")
+        mmproj.write_bytes(b"mmproj")
+        runtime = tmp_path / "llama-cli"
+        quantizer = tmp_path / "quantize"
+        llama_dir = tmp_path / "llama.cpp"
+        monkeypatch.setattr(
+            voice_release, "convert_tts_source",
+            lambda *_args: (backend, base, mmproj, "rev", runtime,
+                            quantizer, llama_dir))
+
+        def quantize(_base, _quantizer, requested, **_kwargs):
+            path = models / f"Qwen3-TTS-{requested}.gguf"
+            path.write_bytes(b"quantized")
+            return path
+
+        monkeypatch.setattr(voice_release, "quantize_tts", quantize)
+        release = lambda options: voice_release.run_tts_release(
+            repo_id, "owner/tts-GGUF", options)
+    else:
+        repo_id = "openbmb/VoxCPM2"
+        quant = "Q8_0"
+        backend = voice.backend_for(repo_id, track=voice.TTS)
+        models = voice_release.work_dir(repo_id) / "models"
+        models.mkdir(parents=True)
+        source = tmp_path / "source"
+        runtime = tmp_path / "audiocpp-cli"
+        converter = tmp_path / "converter"
+        audio_dir = tmp_path / "audio.cpp"
+        monkeypatch.setattr(
+            voice_release, "_audiocpp_package_reference",
+            lambda *_args: False)
+        monkeypatch.setattr(
+            voice_release, "prepare_audiocpp_source",
+            lambda *_args: (backend, source, "rev", runtime, converter,
+                            audio_dir, models))
+        monkeypatch.setattr(
+            voice_release, "convert_audiocpp_model",
+            lambda _source, _backend, _converter, _audio_dir, output_dir,
+            requested: _write_audio_cpp_candidate(
+                output_dir, backend.family, requested))
+        monkeypatch.setattr(
+            voice_release, "_audiocpp_runtime_revision",
+            lambda *_args: "runtime-revision")
+        release = lambda options: voice_release.run_audiocpp_tts_release(
+            repo_id, "owner/tts-GGUF", options)
+
+    monkeypatch.setattr(
+        runtime_control, "prepare_voice_runtimes",
+        lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(voice_release, "_git_revision", lambda *_args: "rev")
+    monkeypatch.setattr(voice_release, "feasibility",
+                        lambda *_args: {"passed": True})
+    score_calls = []
+
+    def score(_bundle, _runtime, _options, *, existing_review=None,
+              review_root=None, **_kwargs):
+        score_calls.append((existing_review, review_root))
+        return {"passed": True, "roundtrip_wer": 0.0}
+
+    monkeypatch.setattr(voice_release, "score_tts", score)
+    root = voice_release.work_dir(repo_id)
+    primary = (models / f"Qwen3-TTS-{quant}.gguf"
+               if engine == "llama.cpp"
+               else models / f"{backend.family}-{quant}.gguf")
+    quality = primary.parent / "quality" / quant
+    quality.mkdir(parents=True)
+    cache = quality / "quality-cache.json"
+    cache.write_text('{"quality": {}}\n', encoding="utf-8")
+    audio = quality / "00-short-en.wav"
+    audio.write_bytes(b"reviewed audio")
+    artifact_hash = voice.sha256(audio)
+    if review_state == "stale":
+        audio.write_bytes(b"changed audio")
+    review_dir = root / "reviews"
+    review_path = review_dir / f"{quant}.json"
+    artifacts = ({audio.relative_to(root).as_posix(): artifact_hash}
+                 if review_state != "legacy" else None)
+    voice.write_human_review(
+        review_path, quant=quant, accepted=True, reviewer="Ana",
+        artifacts=artifacts,
+        quality_cache_sha256=(voice.sha256(cache)
+                              if artifacts is not None else None))
+    speaker = tmp_path / "speaker.wav"
+    speaker.write_bytes(b"speaker")
+    options = voice_release.VoiceReleaseOptions(
+        quants=[quant], publish=False, human_review=review_dir,
+        speaker=speaker)
+    result = release(options)
+    return result["results"][quant], score_calls
+
+
+def _write_audio_cpp_candidate(output_dir, family, quant):
+    path = output_dir / f"{family}-{quant}.gguf"
+    path.write_bytes(b"audio.cpp candidate")
+    return path
+
+
+@pytest.mark.parametrize("engine", ["llama.cpp", "audio.cpp"])
+@pytest.mark.parametrize("review_state", ["matching", "stale", "legacy"])
+def test_tts_release_binds_acceptance_to_reviewed_audio(
+        tmp_path, monkeypatch, engine, review_state):
+    result, score_calls = _run_tts_release_with_review(
+        tmp_path, monkeypatch, engine, review_state)
+
+    assert len(score_calls) == 1
+    review = score_calls[0][0]
+    if review_state == "stale":
+        assert review is None
+        assert result["published"] is False
+        assert result["reason"] == voice_release.TTS_STALE_REVIEW_REASON
+        assert result["reason"] in cli.VOICE_NON_ERRORS
+    else:
+        assert review["accepted"] is True
+        assert result["published"] is False
+        assert result["reason"] == (
+            "accepted and waiting for atomic bundle publication")
 
 
 def test_source_preflight_returns_revision_and_size():

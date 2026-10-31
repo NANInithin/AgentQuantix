@@ -1284,15 +1284,22 @@ def quality_passed(result: dict, max_roundtrip_wer: float = 0.35) -> bool:
 
 
 def write_human_review(path: Path | str, *, quant: str, accepted: bool,
-                       reviewer: str, notes: str = "") -> Path:
+                       reviewer: str, notes: str = "",
+                       artifacts: dict[str, str] | None = None,
+                       quality_cache_sha256: str | None = None) -> Path:
     if not reviewer.strip():
         raise VoiceValidationError("human listening review needs a reviewer")
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({
+    review = {
         "quant": quant, "accepted": bool(accepted), "reviewer": reviewer,
         "notes": notes, "reviewed_at": datetime.now(timezone.utc).isoformat(),
-    }, indent=2) + "\n", encoding="utf-8")
+    }
+    if artifacts is not None:
+        review["artifacts"] = artifacts
+    if quality_cache_sha256 is not None:
+        review["quality_cache_sha256"] = quality_cache_sha256
+    path.write_text(json.dumps(review, indent=2) + "\n", encoding="utf-8")
     return path
 
 
