@@ -696,19 +696,29 @@ class _Sibling:
 
 
 class _Info:
-    def __init__(self, siblings):
+    def __init__(self, siblings, card_data=None):
         self.siblings = siblings
+        self.card_data = card_data
 
 
 class _Api:
     def __init__(self):
         self.files = {}
         self.commits = []
+        self.repo_files = {}
+        self.repo_infos = {}
+        self.created_repos = []
 
-    def create_repo(self, **_kwargs):
+    def create_repo(self, **kwargs):
+        self.created_repos.append(kwargs)
         return None
 
-    def model_info(self, *_args, **_kwargs):
+    def list_repo_files(self, repo_id, **_kwargs):
+        return self.repo_files.get(repo_id, [])
+
+    def model_info(self, repo_id=None, **_kwargs):
+        if repo_id in self.repo_infos:
+            return self.repo_infos[repo_id]
         return _Info([_Sibling(name, value["bytes"], value["sha256"])
                       for name, value in self.files.items()])
 
@@ -737,12 +747,153 @@ def test_publication_is_one_commit_and_resume_skips_matching_members(
         quality={"passed": True})
     api = _Api()
 
-    result = voice_release.publish_bundle(bundle, "owner/repo", api=api)
+    result = voice_release.publish_bundle(
+        bundle, "owner/repo", license_name="Apache-2.0", api=api)
     assert result["verified"] and len(api.commits) == 1
     first_paths = {op.path_in_repo for op in api.commits[0]["operations"]}
     assert {"model.gguf", "mmproj.gguf", "bundle.json", "quality.json",
             "README.md"} <= first_paths
 
-    voice_release.publish_bundle(bundle, "owner/repo", api=api)
+    voice_release.publish_bundle(
+        bundle, "owner/repo", license_name="Apache-2.0", api=api)
     second_paths = {op.path_in_repo for op in api.commits[1]["operations"]}
     assert second_paths == {"bundle.json", "quality.json", "README.md"}
+
+
+def _publication_bundle(tmp_path, *, source_repo=None, configuration=None):
+    backend = next(item for item in voice.AUDIOCPP_BACKENDS
+                   if item.family == "breeze_tts" and item.track == voice.TTS)
+    primary = tmp_path / "breeze-tts.gguf"
+    primary.write_bytes(b"model")
+    return voice.VoiceBundle(
+        backend=backend,
+        primary=voice.BundleMember(primary, "primary", quant="Q8_0"),
+        source_repo=source_repo,
+        source_revision="main",
+        quant="Q8_0",
+        configuration=configuration or {},
+        quality={"passed": True})
+
+
+def _install_download_stub(monkeypatch, downloads):
+    hub = pytest.importorskip("huggingface_hub")
+    monkeypatch.setattr(
+        hub, "hf_hub_download",
+        lambda *, repo_id, filename, **_kwargs: str(
+            downloads[(repo_id, filename)]))
+
+
+def test_publish_breeze_package_copies_license_notice_and_card_provenance(
+        tmp_path, monkeypatch):
+    pytest.importorskip("huggingface_hub")
+    repo = "audio-cpp/audio.cpp-gguf"
+    directory = "Breeze-TTS-2-GGUF"
+    package_id = "breeze_tts_2_q4_0"
+    catalog = _audio_cpp_catalog("revision")
+    catalog["registry"] = {"breeze_tts": {
+        "family": "breeze_tts",
+        "packages": [{
+            "id": package_id,
+            "target_directory": directory,
+            "download": {"repo": repo, "revision": "main"},
+        }],
+    }}
+    monkeypatch.setattr(voice, "audio_cpp_catalog", lambda: catalog)
+    license_path = tmp_path / "upstream-LICENSE"
+    notice_path = tmp_path / "upstream-NOTICE"
+    readme_path = tmp_path / "upstream-README"
+    license_path.write_text("Breeze license text\n", encoding="utf-8")
+    notice = (
+        "Breeze TTS 2 is licensed under the BreezeBlue Research and "
+        "Non-Commercial License Agreement. Copyright (c) 2026 RESONIA, "
+        "INC. All Rights Reserved.")
+    notice_path.write_text(notice, encoding="utf-8")
+    readme_path.write_text(
+        "| breeze_tts | [BreezeBlue Research and Non-Commercial License]"
+        "(https://huggingface.co/BreezeBlue/Breeze-TTS-2/blob/main/LICENSE) "
+        "|\n",
+        encoding="utf-8")
+    _install_download_stub(monkeypatch, {
+        (repo, f"{directory}/LICENSE"): license_path,
+        (repo, f"{directory}/NOTICE"): notice_path,
+        (repo, "README.md"): readme_path,
+    })
+    api = _Api()
+    api.repo_files[repo] = [
+        f"{directory}/LICENSE", f"{directory}/NOTICE"]
+    bundle = _publication_bundle(
+        tmp_path, source_repo=repo,
+        configuration={"audio_cpp_package": package_id})
+
+    result = voice_release.publish_bundle(bundle, "owner/breeze", api=api)
+
+    assert result["license_files"] == ["LICENSE", "NOTICE"]
+    committed = {op.path_in_repo: op for op in api.commits[0]["operations"]}
+    assert {"LICENSE", "NOTICE"} <= committed.keys()
+    card_path = voice_release.Path(committed["README.md"].path_or_fileobj)
+    card = card_path.read_text(encoding="utf-8")
+    assert "license: other" in card
+    assert "license_name: breezeblue-research-and-non-commercial-license" in card
+    assert "license_link: LICENSE" in card
+    assert "base_model: BreezeBlue/Breeze-TTS-2" in card
+    assert voice.REQUIRED_CARD_STATEMENTS[
+        "BreezeBlue/Breeze-TTS-2"] in card
+    assert f"## Notice\n\n{notice}" in card
+
+
+def test_publish_nonstandard_license_without_text_fails_before_hub_writes(
+        tmp_path):
+    pytest.importorskip("huggingface_hub")
+    repo = "BreezeBlue/Breeze-TTS-2"
+    api = _Api()
+    api.repo_infos[repo] = _Info([], {
+        "license": "other",
+        "license_name": "BreezeBlue Research and Non-Commercial License",
+    })
+    bundle = _publication_bundle(tmp_path, source_repo=repo)
+
+    with pytest.raises(voice.VoiceValidationError, match=(
+            "license 'BreezeBlue Research and Non-Commercial License' "
+            "is not a standard license and no license file was found")):
+        voice_release.publish_bundle(bundle, "owner/breeze", api=api)
+
+    assert not api.created_repos
+    assert not api.commits
+
+
+def test_publish_canonical_license_without_text_remains_allowed(tmp_path):
+    pytest.importorskip("huggingface_hub")
+    repo = "org/apache-model"
+    api = _Api()
+    api.repo_infos[repo] = _Info([], {"license": "apache-2.0"})
+    bundle = _publication_bundle(tmp_path, source_repo=repo)
+
+    result = voice_release.publish_bundle(bundle, "owner/apache", api=api)
+
+    assert result["verified"]
+    assert result["license_files"] == []
+    assert len(api.commits) == 1
+
+
+def test_publish_source_license_file_is_copied_to_root(tmp_path, monkeypatch):
+    pytest.importorskip("huggingface_hub")
+    repo = "BreezeBlue/Breeze-TTS-2"
+    license_path = tmp_path / "source-LICENSE"
+    license_path.write_text("Breeze license text\n", encoding="utf-8")
+    _install_download_stub(monkeypatch, {
+        (repo, "LICENSE"): license_path,
+    })
+    api = _Api()
+    api.repo_infos[repo] = _Info([], {
+        "license": "other",
+        "license_name": "BreezeBlue Research and Non-Commercial License",
+    })
+    api.repo_files[repo] = ["LICENSE"]
+    bundle = _publication_bundle(tmp_path, source_repo=repo)
+
+    result = voice_release.publish_bundle(bundle, "owner/breeze", api=api)
+
+    assert result["license_files"] == ["LICENSE"]
+    assert "LICENSE" in {
+        operation.path_in_repo
+        for operation in api.commits[0]["operations"]}

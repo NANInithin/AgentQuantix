@@ -284,19 +284,56 @@ def source_metadata(repo_id: str, api=None, family: str | None = None) -> dict:
     }
 
 
+def _audiocpp_spec_license(spec: dict, *,
+                           include_packages: bool = True) -> str | None:
+    values_to_check = (
+        (spec, *spec.get("packages", [])) if include_packages else (spec,))
+    for values in values_to_check:
+        for key in ("license", "license_name"):
+            if value := values.get(key):
+                if str(value).casefold() not in {"other", "unknown", "n/a"}:
+                    return str(value)
+    return None
+
+
+def _audiocpp_readme_license(repo_id: str, revision: str,
+                             backend: voice.VoiceBackend) -> tuple[str | None,
+                                                                  str | None]:
+    try:
+        from huggingface_hub import hf_hub_download
+        readme = Path(hf_hub_download(
+            repo_id=repo_id, filename="README.md", revision=revision,
+            token=config.TOKEN))
+        rows = readme.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return None, None
+    family = backend.family.casefold()
+    for row in rows:
+        if not row.lstrip().startswith("|") or family not in row.casefold():
+            continue
+        cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        license_cell = cells[-1]
+        linked = re.search(r"\[([^\]]+)\]\(([^)]+)\)", license_cell)
+        value = linked.group(1) if linked else license_cell.strip("` ")
+        link = linked.group(2) if linked else None
+        canonical = re.search(
+            r"(?i)\b(Apache-2\.0|MIT|BSD-2-Clause|BSD-3-Clause|"
+            r"CC-BY-4\.0|CC-BY-3\.0|CC0-1\.0)\b", value)
+        if canonical:
+            value = canonical.group(1)
+        if value and value.casefold() not in {"-", "unknown", "n/a"}:
+            return value, link
+    return None, None
+
+
 def _audiocpp_source_license(repo_id: str, backend: voice.VoiceBackend,
                              spec: dict | None = None) -> str | None:
     spec = spec or voice.audio_cpp_catalog()["registry"].get(backend.family, {})
+    if value := _audiocpp_spec_license(spec, include_packages=False):
+        return value
     packages = spec.get("packages", [])
-    for key in ("license", "license_name"):
-        if value := spec.get(key):
-            if str(value).casefold() not in {"other", "unknown", "n/a"}:
-                return str(value)
-    for package in packages:
-        for key in ("license", "license_name"):
-            if value := package.get(key):
-                if str(value).casefold() not in {"other", "unknown", "n/a"}:
-                    return str(value)
     defaults = spec.get("package_defaults", {}).get("download", {})
     package_repo = None
     package_revision = "main"
@@ -312,32 +349,118 @@ def _audiocpp_source_license(repo_id: str, backend: voice.VoiceBackend,
             break
     if not package_repo:
         return None
-    try:
+    name, _ = _audiocpp_readme_license(package_repo, package_revision,
+                                       backend)
+    return name
+
+
+_CANONICAL_PUBLICATION_LICENSES = (
+    "Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "CC-BY-4.0",
+    "CC-BY-3.0", "CC0-1.0", "CC-BY-SA-4.0", "CC-BY-NC-4.0",
+)
+_PUBLICATION_FILE_PREFIXES = ("license", "notice", "copying")
+
+
+def _is_canonical_publication_license(name: str | None) -> bool:
+    return bool(name and name.casefold() in {
+        item.casefold() for item in _CANONICAL_PUBLICATION_LICENSES})
+
+
+def _publication_files(api, repo_id: str | None, revision: str | None,
+                       directory: str | None = None) -> list[tuple[str, Path]]:
+    if not repo_id:
+        return []
+    kwargs = {"repo_id": repo_id, "repo_type": "model"}
+    if revision is not None:
+        kwargs["revision"] = revision
+    list_files = getattr(api, "list_repo_files", None)
+    if callable(list_files):
+        remote_paths = list_files(**kwargs)
+    else:
+        info = api.model_info(repo_id, revision=revision)
+        remote_paths = [
+            (getattr(item, "rfilename", None)
+             or getattr(item, "path", None))
+            for item in getattr(info, "siblings", ()) or ()
+        ]
+
+    prefix = str(directory or "").replace("\\", "/").strip("/")
+    files = []
+    for remote_path in sorted(str(path).replace("\\", "/")
+                              for path in remote_paths if path):
+        if prefix:
+            if not remote_path.startswith(prefix + "/"):
+                continue
+            relative = remote_path[len(prefix) + 1:]
+        else:
+            if "/" in remote_path:
+                continue
+            relative = remote_path
+        basename = relative.rsplit("/", 1)[-1]
+        if not basename.casefold().startswith(_PUBLICATION_FILE_PREFIXES):
+            continue
         from huggingface_hub import hf_hub_download
-        readme = Path(hf_hub_download(
-            repo_id=package_repo, filename="README.md",
-            revision=package_revision, token=config.TOKEN))
-        rows = readme.read_text(encoding="utf-8", errors="replace").splitlines()
-    except Exception:
-        return None
-    family = backend.family.casefold()
-    for row in rows:
-        if not row.lstrip().startswith("|") or family not in row.casefold():
-            continue
-        cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
-        if len(cells) < 2:
-            continue
-        license_cell = cells[-1]
-        linked = re.search(r"\[([^\]]+)\]\([^)]+\)", license_cell)
-        value = linked.group(1) if linked else license_cell.strip("` ")
-        canonical = re.search(
-            r"(?i)\b(Apache-2\.0|MIT|BSD-2-Clause|BSD-3-Clause|"
-            r"CC-BY-4\.0|CC-BY-3\.0|CC0-1\.0)\b", value)
-        if canonical:
-            value = canonical.group(1)
-        if value and value.casefold() not in {"-", "unknown", "n/a"}:
-            return value
-    return None
+        local = Path(hf_hub_download(
+            repo_id=repo_id, filename=remote_path, revision=revision,
+            token=config.TOKEN))
+        files.append((basename, local))
+    return files
+
+
+def _publication_license(bundle: voice.VoiceBundle, api) -> dict:
+    package_id = bundle.configuration.get("audio_cpp_package")
+    if package_id:
+        spec = voice.audio_cpp_catalog()["registry"].get(
+            bundle.backend.family, {})
+        package = next((item for item in spec.get("packages", [])
+                        if item.get("id") == package_id), {})
+        directory = package.get("target_directory")
+        repo_id, revision = _audiocpp_package_provenance(
+            bundle.backend, package_id)
+        name, link = ((None, None) if not repo_id else
+                      _audiocpp_readme_license(repo_id, revision or "main",
+                                               bundle.backend))
+        name = name or _audiocpp_spec_license(spec)
+        files = _publication_files(api, repo_id, revision, directory)
+        upstream = None
+        if link:
+            match = re.match(
+                r"(?i)^https?://huggingface\.co/([^/]+/[^/]+)(?:/|$)",
+                link.strip())
+            if match:
+                upstream = match.group(1)
+    else:
+        repo_id = bundle.source_repo
+        revision = bundle.source_revision
+        try:
+            info = api.model_info(repo_id, revision=revision)
+        except Exception:
+            info = None
+        card_data = getattr(info, "card_data", None)
+        if isinstance(card_data, dict):
+            name = card_data.get("license")
+            license_name = card_data.get("license_name")
+        else:
+            name = getattr(card_data, "license", None)
+            license_name = getattr(card_data, "license_name", None)
+        if str(name or "").casefold() == "other" and license_name:
+            name = license_name
+        files = _publication_files(api, repo_id, revision)
+        upstream = repo_id
+
+    notice_file = next(
+        ((basename, local) for basename, local in files
+         if basename.casefold().startswith("notice")), None)
+    notice = (notice_file[1].read_bytes().decode("utf-8", errors="replace")
+              if notice_file else None)
+    return {
+        "name": str(name) if name is not None else None,
+        "canonical": _is_canonical_publication_license(
+            str(name) if name is not None else None),
+        "upstream_repo": upstream,
+        "files": files,
+        "notice": notice,
+    }
 
 
 def audiocpp_source_plan(repo_id: str, backend: voice.VoiceBackend,
@@ -1459,16 +1582,35 @@ def publish_bundle(bundle: voice.VoiceBundle, target_repo: str,
         raise voice.VoiceValidationError("refusing incomplete bundle: "
                                          + "; ".join(problems))
     api = api or HfApi(token=config.TOKEN)
+    publication_license = _publication_license(bundle, api)
+    if license_name is not None:
+        publication_license["name"] = license_name
+        publication_license["canonical"] = _is_canonical_publication_license(
+            license_name)
+    package_id = bundle.configuration.get("audio_cpp_package")
+    if package_id:
+        license_repo, _ = _audiocpp_package_provenance(
+            bundle.backend, package_id)
+        spec = voice.audio_cpp_catalog()["registry"].get(
+            bundle.backend.family, {})
+        package = next((item for item in spec.get("packages", [])
+                        if item.get("id") == package_id), {})
+        license_directory = package.get("target_directory")
+    else:
+        license_repo = bundle.source_repo
+        license_directory = None
+    has_license_file = any(
+        basename.casefold().startswith(("license", "copying"))
+        for basename, _ in publication_license["files"])
+    if not publication_license["canonical"] and not has_license_file:
+        location = (f"{license_repo}/{license_directory}"
+                    if license_directory else license_repo or "unknown")
+        raise voice.VoiceValidationError(
+            f"refusing to publish {bundle.backend.family}: license "
+            f"'{publication_license['name'] or 'unknown'}' is not a standard "
+            f"license and no license file was found in {location}; "
+            "AgentQuantix will not redistribute it without the license text")
     api.create_repo(repo_id=target_repo, repo_type="model", exist_ok=True)
-    if license_name is None and bundle.source_repo:
-        try:
-            source_info = api.model_info(bundle.source_repo)
-            card_data = getattr(source_info, "card_data", None)
-            license_name = (getattr(card_data, "license", None)
-                            or (card_data.get("license")
-                                if isinstance(card_data, dict) else None))
-        except Exception:
-            license_name = None
     stage = bundle.primary.path.parent / "publication" / (bundle.quant or "base")
     stage.mkdir(parents=True, exist_ok=True)
     manifest_path = voice.write_manifest(bundle, stage / "bundle.json")
@@ -1476,8 +1618,26 @@ def publish_bundle(bundle: voice.VoiceBundle, target_repo: str,
     quality_path.write_text(json.dumps(bundle.quality or {}, indent=2,
                                        sort_keys=True) + "\n", encoding="utf-8")
     card_path = stage / "README.md"
-    card_path.write_text(voice.render_model_card(bundle, target_repo, license_name),
-                         encoding="utf-8")
+    package_statement = None
+    if package_id:
+        package_statement = (
+            f"GGUF files are audio.cpp's published package `{package_id}` "
+            f"from `{license_repo or bundle.source_repo or 'unknown'}`, not modified by "
+            "AgentQuantix.")
+    elif bundle.source_repo:
+        package_statement = (
+            f"Converted from `{bundle.source_repo}` by AgentQuantix with "
+            f"{bundle.backend.converter}.")
+    license_basenames = [basename for basename, _ in publication_license["files"]]
+    card_path.write_text(
+        voice.render_model_card(
+            bundle, target_repo, publication_license["name"],
+            license_canonical=publication_license["canonical"],
+            license_files=license_basenames,
+            upstream_repo=publication_license["upstream_repo"],
+            notice=publication_license["notice"],
+            modification_statement=package_statement),
+        encoding="utf-8")
     manifest = voice.load_manifest(manifest_path)
     remote = _remote_files(api, target_repo)
     operations = []
@@ -1490,6 +1650,16 @@ def publish_bundle(bundle: voice.VoiceBundle, target_repo: str,
             continue
         operations.append(CommitOperationAdd(
             path_in_repo=member.remote_path, path_or_fileobj=str(member.path)))
+    for basename, local in publication_license["files"]:
+        expected_bytes = local.stat().st_size
+        expected_sha256 = voice.sha256(local)
+        actual = remote.get(basename)
+        if (actual and actual.get("bytes") == expected_bytes
+                and (not actual.get("sha256")
+                     or actual["sha256"] == expected_sha256)):
+            continue
+        operations.append(CommitOperationAdd(
+            path_in_repo=basename, path_or_fileobj=str(local)))
     for local, remote_path in ((manifest_path, "bundle.json"),
                                (quality_path, "quality.json"),
                                (card_path, "README.md")):
@@ -1506,6 +1676,7 @@ def publish_bundle(bundle: voice.VoiceBundle, target_repo: str,
                                          + "; ".join(problems))
     return {"repo_id": target_repo, "uploaded": len(operations),
             "members": [member.remote_path for member in bundle.members],
+            "license_files": license_basenames,
             "verified": True}
 
 

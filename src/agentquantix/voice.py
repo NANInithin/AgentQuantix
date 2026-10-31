@@ -1303,8 +1303,20 @@ def write_human_review(path: Path | str, *, quant: str, accepted: bool,
     return path
 
 
+REQUIRED_CARD_STATEMENTS = {
+    "BreezeBlue/Breeze-TTS-2": (
+        "Derived from Breeze TTS 2 by BreezeBlue and licensed for research "
+        "and non-commercial use only."),
+}
+
+
 def render_model_card(bundle: VoiceBundle, target_repo: str,
-                      license_name: str | None = None) -> str:
+                      license_name: str | None = None, *,
+                      license_canonical: bool | None = None,
+                      license_files: list[str] | None = None,
+                      upstream_repo: str | None = None,
+                      notice: str | None = None,
+                      modification_statement: str | None = None) -> str:
     manifest = bundle.manifest()
     quality = bundle.quality or {}
     package_id = bundle.configuration.get("audio_cpp_package")
@@ -1364,10 +1376,52 @@ def render_model_card(bundle: VoiceBundle, target_repo: str,
             if isinstance(value, (str, int, float, bool)))
     quality_rows = quality_rows or "| status | Not measured |"
     language = ", ".join(bundle.backend.languages) or "See upstream model"
+    frontmatter_license = (
+        "other" if license_canonical is False else license_name or "other")
+    license_metadata = ""
+    if license_canonical is False:
+        license_slug = re.sub(r"[^a-z0-9]+", "-",
+                              (license_name or "unknown").casefold()).strip("-")
+        license_link = next(
+            (name for name in license_files or ()
+             if name.casefold().startswith(("license", "copying"))),
+            license_files[0] if license_files else "")
+        license_metadata = (f"license_name: {license_slug}\n"
+                            f"license_link: {license_link}\n")
+    base_model = upstream_repo or bundle.source_repo or ""
+    card_statement = None
+    if (license_name and re.search(
+            r"(?i)non[\s-]*commercial|research|\bNC\b", license_name)):
+        upstream = upstream_repo or bundle.source_repo
+        if upstream:
+            card_statement = REQUIRED_CARD_STATEMENTS.get(
+                upstream, f"Derived from `{upstream}` and licensed for "
+                "research and non-commercial use only.")
+    card_statement_line = (f"\n> **{card_statement}**\n"
+                           if card_statement else "")
+    license_file_line = ""
+    if license_files:
+        linked_files = ", ".join(
+            f"[`{name}`]({name})" for name in license_files)
+        license_file_line = (
+            f"Included upstream license and notice files: {linked_files}.")
+    license_extras = []
+    if modification_statement:
+        license_extras.append(modification_statement)
+    if license_file_line:
+        license_extras.append(license_file_line)
+    license_extra_text = ("\n\n" + "\n\n".join(license_extras)
+                          if license_extras else "")
+    notice_section = (f"## Notice\n\n{notice}\n\n"
+                      if notice is not None else "")
+    package_line = (
+        f'prebuilt audio.cpp package; not converted by AgentQuantix. Package id: '
+        f'`{package_id}`; revision: `{bundle.source_revision or "unknown"}`.'
+        if package_id and modification_statement is None else "")
     return f"""---
-base_model: {bundle.source_repo or ''}
-license: {license_name or 'other'}
-library_name: {bundle.backend.backend}
+base_model: {base_model}
+license: {frontmatter_license}
+{license_metadata}library_name: {bundle.backend.backend}
 tags:
 - {bundle.backend.track}
 - {bundle.backend.family}
@@ -1375,6 +1429,7 @@ tags:
 ---
 
 # {target_repo.split('/')[-1]}
+{card_statement_line}
 
 This is an AgentQuantix {bundle.backend.track.upper()} bundle for
 `{bundle.source_repo}` using `{bundle.backend.runtime}`. The bundle is the unit
@@ -1392,7 +1447,7 @@ Expected sample rate: {f'{bundle.backend.sample_rate} Hz' if bundle.backend.samp
 
 Speaker reference: {bundle.backend.speaker_reference}
 
-{f'prebuilt audio.cpp package; not converted by AgentQuantix. Package id: `{package_id}`; revision: `{bundle.source_revision or "unknown"}`.' if package_id else ''}
+{package_line}
 {('speaker similarity not measured' if bundle.backend.track == VC else 'no independent timing reference' if bundle.backend.track == ALIGN else '')}
 
 ## Bundle files
@@ -1414,8 +1469,8 @@ not use generated audio for impersonation, fraud, deception, harassment, or
 privacy-invasive activity. Review the upstream model license and acceptable-use
 terms before use.
 
-## License
+{notice_section}## License
 
 The upstream model license ({license_name or 'see upstream model'}) applies to
-the model artifacts. {bundle.backend.backend} retains its own license.
+the model artifacts. {bundle.backend.backend} retains its own license.{license_extra_text}
 """
