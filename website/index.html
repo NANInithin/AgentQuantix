@@ -934,6 +934,25 @@
       color: var(--foreground);
     }
 
+    
+    .quick-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .cheatsheet-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+    }
+    @media (min-width: 1024px) {
+      .cheatsheet-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .cheatsheet-grid .cheat-row:nth-last-child(2) {
+        border-bottom: none;
+      }
+    }
+
     /* Quickstart */
     .quick-grid {
       display: grid;
@@ -1075,10 +1094,7 @@
   <header>
     <div class="wrap header-inner">
       <a href="#" class="brand">
-        <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="4 17 10 11 4 5"></polyline>
-          <line x1="12" y1="19" x2="20" y2="19"></line>
-        </svg>
+        <img src="https://raw.githubusercontent.com/NANInithin/NANInithin.github.io/main/Assets/77537690.png" alt="AgentQuantix mascot" class="brand-mascot" />
         <span>AgentQuantix</span>
       </a>
       <nav class="nav-links">
@@ -1138,6 +1154,17 @@
 
       <!-- Terminal Area -->
       <div class="term-wrapper">
+        <div class="hero-cli-bar">
+          <div class="cli-toggle">
+            <button class="cli-tab active" id="cli-tab-install" onclick="setHeroCli('install')">install</button>
+            <button class="cli-tab" id="cli-tab-run" onclick="setHeroCli('run')">run</button>
+          </div>
+          <span class="cli-prompt shrink-0">$</span>
+          <span class="cli-text" id="cli-pill-text">uv tool install "agentquantix[full] @ git+https://github.com/NANInithin/AgentQuantix"</span>
+          <button class="copy-btn shrink-0" id="cli-copy-btn" onclick="copyHeroCli()" aria-label="Copy command">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          </button>
+        </div>
         <div class="term-tabs">
           <button class="term-tab active" id="tab-text" onclick="switchScenario('text')">Text · Qwen3-0.6B</button>
           <button class="term-tab" id="tab-voice" onclick="switchScenario('voice')">Voice / TTS · VoxCPM2</button>
@@ -1330,7 +1357,7 @@
     <div class="wrap">
       <p class="eyebrow">05 · Quick start</p>
       <h2 class="section-title">Up and running in a minute</h2>
-      <div class="section-body quick-grid">
+      <div class="section-body quick-stack">
         <div>
           <div class="filter-tabs" id="quick-tabs">
             <button class="filter-btn active" id="tab-btn-uv" onclick="switchInstallTab('uv')">uv tool (Recommended)</button>
@@ -1341,7 +1368,7 @@
 
         <div class="cheatsheet-card">
           <div class="cheatsheet-head">Commands cheat sheet</div>
-          <div id="cheatsheet-rows"></div>
+          <div id="cheatsheet-rows" class="cheatsheet-grid"></div>
         </div>
       </div>
     </div>
