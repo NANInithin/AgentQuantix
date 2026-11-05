@@ -1,0 +1,73 @@
+name: Website
+
+on:
+  push:
+    branches: [main, website/landing-page]
+    paths:
+      - "website/**"
+      - ".github/website.json"
+      - "scripts/build_website.mjs"
+      - "tests/website_pipeline.test.mjs"
+      - ".github/workflows/website.yml"
+  # Always report the required check, including product-only PRs.
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: website build
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.website.outputs.ready }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+      - name: Check publishing boundaries
+        run: node --test tests/website_pipeline.test.mjs
+      - name: Build Lovable export
+        id: website
+        run: node scripts/build_website.mjs
+      - name: Save review artifact
+        if: steps.website.outputs.ready == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: website-preview
+          path: build/website
+          include-hidden-files: true
+          retention-days: 7
+      - name: Package production Pages artifact
+        if: steps.website.outputs.ready == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: build/website
+
+  deploy:
+    name: deploy website
+    if: needs.build.outputs.ready == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

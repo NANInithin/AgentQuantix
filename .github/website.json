@@ -1,0 +1,6 @@
+{
+  "directory": "website",
+  "output": "dist",
+  "url": "https://agentquantix.naninithin.me",
+  "require_source": true
+}
