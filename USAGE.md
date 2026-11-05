@@ -12,8 +12,32 @@ document for its complete evidence and limits.
 
 ## Install and common commands
 
-Install the extras needed by your task. For development plus media and
-detection helpers:
+Install the extras needed by your task.
+
+### With uv (recommended for regular use)
+
+[uv](https://docs.astral.sh/uv/) installs `aqx` as a standalone tool in its
+own environment and puts it on `PATH`:
+
+```sh
+uv tool install "agentquantix[full] @ git+https://github.com/NANInithin/AgentQuantix"
+```
+
+`[full]` covers text, embeddings and detection runs and includes `hf_xet` and
+`ninja`. Add other extras as needed, e.g. `agentquantix[full,voice]`. Pin a
+commit with `@<sha>` after the repository URL.
+
+- Upgrade: rerun the command with `--force --reinstall`.
+- Uninstall: `uv tool uninstall agentquantix`.
+- On Windows, close any running `aqx` first
+  (`Get-Process aqx -ErrorAction SilentlyContinue | Stop-Process -Force`);
+  otherwise uv fails with "Access is denied".
+- If `aqx` is not found afterwards, run `uv tool update-shell` and open a new
+  terminal.
+
+### From a checkout (development)
+
+For development plus media and detection helpers:
 
 ```sh
 python -m pip install -e '.[dev,media,detection]'
