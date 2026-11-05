@@ -1,34 +1,1804 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#090d12"><meta name="description" content="Find, quantize and verify local AI models with AgentQuantix, the hardware-aware autonomous model release pipeline.">
-<meta property="og:title" content="AgentQuantix — Autonomous Model Foundry"><meta property="og:description" content="From model discovery to a verified local release, with hardware-aware planning and human approval.">
-<title>AgentQuantix — Autonomous Model Foundry</title>
-<style>
-:root{color-scheme:dark;--bg:#090d12;--panel:#0e141c;--panel2:#111a23;--line:#202c36;--text:#e9f1f4;--muted:#93a4ae;--green:#8bf0c1;--cyan:#83dbee;--yellow:#f1d08a;--red:#ff8b91;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--sans:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.65 var(--sans);background-image:radial-gradient(ellipse 58% 30% at 50% -8%,rgba(69,191,148,.11),transparent),linear-gradient(rgba(255,255,255,.022) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.022) 1px,transparent 1px);background-size:auto,46px 46px,46px 46px;background-repeat:no-repeat,repeat,repeat}a{color:inherit;text-decoration:none}button{font:inherit;color:inherit;cursor:pointer}code,.mono{font-family:var(--mono)}.wrap{width:min(1120px,calc(100% - 40px));margin:auto}.topbar{height:66px;position:sticky;top:0;z-index:10;background:rgba(9,13,18,.84);backdrop-filter:blur(14px);border-bottom:1px solid rgba(255,255,255,.07)}.nav{height:100%;display:flex;align-items:center;gap:27px}.brand{font-weight:700;letter-spacing:-.03em;display:flex;align-items:center;gap:10px}.brand-mark{display:grid;place-items:center;width:28px;height:28px;color:var(--green);border:1px solid #325a4c;border-radius:8px;background:#10211c;font:700 13px var(--mono)}.navlinks{display:flex;gap:23px;color:var(--muted);font-size:13px}.navlinks a:hover,.footlinks a:hover{color:var(--green)}.navright{margin-left:auto}.button{display:inline-flex;align-items:center;justify-content:center;gap:9px;padding:11px 16px;border:1px solid var(--line);border-radius:8px;background:#101820;font-weight:600;font-size:13px;transition:.2s}.button:hover{transform:translateY(-1px);border-color:#4f7667}.button.primary{background:var(--green);color:#09130f;border-color:var(--green)}.button.primary:hover{background:#a2f5cf}.hero{padding:91px 0 73px}.hero-grid{display:grid;grid-template-columns:1fr 1.04fr;gap:48px;align-items:center}.eyebrow{display:inline-flex;align-items:center;gap:8px;border:1px solid #2a4a3e;background:rgba(29,77,58,.2);border-radius:99px;padding:6px 11px;color:var(--green);font:11px var(--mono);letter-spacing:.02em}.dot{width:6px;height:6px;background:var(--green);border-radius:50%;box-shadow:0 0 12px var(--green)}h1{font-size:clamp(42px,5.2vw,65px);line-height:1.04;letter-spacing:-.058em;margin:24px 0 20px}h1 em{font-style:normal;background:linear-gradient(105deg,var(--green),var(--cyan));background-clip:text;color:transparent}.hero-copy{font-size:16px;max-width:540px;color:#a8b7bf;line-height:1.75}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}.install-pill{display:flex;align-items:center;gap:12px;margin-top:20px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:rgba(8,12,16,.75);max-width:100%;font:11px var(--mono);color:#c9d4d8}.install-pill code{overflow-wrap:anywhere}.install-pill button{border:0;background:none;color:var(--muted);font-size:11px}.terminal{border:1px solid #26343d;border-radius:12px;background:#080c10;overflow:hidden;box-shadow:0 20px 70px rgba(0,0,0,.36),0 0 46px rgba(68,197,145,.045)}.term-head{display:flex;align-items:center;gap:7px;padding:13px 15px;border-bottom:1px solid #1c262e;color:#84959e;font:11px var(--mono)}.lights{display:flex;gap:5px}.light{width:8px;height:8px;border-radius:50%;background:#ff7779}.light:nth-child(2){background:#eac56d}.light:nth-child(3){background:#74d6a2}.term-title{margin-left:8px}.term-actions{margin-left:auto;display:flex;gap:6px}.chip,.filter{border:1px solid #27363d;background:#0d1419;color:#8fa1aa;border-radius:99px;padding:5px 10px;font:10px var(--mono)}.chip.active,.filter.active{color:var(--green);border-color:#47745e;background:rgba(44,103,76,.2)}.term-body{padding:18px 18px 20px;min-height:300px;font:11px/1.9 var(--mono);color:#98a9af}.term-line{white-space:pre-wrap;overflow-wrap:anywhere;animation:appear .25s ease both}.term-line.cmd{color:#e3edf0}.term-line.ok{color:var(--green)}.term-line.accent{color:var(--cyan)}.term-line.warn{color:var(--yellow)}.term-button{border:1px solid #365f4c;background:#102019;color:var(--green);border-radius:5px;padding:4px 8px;margin:10px 5px 0 0;font:10px var(--mono)}@keyframes appear{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}section{padding:76px 0;scroll-margin-top:72px}.section-head{max-width:700px;margin-bottom:33px}.kicker{font:11px var(--mono);color:var(--green);letter-spacing:.14em;text-transform:uppercase}.section-head h2{font-size:clamp(28px,3.6vw,42px);line-height:1.15;letter-spacing:-.04em;margin:10px 0}.section-head p{color:var(--muted);margin:0}.pipeline{display:grid;grid-template-columns:.95fr 1.05fr;gap:16px}.steps{display:grid;gap:9px}.step{width:100%;display:flex;gap:14px;text-align:left;padding:16px;border:1px solid var(--line);background:rgba(14,20,28,.83);border-radius:10px}.step.active{border-color:#4b8168;background:rgba(25,57,44,.42)}.step-num{font:11px var(--mono);color:var(--green);padding-top:3px}.step strong{display:block;font-size:14px}.step small{display:block;margin-top:5px;color:var(--muted);line-height:1.55}.detail{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:24px}.detail-icon{font:23px var(--mono);color:var(--green)}.detail h3{font-size:20px;margin:11px 0 6px}.detail p{color:var(--muted);font-size:13px}.detail ul{list-style:none;padding:0;margin:17px 0 0;display:grid;gap:8px}.detail li{border:1px solid #202d34;border-radius:6px;padding:9px 11px;background:#090e13;font:11px var(--mono);color:#bdc9ce}.detail li::before{content:"✓  ";color:var(--green)}.filters{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:17px}.filter{font-size:11px;padding:7px 12px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.card{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:18px}.card h3{font-size:15px;margin:0 0 11px}.tags{display:flex;gap:6px;flex-wrap:wrap}.tag{padding:4px 7px;border:1px solid #1e4245;border-radius:5px;background:rgba(27,80,83,.17);color:var(--cyan);font:10px var(--mono)}.label{margin-top:16px;color:#748790;font:9px var(--mono);letter-spacing:.13em;text-transform:uppercase}.card p{font-size:12px;color:#b8c5ca;margin:5px 0 0}.feature-list{margin:7px 0 0;padding:0;list-style:none;color:var(--muted);font-size:12px}.feature-list li:before{content:"✓";color:var(--green);margin-right:8px}.arch-flow{display:grid;grid-template-columns:1fr auto 1.15fr auto 1fr;align-items:center;gap:12px;border:1px solid var(--line);background:var(--panel);border-radius:11px;padding:20px}.flow-col{display:grid;gap:7px}.flow-item{border:1px solid #222f37;border-radius:6px;padding:9px 10px;background:#090e13;color:#a9b9c0;font:10px var(--mono)}.flow-item.accent{color:var(--cyan)}.flow-core{border-color:#3a6b55;background:#102018;color:var(--green)}.arrow{color:var(--green);font-size:20px}.feature-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:13px}.runtime{border:1px solid #284c4b;border-radius:11px;background:linear-gradient(130deg,rgba(16,34,32,.65),var(--panel));padding:20px;margin-top:13px}.runtime-top{display:flex;align-items:center;gap:12px}.version{color:var(--cyan);border:1px solid #25535a;background:#0c2025;border-radius:99px;padding:4px 8px;font:10px var(--mono)}.runtime-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:15px}.mini{padding:13px;border:1px solid #223236;border-radius:8px;background:#0a1116}.mini strong{font-size:12px}.mini p{font-size:11px;color:var(--muted);margin:6px 0 0;line-height:1.5}.calc{display:grid;grid-template-columns:.8fr 1.2fr;border:1px solid var(--line);border-radius:11px;background:var(--panel);overflow:hidden}.controls{padding:22px;border-right:1px solid var(--line)}.control-title{font-size:12px;font-weight:600;margin:0 0 10px}.model-list{display:grid;gap:6px}.model{display:flex;justify-content:space-between;padding:8px 10px;background:#0a1015;border:1px solid #24313a;border-radius:6px;color:#aebdc3;font:10px var(--mono);text-align:left}.model.active{border-color:#4d8268;color:var(--green)}.slider{margin-top:18px}.slider label{display:flex;justify-content:space-between;font-size:11px}.slider output{font:11px var(--mono);color:var(--green)}input[type=range]{width:100%;accent-color:#78dfb2;margin-top:9px}.calc-result{padding:22px;font:11px var(--mono)}.calc-command{color:#91a2aa}.calc-task{color:var(--cyan);margin-top:6px}.quant-row{display:grid;grid-template-columns:64px 58px 1fr 104px;gap:9px;align-items:center;margin-top:10px;padding:8px;border:1px solid #222f37;border-radius:6px;background:#0b1015;font-size:10px}.bar{height:5px;background:#1b252d;border-radius:4px;overflow:hidden}.bar i{height:100%;display:block;background:var(--green)}.status{justify-self:end;color:var(--green);font-size:9px}.status.tight{color:var(--yellow)}.status.no{color:var(--red)}.calc-stats{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:15px}.stat{padding:10px;border:1px solid #25313a;border-radius:6px;color:var(--muted);font-size:9px}.stat b{display:block;color:var(--text);font-size:14px;margin-top:3px}.note{font:9px/1.5 var(--sans);color:#75868f;margin:12px 0 0}.quick{display:grid;grid-template-columns:1fr 1fr;gap:18px}.tabs{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px}.tab{padding:7px 10px;border:1px solid var(--line);background:#0d1319;color:var(--muted);border-radius:99px;font-size:10px}.tab.active{color:var(--green);border-color:#46775f}.codebox{border:1px solid var(--line);border-radius:8px;background:#080c10;overflow:hidden}.codehead{display:flex;justify-content:space-between;padding:8px 11px;border-bottom:1px solid #1c262e;color:var(--muted);font:10px var(--mono)}.copy{border:0;background:none;color:var(--muted);font:10px var(--mono)}pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:15px;color:#c8d6db;font:11px/1.75 var(--mono)}.points{padding:0;margin:13px 0;list-style:none;color:var(--muted);font-size:11px}.points li{margin:8px 0}.points li:before{content:"✓";color:var(--green);margin-right:8px}.cmd-list{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--panel)}.cmd-head{padding:12px 14px;border-bottom:1px solid var(--line);font-size:12px;font-weight:600}.cmd-row{display:flex;gap:12px;align-items:center;padding:10px 13px;border-bottom:1px solid #1b252d}.cmd-row:last-child{border:0}.cmd-row code{flex:1;color:var(--green);font-size:10px;overflow-wrap:anywhere}.cmd-row small{color:var(--muted);font-size:10px;flex:1.1}.footer{border-top:1px solid var(--line);padding:24px 0 34px}.foot{display:flex;align-items:center;gap:12px}.footlinks{display:flex;gap:18px;margin-left:auto;color:var(--muted);font-size:11px}.muted{color:var(--muted)}@media(max-width:850px){.hero-grid{grid-template-columns:1fr;gap:32px}.hero{padding-top:64px}.pipeline{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,1fr)}.feature-cards,.runtime-grid{grid-template-columns:repeat(2,1fr)}.calc{grid-template-columns:1fr}.controls{border-right:0;border-bottom:1px solid var(--line)}.quick{grid-template-columns:1fr}.navlinks{display:none}.arch-flow{grid-template-columns:1fr}.arrow{transform:rotate(90deg);justify-self:center}}
-@media(max-width:560px){.wrap{width:min(100% - 28px,1120px)}.hero{padding:48px 0}.hero-grid{gap:25px}h1{font-size:43px}.term-body{padding:13px;min-height:265px;font-size:10px}.cards{grid-template-columns:1fr}.feature-cards,.runtime-grid{grid-template-columns:1fr}.quant-row{grid-template-columns:58px 48px 1fr 88px;gap:5px;font-size:9px}.foot{align-items:flex-start;flex-direction:column}.footlinks{margin:8px 0 0;flex-wrap:wrap}.install-pill{font-size:10px}.actions .button{flex:1}}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentQuantix — Autonomous Quantization Pipeline</title>
+  <meta name="description" content="Autonomously find, convert, quantize, regression-gate and publish verified GGUF releases across native C++ engines.">
+  <meta property="og:title" content="AgentQuantix — Autonomous Model Quantization on Autopilot">
+  <meta property="og:description" content="Hardware probes, native C++ engine routing, quality gates and human-in-the-loop GGUF publishing.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --radius: 0.625rem;
+      --background: oklch(0.145 0.006 265);
+      --foreground: oklch(0.96 0.005 265);
+      --card: oklch(0.185 0.008 265);
+      --card-foreground: oklch(0.96 0.005 265);
+      --primary: oklch(0.78 0.17 160);
+      --primary-foreground: oklch(0.15 0.02 160);
+      --secondary: oklch(0.24 0.01 265);
+      --secondary-foreground: oklch(0.96 0.005 265);
+      --muted: oklch(0.22 0.008 265);
+      --muted-foreground: oklch(0.66 0.015 265);
+      --accent: oklch(0.8 0.13 210);
+      --accent-foreground: oklch(0.15 0.02 210);
+      --destructive: oklch(0.65 0.21 25);
+      --warn: oklch(0.82 0.15 80);
+      --border: oklch(1 0 0 / 9%);
+      --input: oklch(1 0 0 / 12%);
+      --ring: oklch(0.78 0.17 160);
+      --terminal: oklch(0.12 0.006 265);
+      --font-sans: "Geist", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+      border-color: var(--border);
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background-color: var(--background);
+      color: var(--foreground);
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.5;
+    }
+
+    code, pre, .font-mono {
+      font-family: var(--font-mono);
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    button {
+      font-family: inherit;
+      color: inherit;
+      cursor: pointer;
+      background: none;
+      border: none;
+    }
+
+    .grid-bg {
+      background-image:
+        linear-gradient(to right, oklch(1 0 0 / 4%) 1px, transparent 1px),
+        linear-gradient(to bottom, oklch(1 0 0 / 4%) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: radial-gradient(ellipse at top, black 30%, transparent 75%);
+      -webkit-mask-image: radial-gradient(ellipse at top, black 30%, transparent 75%);
+    }
+
+    .glow {
+      background: radial-gradient(600px circle at 50% 0%, color-mix(in oklab, var(--primary) 18%, transparent), transparent 70%);
+    }
+
+    .wrap {
+      max-width: 1152px;
+      margin-left: auto;
+      margin-right: auto;
+      padding-left: 1.5rem;
+      padding-right: 1.5rem;
+    }
+
+    /* Header */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      border-bottom: 1px solid var(--border);
+      background-color: color-mix(in oklab, var(--background) 70%, transparent);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    .header-inner {
+      display: flex;
+      height: 3.5rem;
+      align-items: center;
+      gap: 1.5rem;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+    .brand-icon {
+      color: var(--primary);
+      width: 1rem;
+      height: 1rem;
+    }
+    .nav-links {
+      display: none;
+      gap: 1.25rem;
+      font-size: 0.875rem;
+      color: var(--muted-foreground);
+    }
+    @media (min-width: 768px) {
+      .nav-links { display: flex; }
+    }
+    .nav-links a:hover {
+      color: var(--foreground);
+    }
+    .header-gh {
+      margin-left: auto;
+      color: var(--muted-foreground);
+      display: flex;
+      align-items: center;
+      transition: color 0.15s;
+    }
+    .header-gh:hover {
+      color: var(--foreground);
+    }
+
+    /* Hero */
+    .hero-section {
+      position: relative;
+      overflow: hidden;
+    }
+    .hero-grid {
+      position: relative;
+      display: grid;
+      gap: 3rem;
+      padding-top: 5rem;
+      padding-bottom: 5rem;
+    }
+    @media (min-width: 1024px) {
+      .hero-grid {
+        grid-template-columns: 1fr 1.05fr;
+        padding-top: 7rem;
+      }
+    }
+
+    .pill-badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 9999px;
+      border: 1px solid color-mix(in oklab, var(--primary) 30%, transparent);
+      background-color: color-mix(in oklab, var(--primary) 5%, transparent);
+      padding: 0.25rem 0.75rem;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--primary);
+    }
+
+    h1 {
+      margin-top: 1.5rem;
+      font-size: 2.25rem;
+      font-weight: 600;
+      line-height: 1.05;
+      letter-spacing: -0.025em;
+    }
+    @media (min-width: 768px) {
+      h1 { font-size: 3.75rem; }
+    }
+    .gradient-text {
+      background: linear-gradient(to right, var(--primary), var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      color: transparent;
+    }
+
+    .hero-desc {
+      margin-top: 1.5rem;
+      max-width: 36rem;
+      font-size: 1.125rem;
+      color: var(--muted-foreground);
+      line-height: 1.6;
+    }
+
+    .hero-actions {
+      margin-top: 2rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      border-radius: 0.375rem;
+      background-color: var(--primary);
+      padding: 0.625rem 1.25rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--primary-foreground);
+      transition: background-color 0.15s;
+    }
+    .btn-primary:hover {
+      background-color: color-mix(in oklab, var(--primary) 90%, black);
+    }
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      border-radius: 0.375rem;
+      border: 1px solid var(--border);
+      background-color: var(--card);
+      padding: 0.625rem 1.25rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--foreground);
+      transition: background-color 0.15s;
+    }
+    .btn-secondary:hover {
+      background-color: var(--secondary);
+    }
+
+    .cli-pill {
+      margin-top: 1.5rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      border-radius: 9999px;
+      border: 1px solid var(--border);
+      background-color: var(--terminal);
+      padding: 0.25rem;
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
+      max-width: 100%;
+    }
+    .cli-pill-btn {
+      border-radius: 9999px;
+      padding: 0.25rem 0.75rem;
+      font-size: 0.75rem;
+      color: var(--muted-foreground);
+      transition: all 0.15s;
+    }
+    .cli-pill-btn.active {
+      background-color: var(--secondary);
+      color: var(--foreground);
+    }
+    .cli-prompt {
+      padding-left: 0.5rem;
+      padding-right: 0.5rem;
+      color: var(--primary);
+    }
+    .cli-text {
+      max-width: 100%;
+      word-break: break-all;
+      padding-right: 0.25rem;
+      color: color-mix(in oklab, var(--foreground) 90%, transparent);
+    }
+
+    .copy-btn {
+      border-radius: 0.25rem;
+      padding: 0.375rem;
+      color: var(--muted-foreground);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+    }
+    .copy-btn:hover {
+      background-color: var(--secondary);
+      color: var(--foreground);
+    }
+
+    /* Terminal */
+    .term-wrapper {
+      width: 100%;
+    }
+    .term-tabs {
+      margin-bottom: 0.75rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .term-tab {
+      border-radius: 9999px;
+      border: 1px solid var(--border);
+      padding: 0.375rem 0.875rem;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--muted-foreground);
+      transition: all 0.15s;
+    }
+    .term-tab:hover {
+      color: var(--foreground);
+    }
+    .term-tab.active {
+      border-color: color-mix(in oklab, var(--primary) 50%, transparent);
+      background-color: color-mix(in oklab, var(--primary) 10%, transparent);
+      color: var(--primary);
+    }
+    .term-card {
+      overflow: hidden;
+      border-radius: 0.75rem;
+      border: 1px solid var(--border);
+      background-color: var(--terminal);
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 35px -5px color-mix(in oklab, var(--primary) 5%, transparent);
+    }
+    .term-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      border-bottom: 1px solid var(--border);
+      padding: 0.625rem 1rem;
+    }
+    .term-dot {
+      width: 0.75rem;
+      height: 0.75rem;
+      border-radius: 9999px;
+    }
+    .term-dot-red { background-color: color-mix(in oklab, var(--destructive) 70%, transparent); }
+    .term-dot-yellow { background-color: color-mix(in oklab, var(--warn) 70%, transparent); }
+    .term-dot-green { background-color: color-mix(in oklab, var(--primary) 70%, transparent); }
+    .term-title {
+      margin-left: 0.75rem;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--muted-foreground);
+    }
+    .term-replay {
+      margin-left: auto;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--muted-foreground);
+      transition: color 0.15s;
+    }
+    .term-replay:hover {
+      color: var(--foreground);
+    }
+    .term-body {
+      min-height: 340px;
+      padding: 1rem;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      line-height: 1.5rem;
+    }
+    .term-line {
+      white-space: pre-wrap;
+      animation: fadeIn 0.2s ease-out;
+    }
+    .term-line.dim { color: var(--muted-foreground); }
+    .term-line.ok { color: var(--primary); }
+    .term-line.acc { color: var(--accent); }
+    .term-line.warn { color: var(--warn); }
+    .term-line.cmd { color: var(--foreground); font-weight: 500; }
+
+    .term-action-btns {
+      margin-top: 0.5rem;
+      display: flex;
+      gap: 0.5rem;
+    }
+    .term-action-btn {
+      border-radius: 0.25rem;
+      border: 1px solid var(--border);
+      padding: 0.125rem 0.5rem;
+      font-size: 12.5px;
+      font-family: var(--font-mono);
+      transition: all 0.15s;
+    }
+    .term-action-btn.publish {
+      border-color: color-mix(in oklab, var(--primary) 40%, transparent);
+      color: var(--primary);
+    }
+    .term-action-btn.publish:hover {
+      background-color: color-mix(in oklab, var(--primary) 10%, transparent);
+    }
+    .term-action-btn.keep {
+      color: var(--muted-foreground);
+    }
+    .term-action-btn.keep:hover {
+      background-color: var(--secondary);
+    }
+
+    .term-cursor {
+      display: inline-block;
+      width: 0.5rem;
+      height: 1rem;
+      vertical-align: middle;
+      background-color: var(--primary);
+      animation: pulse 1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(2px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    /* Section layout */
+    section.content-section {
+      scroll-margin-top: 5rem;
+      padding-top: 6rem;
+      padding-bottom: 6rem;
+    }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--primary);
+    }
+    .section-title {
+      margin-top: 0.75rem;
+      font-size: 1.875rem;
+      font-weight: 600;
+      letter-spacing: -0.025em;
+    }
+    @media (min-width: 768px) {
+      .section-title { font-size: 2.25rem; }
+    }
+    .section-sub {
+      margin-top: 0.75rem;
+      max-width: 42rem;
+      color: var(--muted-foreground);
+    }
+    .section-body {
+      margin-top: 3rem;
+    }
+
+    /* Pipeline */
+    .pipeline-grid {
+      display: grid;
+      gap: 1.5rem;
+    }
+    @media (min-width: 1024px) {
+      .pipeline-grid { grid-template-columns: 1fr 1.1fr; }
+    }
+    .step-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .step-btn {
+      display: flex;
+      width: 100%;
+      align-items: flex-start;
+      gap: 1rem;
+      border-radius: 0.75rem;
+      border: 1px solid var(--border);
+      padding: 1rem;
+      text-align: left;
+      transition: all 0.15s;
+      background-color: var(--card);
+    }
+    .step-btn:hover {
+      border-color: color-mix(in oklab, var(--foreground) 20%, transparent);
+    }
+    .step-btn.active {
+      border-color: color-mix(in oklab, var(--primary) 50%, transparent);
+      background-color: color-mix(in oklab, var(--primary) 5%, transparent);
+    }
+    .step-num {
+      margin-top: 0.125rem;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--muted-foreground);
+    }
+    .step-btn.active .step-num {
+      color: var(--primary);
+    }
+    .step-title {
+      font-weight: 500;
+      font-size: 0.95rem;
+    }
+    .step-desc {
+      margin-top: 0.25rem;
+      font-size: 0.875rem;
+      color: var(--muted-foreground);
+    }
+
+    .step-detail-card {
+      border-radius: 0.75rem;
+      border: 1px solid var(--border);
+      background-color: var(--card);
+      padding: 1.5rem;
+      animation: fadeIn 0.25s ease-out;
+    }
+    .step-detail-icon {
+      width: 2rem;
+      height: 2rem;
+      color: var(--primary);
+    }
+    .step-detail-title {
+      margin-top: 1rem;
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+    .step-detail-desc {
+      margin-top: 0.5rem;
+      color: var(--muted-foreground);
+      font-size: 0.9rem;
+    }
+    .step-detail-list {
+      margin-top: 1.5rem;
+      padding: 0;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
+    }
+    .step-detail-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      border-radius: 0.375rem;
+      border: 1px solid var(--border);
+      background-color: var(--terminal);
+      padding: 0.5rem 0.75rem;
+    }
+    .step-progress-bar {
+      margin-top: 1.5rem;
+      display: flex;
+      gap: 0.25rem;
+    }
+    .step-progress-seg {
+      height: 0.25rem;
+      flex: 1;
+      border-radius: 9999px;
+      background-color: var(--secondary);
+    }
+    .step-progress-seg.done {
+      background-color: var(--primary);
+    }
+
+    /* Matrix */
+    .filter-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    .filter-btn {
+      border-radius: 9999px;
+      border: 1px solid var(--border);
+      padding: 0.375rem 0.875rem;
+      font-size: 0.875rem;
+      color: var(--muted-foreground);
+      transition: all 0.15s;
+    }
+    .filter-btn:hover {
+      color: var(--foreground);
+    }
+    .filter-btn.active {
+      border-color: color-mix(in oklab, var(--primary) 50%, transparent);
+      background-color: color-mix(in oklab, var(--primary) 10%, transparent);
+      color: var(--primary);
+    }
+    .matrix-grid {
+      margin-top: 1.5rem;
+      display: grid;
+      gap: 1rem;
+    }
+    @media (min-width: 768px) {
+      .matrix-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (min-width: 1024px) {
+      .matrix-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    .matrix-card {
+      border-radius: 0.75rem;
+      border: 1px solid var(--border);
+      background-color: var(--card);
+      padding: 1.25rem;
+      animation: fadeIn 0.2s ease-out;
+    }
+    .matrix-cat {
+      font-weight: 600;
+      font-size: 1rem;
+    }
+    .matrix-engines {
+      margin-top: 0.75rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.375rem;
+    }
+    .engine-tag {
+      border-radius: 0.25rem;
+      background-color: color-mix(in oklab, var(--accent) 10%, transparent);
+      padding: 0.125rem 0.5rem;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--accent);
+    }
+    .matrix-label {
+      margin-top: 1rem;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted-foreground);
+    }
+    .matrix-tasks {
+      margin-top: 0.25rem;
+      font-size: 0.875rem;
+    }
+    .matrix-features {
+      margin-top: 0.25rem;
+      padding: 0;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      font-size: 0.875rem;
+      color: var(--muted-foreground);
+    }
+    .matrix-feat-item {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .matrix-feat-item svg {
+      margin-top: 0.125rem;
+      width: 0.875rem;
+      height: 0.875rem;
+      flex-shrink: 0;
+      color: var(--primary);
+    }
+
+    /* Architecture */
+    .arch-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .arch-flow-box {
+      border-radius: 0.75rem;
+      border: 1px solid var(--border);
+      background-color: var(--card);
+      padding: 1.5rem;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+    }
+    @media (min-width: 768px) {
+      .arch-flow-box { font-size: 0.875rem; }
+    }
+    .arch-flow-grid {
+      display: grid;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    @media (min-width: 768px) {
+      .arch-flow-grid {
+        grid-template-columns: 1fr auto 1.2fr auto 1fr;
+      }
+    }
+    .flow-clients {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .flow-item {
+      border-radius: 0.375rem;
+      border: 1px solid var(--border);
+      background-color: var(--terminal);
+      padding: 0.5rem 0.75rem;
+      color: var(--muted-foreground);
+    }
+    .flow-item.accent-text {
+      color: var(--accent);
+    }
+    .flow-arrow {
+      margin: auto;
+      color: var(--primary);
+      display: none;
+    }
+    @media (min-width: 768px) {
+      .flow-arrow { display: block; }
+    }
+    .flow-core {
+      border-radius: 0.5rem;
+      border: 1px solid color-mix(in oklab, var(--primary) 40%, transparent);
+      background-color: color-mix(in oklab, var(--primary) 5%, transparent);
+      padding: 1rem;
+    }
+    .flow-core-title {
+      color: var(--primary);
+      font-weight: 600;
+    }
+    .flow-core-tree {
+      margin-top: 0.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      color: var(--muted-foreground);
+    }
+
+    .arch-cards-grid {
+      display: grid;
+      gap: 1rem;
+    }
+    @media (min-width: 768px) {
+      .arch-cards-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    .arch-card {
+      border-radius: 0.75rem;
+      border: 1px solid var(--border);
+      background-color: var(--card);
+      padding: 1.25rem;
+    }
+    .arch-card-icon {
+      width: 1.25rem;
+      height: 1.25rem;
+      color: var(--primary);
+    }
+    .arch-card-title {
+      margin-top: 0.75rem;
+      font-weight: 600;
+      font-size: 1rem;
+    }
+    .arch-card-desc {
+      margin-top: 0.5rem;
+      font-size: 0.875rem;
+      color: var(--muted-foreground);
+      line-height: 1.5;
+    }
+
+    .runtime-box {
+      border-radius: 0.75rem;
+      border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
+      background-color: var(--card);
+      padding: 1.5rem;
+    }
+    .runtime-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .runtime-badge {
+      border-radius: 9999px;
+      border: 1px solid color-mix(in oklab, var(--accent) 40%, transparent);
+      background-color: color-mix(in oklab, var(--accent) 10%, transparent);
+      padding: 0.25rem 0.75rem;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--accent);
+    }
+    .runtime-title {
+      font-size: 1.125rem;
+      font-weight: 600;
+    }
+    .runtime-grid {
+      margin-top: 1.5rem;
+      display: grid;
+      gap: 1rem;
+    }
+    @media (min-width: 768px) {
+      .runtime-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (min-width: 1024px) {
+      .runtime-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    .runtime-card {
+      border-radius: 0.5rem;
+      border: 1px solid var(--border);
+      background-color: var(--terminal);
+      padding: 1rem;
+    }
+    .runtime-card-icon {
+      width: 1.25rem;
+      height: 1.25rem;
+      color: var(--accent);
+    }
+    .runtime-card-title {
+      margin-top: 0.75rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+    .runtime-card-desc {
+      margin-top: 0.5rem;
+      font-size: 0.875rem;
+      color: var(--muted-foreground);
+      line-height: 1.5;
+    }
+
+    /* Calculator */
+    .calc-card {
+      display: grid;
+      gap: 1.5rem;
+      border-radius: 0.75rem;
+      border: 1px solid var(--border);
+      background-color: var(--card);
+      padding: 1.5rem;
+    }
+    @media (min-width: 1024px) {
+      .calc-card { grid-template-columns: 1fr 1.4fr; }
+    }
+    .calc-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .calc-models-list {
+      margin-top: 0.5rem;
+      display: grid;
+      gap: 0.5rem;
+    }
+    .calc-model-btn {
+      display: flex;
+      justify-content: space-between;
+      border-radius: 0.375rem;
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.75rem;
+      text-align: left;
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
+      color: var(--muted-foreground);
+      transition: all 0.15s;
+    }
+    .calc-model-btn:hover {
+      color: var(--foreground);
+    }
+    .calc-model-btn.active {
+      border-color: color-mix(in oklab, var(--primary) 50%, transparent);
+      background-color: color-mix(in oklab, var(--primary) 5%, transparent);
+      color: var(--foreground);
+    }
+    .calc-slider-block label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.875rem;
+    }
+    .calc-slider-block output {
+      font-family: var(--font-mono);
+      color: var(--primary);
+    }
+    input[type=range] {
+      margin-top: 0.5rem;
+      width: 100%;
+      accent-color: var(--primary);
+    }
+
+    .calc-terminal {
+      border-radius: 0.5rem;
+      border: 1px solid var(--border);
+      background-color: var(--terminal);
+      padding: 1.25rem;
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
+    }
+    .calc-cmd-line { color: var(--muted-foreground); }
+    .calc-engine-line { margin-top: 0.5rem; color: var(--accent); }
+    .calc-rows {
+      margin-top: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .calc-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      border-radius: 0.25rem;
+      border: 1px solid var(--border);
+      background-color: color-mix(in oklab, var(--card) 40%, transparent);
+      padding: 0.5rem 0.75rem;
+    }
+    .calc-row-name { width: 4rem; color: var(--foreground); }
+    .calc-row-size { width: 5rem; color: var(--muted-foreground); }
+    .calc-bar-bg {
+      height: 0.375rem;
+      flex: 1;
+      overflow: hidden;
+      border-radius: 9999px;
+      background-color: var(--secondary);
+    }
+    .calc-bar-fill {
+      height: 100%;
+      transition: all 0.3s ease;
+    }
+    .calc-badge {
+      border-radius: 0.25rem;
+      border: 1px solid transparent;
+      padding: 0.125rem 0.5rem;
+      font-size: 11px;
+    }
+    .calc-badge.fits {
+      border-color: color-mix(in oklab, var(--primary) 30%, transparent);
+      background-color: color-mix(in oklab, var(--primary) 10%, transparent);
+      color: var(--primary);
+    }
+    .calc-badge.tight {
+      border-color: color-mix(in oklab, var(--warn) 30%, transparent);
+      background-color: color-mix(in oklab, var(--warn) 10%, transparent);
+      color: var(--warn);
+    }
+    .calc-badge.no {
+      border-color: color-mix(in oklab, var(--destructive) 30%, transparent);
+      background-color: color-mix(in oklab, var(--destructive) 10%, transparent);
+      color: var(--destructive);
+    }
+
+    .calc-stats-grid {
+      margin-top: 1.25rem;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      font-size: 0.75rem;
+    }
+    .calc-stat-box {
+      border-radius: 0.25rem;
+      border: 1px solid var(--border);
+      padding: 0.75rem;
+    }
+    .calc-stat-val {
+      margin-top: 0.25rem;
+      font-size: 1.125rem;
+      color: var(--foreground);
+    }
+
+    /* Quickstart */
+    .quick-grid {
+      display: grid;
+      gap: 1.5rem;
+    }
+    @media (min-width: 1024px) {
+      .quick-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    .codebox-wrap {
+      overflow: hidden;
+      border-radius: 0.5rem;
+      border: 1px solid var(--border);
+      background-color: var(--terminal);
+    }
+    .codebox-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      padding: 0.375rem 0.75rem;
+    }
+    .codebox-label {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--muted-foreground);
+    }
+    pre.codebox-pre {
+      margin: 0;
+      overflow-x: auto;
+      padding: 1rem;
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
+      line-height: 1.625;
+      color: color-mix(in oklab, var(--foreground) 90%, transparent);
+    }
+    .points-list {
+      margin-top: 1rem;
+      padding: 0;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      font-size: 0.875rem;
+      color: var(--muted-foreground);
+    }
+    .points-item {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .points-item svg {
+      margin-top: 0.125rem;
+      width: 1rem;
+      height: 1rem;
+      flex-shrink: 0;
+      color: var(--primary);
+    }
+
+    .cheatsheet-card {
+      border-radius: 0.5rem;
+      border: 1px solid var(--border);
+      background-color: var(--card);
+    }
+    .cheatsheet-head {
+      border-bottom: 1px solid var(--border);
+      padding: 0.625rem 1rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+    .cheat-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1rem;
+    }
+    .cheat-row:last-child {
+      border-bottom: 0;
+    }
+    .cheat-code {
+      flex: 1;
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
+      color: var(--primary);
+      word-break: break-all;
+    }
+    .cheat-desc {
+      font-size: 0.75rem;
+      color: var(--muted-foreground);
+      margin-top: 0.125rem;
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+    }
+    .footer-inner {
+      display: flex;
+      max-width: 1152px;
+      margin: auto;
+      flex-direction: column;
+      gap: 1.5rem;
+      padding: 2.5rem 1.5rem;
+    }
+    @media (min-width: 768px) {
+      .footer-inner {
+        flex-direction: row;
+        align-items: center;
+      }
+    }
+    .footer-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 600;
+    }
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.25rem;
+      font-size: 0.875rem;
+      color: var(--muted-foreground);
+    }
+    @media (min-width: 768px) {
+      .footer-links { margin-left: auto; }
+    }
+    .footer-links a {
+      display: flex;
+      align-items: center;
+      gap: 0.375rem;
+      transition: color 0.15s;
+    }
+    .footer-links a:hover {
+      color: var(--foreground);
+    }
+  </style>
 </head>
 <body>
-<header class="topbar"><div class="wrap nav"><a class="brand" href="#top"><span class="brand-mark">aq</span>AgentQuantix</a><nav class="navlinks"><a href="#workflow">Workflow</a><a href="#engines">Engines</a><a href="#architecture">Architecture</a><a href="#calculator">Calculator</a><a href="#quickstart">Quick start</a></nav><a class="button navright" href="https://github.com/NANInithin/AgentQuantix" target="_blank" rel="noreferrer">↗ GitHub</a></div></header>
-<main id="top"><section class="hero"><div class="wrap hero-grid"><div><span class="eyebrow"><i class="dot"></i> AgentQuantix · Autonomous Model Foundry</span><h1>From model discovery to <em>verified release.</em></h1><p class="hero-copy">Find models your hardware can handle. Quantize them with native engines, verify quality, and keep the final publish decision in your hands.</p><div class="actions"><a class="button primary" href="#workflow">Explore the pipeline <span>→</span></a><a class="button" href="https://github.com/NANInithin/AgentQuantix" target="_blank" rel="noreferrer">View on GitHub ↗</a></div><div class="install-pill"><span style="color:var(--green)">$</span><code id="hero-command">uv tool install "agentquantix[full] @ git+https://github.com/NANInithin/AgentQuantix"</code><button class="copy" data-copy="hero-command">Copy</button></div></div><div><div class="term-actions" style="justify-content:flex-start;margin:0 0 9px"><button class="chip active scenario" data-scenario="text">Text · Qwen3</button><button class="chip scenario" data-scenario="voice">Voice / TTS · VoxCPM2</button></div><div class="terminal"><div class="term-head"><span class="lights"><i class="light"></i><i class="light"></i><i class="light"></i></span><span class="term-title">aqx · run preview</span><button class="copy" style="margin-left:auto" id="replay">↻ replay</button></div><div id="term-body" class="term-body"></div></div></div></div></section>
-<section id="workflow"><div class="wrap"><div class="section-head"><div class="kicker">01 · Pipeline</div><h2>Four gates between a model and a release</h2><p>Explore how AgentQuantix plans a run, routes the work and keeps verification and human review in the loop.</p></div><div class="pipeline"><div class="steps" id="steps"></div><div class="detail" id="step-detail"></div></div></div></section>
-<section id="engines"><div class="wrap"><div class="section-head"><div class="kicker">02 · Multimodal</div><h2>One pipeline, multiple modalities</h2><p>Task-aware routing connects candidate models to native engines and checks suited to their output.</p></div><div class="filters" id="filters"></div><div class="cards" id="matrix"></div></div></section>
-<section id="architecture"><div class="wrap"><div class="section-head"><div class="kicker">03 · Architecture</div><h2>Lean core, MCP-native</h2><p>A lightweight control plane coordinates native runtimes and isolated conversion environments.</p></div><div class="arch-flow"><div class="flow-col"><div class="flow-item">Claude Code</div><div class="flow-item">Codex · OpenCode</div><div class="flow-item">Any MCP client</div></div><div class="arrow">→</div><div class="flow-item flow-core"><strong>aqx core</strong><br><br>stdio JSON-RPC · MCP<br>agent loop · urllib<br>sysprobe · planner<br>quality gates · release</div><div class="arrow">→</div><div class="flow-col"><div class="flow-item accent">Isolated converters</div><div class="flow-item accent">Native C++ engines</div><div class="flow-item accent">Hugging Face Hub</div></div></div><div class="feature-cards"><article class="card"><h3>◈ Standard-library core</h3><p>MCP server speaks JSON-RPC over stdio; the agent loop uses Python's standard-library urllib.</p></article><article class="card"><h3>◈ Isolated conversion tools</h3><p>Heavy stacks such as PyTorch and Transformers live in separate environments, apart from the lean core.</p></article><article class="card"><h3>◈ Your agent workflow</h3><p>Use an MCP-compatible client alongside the CLI, with review gates around release actions.</p></article></div><div class="runtime"><div class="runtime-top"><span class="version">RUNTIME NOTES</span><strong>Built for long-running native workflows</strong></div><div class="runtime-grid"><div class="mini"><strong>Persistent engine installs</strong><p>Engine checkouts update in place; missing or stale runtime folders can be recovered.</p></div><div class="mini"><strong>Live build output</strong><p>Native build and inference logs stream while work is running.</p></div><div class="mini"><strong>Windows short paths</strong><p><code>AQX_WORK_ROOT=C:\aqx</code> can avoid deeply nested MSVC build paths.</p></div><div class="mini"><strong>License provenance</strong><p>Upstream license and NOTICE materials are preserved with publication bundles.</p></div><div class="mini"><strong>Research discovery</strong><p><code>aqx research</code> discovers non-text candidates; <code>--text-only</code> narrows scope.</p></div><div class="mini"><strong>Human approval</strong><p>Review the artifacts and complete required modality-specific checks before publishing.</p></div></div></div></div></section>
-<section id="calculator"><div class="wrap"><div class="section-head"><div class="kicker">04 · Playground</div><h2>Explore hardware feasibility</h2><p>A rough planning illustration for model size and memory. AgentQuantix probes your machine before a real run.</p></div><div class="calc"><div class="controls"><p class="control-title">Choose a model</p><div class="model-list" id="models"></div><div class="slider"><label>System RAM <output id="ram-out">16 GB</output></label><input id="ram" type="range" min="8" max="64" step="4" value="16"></div><div class="slider"><label>Free disk <output id="disk-out">50 GB</output></label><input id="disk" type="range" min="5" max="200" step="5" value="50"></div></div><div class="calc-result"><div id="calc-command" class="calc-command">$ aqx plan Llama-3.2-3B --ram 16G --disk 50G</div><div id="calc-task" class="calc-task">task=text-generation · engine=llama.cpp</div><div id="quant-results"></div><div class="calc-stats"><div class="stat">EST. CONVERSION<b id="minutes">~10 min</b></div><div class="stat">DISK REQUIRED<b id="disk-required">3.6 GB ✓</b></div></div><p class="note">Illustrative estimates only. Actual feasibility depends on source format, runtime, system resources and model-specific requirements.</p></div></div></div></section>
-<section id="quickstart"><div class="wrap"><div class="section-head"><div class="kicker">05 · Quick start</div><h2>Try the workflow locally</h2><p>Install AgentQuantix, inspect a candidate, then decide what to run.</p></div><div class="quick"><div><div id="install-tabs" class="tabs"></div><div id="install-content"></div></div><div class="cmd-list"><div class="cmd-head">CLI command reference</div><div id="commands"></div></div></div></div></section></main>
-<footer class="footer"><div class="wrap foot"><a class="brand" href="#top"><span class="brand-mark">aq</span>AgentQuantix</a><span class="muted" style="font-size:11px">Autonomous model quantization, with review in the loop.</span><nav class="footlinks"><a href="https://github.com/NANInithin/AgentQuantix" target="_blank" rel="noreferrer">GitHub ↗</a><a href="https://github.com/NANInithin/AgentQuantix/blob/main/LICENSE" target="_blank" rel="noreferrer">Apache-2.0</a><a href="https://github.com/NANInithin/AgentQuantix#readme" target="_blank" rel="noreferrer">Documentation</a></nav></div></footer>
-<script>
-const GH='https://github.com/NANInithin/AgentQuantix';
-const scenarios={text:{lines:[['$ aqx run Qwen/Qwen3-0.6B','cmd'],['▸ sysprobe   RAM 31.2 GB free · CPU 16 threads · disk 212 GB',''],['✓ feasibility peak estimate 3.4 GB → OK','ok'],['▸ resolve    task=text-generation · engine=llama.cpp','accent'],['▸ convert    Hugging Face → F16 GGUF',''],['▸ imatrix    calibration complete',''],['▸ quantize   Q4_K_M · Q5_K_M · Q8_0',''],['✓ gates      perplexity checks passed','ok'],['✓ safety     model card + license check','ok'],['? Review artifacts — publish to Hub? [y/N]','warn']],yes:'✓ publish approved · verified artifacts staged for the Hub',no:'✗ publish skipped · artifacts remain local'},voice:{lines:[['$ aqx run openbmb/VoxCPM2','cmd'],['▸ sysprobe   RAM 27.8 GB free · CPU 16 threads · disk 184 GB',''],['✓ feasibility peak estimate 8.6 GB → OK','ok'],['▸ resolve    task=text-to-speech · engine=audio.cpp','accent'],['▸ build      native engine output streamed live',''],['▸ convert    safetensors → F16 GGUF + tokenizer',''],['▸ quantize   Q4_K_M · Q8_0',''],['▸ infer      native audio.cpp inference',''],['▸ listen     fixture audio review required',''],['✓ provenance upstream license + NOTICE preserved','ok'],['? Review bundle — publish? [y/N]','warn']],yes:'✓ human review complete · publish approved',no:'✗ publish skipped · bundle remains local'}};
-let scenario='text',termTimer;
-function renderTerm(){clearTimeout(termTimer);const body=document.querySelector('#term-body'),lines=scenarios[scenario].lines;body.innerHTML='';let n=0;const step=()=>{if(n<lines.length){const [t,c]=lines[n++],d=document.createElement('div');d.className='term-line '+c;d.textContent=t;body.appendChild(d);termTimer=setTimeout(step,260)}else{const row=document.createElement('div');row.innerHTML='<button class="term-button" data-answer="yes">y — approve</button><button class="term-button" data-answer="no">N — keep local</button>';body.appendChild(row)}};step()}
-document.querySelectorAll('.scenario').forEach(b=>b.onclick=()=>{scenario=b.dataset.scenario;document.querySelectorAll('.scenario').forEach(x=>x.classList.toggle('active',x===b));renderTerm()});document.querySelector('#replay').onclick=renderTerm;document.querySelector('#term-body').onclick=e=>{const a=e.target.dataset.answer;if(a){const d=document.createElement('div');d.className='term-line '+(a==='yes'?'ok':'');d.textContent=scenarios[scenario][a];e.currentTarget.appendChild(d);e.target.parentElement.remove()}};renderTerm();
-const steps=[{title:'Hardware feasibility probe',body:'Measure the machine and estimate resource needs before a long-running job begins.',detail:['sysprobe: memory, CPU threads and disk','Per-stage peak resource estimate','Source + intermediate disk budget','Fail early when requirements are not met']},{title:'Task-aware engine routing',body:'Map supported tasks to the native engine and conversion path intended for that modality.',detail:['llama.cpp · audio.cpp · whisper.cpp','clip.cpp · vision.cpp','depth-anything.cpp · rf-detr.cpp','Pinned engine revisions for reproducibility']},{title:'Quality and regression gates',body:'Compare converted artifacts against reference checks appropriate to the task.',detail:['Perplexity checks for text generation','WER/CER for supported ASR checks','Similarity checks for embeddings','Review output and thresholds before release']},{title:'Human review before release',body:'Keep approval explicit, with listening or visual review where a modality calls for it.',detail:['Inspect artifacts and model metadata','Listening review for TTS workflows','Playback or visual review for media','Explicit publish confirmation']}];let selectedStep=0;function drawSteps(){document.querySelector('#steps').innerHTML=steps.map((s,i)=>`<button class="step ${i===selectedStep?'active':''}" data-step="${i}"><span class="step-num">0${i+1}</span><span><strong>${s.title}</strong><small>${s.body}</small></span></button>`).join('');const s=steps[selectedStep];document.querySelector('#step-detail').innerHTML=`<div class="detail-icon">${['⌁','⌘','◉','✓'][selectedStep]}</div><h3>${s.title}</h3><p>${s.body}</p><ul>${s.detail.map(x=>`<li>${x}</li>`).join('')}</ul>`;document.querySelectorAll('.step').forEach(b=>b.onclick=()=>{selectedStep=+b.dataset.step;drawSteps()})}drawSteps();
-const matrix=[{cat:'Text Generation',engines:['llama.cpp'],tasks:'Text generation, instruct models',features:['Calibration workflows','Perplexity checks','K-quants']},{cat:'Voice & Audio',engines:['audio.cpp','whisper.cpp'],tasks:'TTS, ASR, voice conversion, separation',features:['WER/CER checks','Listening review','Audio quality gates']},{cat:'Vision & Spatial',engines:['vision.cpp','depth-anything.cpp','rf-detr.cpp'],tasks:'Depth, segmentation, detection',features:['Reference-output checks','Visual inspection']},{cat:'Retrieval & Embeddings',engines:['llama.cpp','clip.cpp'],tasks:'Embeddings, similarity, zero-shot classification',features:['Cosine-similarity checks','Retrieval quality']},{cat:'Multimodal',engines:['llama.cpp'],tasks:'Image, video and audio understanding',features:['F16 projector support','Quantized language backbone']}];let activeFilter='All';function drawMatrix(){const cats=['All',...matrix.map(x=>x.cat)];document.querySelector('#filters').innerHTML=cats.map(c=>`<button class="filter ${c===activeFilter?'active':''}" data-filter="${c}">${c}</button>`).join('');document.querySelectorAll('.filter').forEach(b=>b.onclick=()=>{activeFilter=b.dataset.filter;drawMatrix()});document.querySelector('#matrix').innerHTML=matrix.filter(x=>activeFilter==='All'||x.cat===activeFilter).map(x=>`<article class="card"><h3>${x.cat}</h3><div class="tags">${x.engines.map(e=>`<span class="tag">${e}</span>`).join('')}</div><div class="label">Tasks</div><p>${x.tasks}</p><div class="label">Checks & features</div><ul class="feature-list">${x.features.map(f=>`<li>${f}</li>`).join('')}</ul></article>`).join('')}drawMatrix();
-const models=[{id:'Qwen3-0.6B',p:.6,task:'text-generation',engine:'llama.cpp'},{id:'SmolVLM2-500M',p:.5,task:'image-text-to-text',engine:'llama.cpp + mmproj'},{id:'VoxCPM2',p:2,task:'text-to-speech',engine:'audio.cpp'},{id:'Llama-3.2-3B',p:3.2,task:'text-generation',engine:'llama.cpp'},{id:'Granite-3.1-8B',p:8.1,task:'text-generation',engine:'llama.cpp'}],quants=[['Q4_K_M',4.85],['Q5_K_M',5.69],['Q8_0',8.5],['F16',16]];let modelIndex=3;function calc(){const m=models[modelIndex],ram=+document.querySelector('#ram').value,disk=+document.querySelector('#disk').value;document.querySelector('#ram-out').textContent=ram+' GB';document.querySelector('#disk-out').textContent=disk+' GB';document.querySelector('#calc-command').textContent=`$ aqx plan ${m.id} --ram ${ram}G --disk ${disk}G`;document.querySelector('#calc-task').textContent=`task=${m.task} · engine=${m.engine}`;const f16=m.p*2,results=quants.map(([name,bits])=>{const size=m.p*bits/8,peak=f16*.6+size+1.5,ratio=peak/ram,status=ratio<=.7?'fits':ratio<=.95?'tight':'no';return{name,size,peak,status}});document.querySelector('#quant-results').innerHTML=results.map(q=>`<div class="quant-row"><b>${q.name}</b><span>${q.size.toFixed(2)} GB</span><span class="bar"><i style="width:${Math.min(100,q.peak/ram*100)}%;background:${q.status==='no'?'var(--red)':q.status==='tight'?'var(--yellow)':'var(--green)'}"></i></span><span class="status ${q.status}">${q.status==='fits'?'fits comfortably':q.status==='tight'?'tight':'may not fit'}</span></div>`).join('');const diskNeed=f16*2+results.filter(x=>x.name!=='F16').reduce((a,x)=>a+x.size,0);document.querySelector('#minutes').textContent='~'+Math.max(1,Math.round(m.p*2.4+2))+' min';const dr=document.querySelector('#disk-required');dr.textContent=diskNeed.toFixed(1)+' GB '+(diskNeed<=disk?'✓':'✗');dr.style.color=diskNeed<=disk?'var(--green)':'var(--red)';document.querySelectorAll('.model').forEach((b,i)=>b.classList.toggle('active',i===modelIndex))}document.querySelector('#models').innerHTML=models.map((m,i)=>`<button class="model" data-model="${i}"><span>${m.id}</span><span>${m.p}B</span></button>`).join('');document.querySelector('#models').onclick=e=>{const b=e.target.closest('[data-model]');if(b){modelIndex=+b.dataset.model;calc()}};['ram','disk'].forEach(id=>document.querySelector('#'+id).oninput=calc);calc();
-const install=[{id:'uv',label:'uv tool · recommended',code:`uv tool install "agentquantix[full] @ git+${GH}"`,points:['Installs as a standalone tool in its own environment.','Makes the aqx command available from your shell.','Add voice extras when needed: [full,voice].',`Upgrade with: uv tool install --force --reinstall "agentquantix[full] @ git+${GH}"`]},{id:'dev',label:'Editable checkout',code:`git clone ${GH}\ncd AgentQuantix\npython -m pip install -e '.[dev,media,detection]'`,points:['Editable checkout for development and contribution.','Converter stacks are isolated from the core environment.','Optional extras cover development and modality workflows.']}];let installId='uv';function drawInstall(){document.querySelector('#install-tabs').innerHTML=install.map(t=>`<button class="tab ${installId===t.id?'active':''}" data-tab="${t.id}">${t.label}</button>`).join('');document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{installId=b.dataset.tab;drawInstall()});const t=install.find(x=>x.id===installId);document.querySelector('#install-content').innerHTML=`<div class="codebox"><div class="codehead"><span>bash</span><button class="copy" data-copy-code="install-code">Copy</button></div><pre id="install-code">${t.code}</pre></div><ul class="points">${t.points.map(p=>`<li>${p}</li>`).join('')}</ul>`;wireCopy()}drawInstall();
-const commands=[['aqx inspect org/model','Inspect model metadata and hardware requirements'],['aqx research','Discover candidate models across supported tasks'],['aqx research --text-only','Narrow discovery to text models'],['aqx plan org/model','Preview a release plan'],['aqx run org/model --no-publish','Run locally without publishing'],['aqx review RUN_ID','Review modality-specific artifacts'],['aqx run --resume RUN_ID','Resume an interrupted run'],['aqx runs','List prior runs and gate results']];document.querySelector('#commands').innerHTML=commands.map(([c,d])=>`<div class="cmd-row"><code>${c}</code><small>${d}</small><button class="copy" data-copy-text="${c}">Copy</button></div>`).join('');
-function wireCopy(){document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>{const el=document.getElementById(b.dataset.copy);navigator.clipboard?.writeText(el.textContent);b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1100)});document.querySelectorAll('[data-copy-code]').forEach(b=>b.onclick=()=>{navigator.clipboard?.writeText(document.getElementById(b.dataset.copyCode).textContent);b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1100)});document.querySelectorAll('[data-copy-text]').forEach(b=>b.onclick=()=>{navigator.clipboard?.writeText(b.dataset.copyText);b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1100)})}wireCopy();
-</script></body></html>
+  <!-- Header -->
+  <header>
+    <div class="wrap header-inner">
+      <a href="#" class="brand">
+        <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="4 17 10 11 4 5"></polyline>
+          <line x1="12" y1="19" x2="20" y2="19"></line>
+        </svg>
+        <span>AgentQuantix</span>
+      </a>
+      <nav class="nav-links">
+        <a href="#workflow">Workflow</a>
+        <a href="#matrix">Engines</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#calculator">Calculator</a>
+        <a href="#quickstart">Quick start</a>
+      </nav>
+      <a href="https://github.com/NANInithin/AgentQuantix" target="_blank" rel="noreferrer" class="header-gh" aria-label="GitHub Repository">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path>
+          <path d="M9 18c-4.51 2-5-2-7-2"></path>
+        </svg>
+      </a>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="hero-section">
+    <div class="grid-bg" style="position: absolute; inset: 0;"></div>
+    <div class="glow" style="position: absolute; inset: 0;"></div>
+    <div class="wrap hero-grid">
+      <div>
+        <span class="pill-badge">
+          AgentQuantix v0.5.9 — Autonomous Quantization & Model Release Pipeline
+        </span>
+        <h1>
+          Autonomous Model Quantization <span class="gradient-text">on Autopilot</span>
+        </h1>
+        <p class="hero-desc">
+          Finds trending Hugging Face models, probes hardware feasibility, converts & quantizes across native C++ engines, enforces rigorous regression gates, and publishes verified GGUF releases with human oversight.
+        </p>
+        <div class="hero-actions">
+          <a href="#workflow" class="btn-primary">
+            Explore Workflow
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+          </a>
+          <a href="https://github.com/NANInithin/AgentQuantix" target="_blank" rel="noreferrer" class="btn-secondary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path>
+              <path d="M9 18c-4.51 2-5-2-7-2"></path>
+            </svg>
+            GitHub Repository
+          </a>
+        </div>
+        <div class="cli-pill">
+          <button class="cli-pill-btn active" id="pill-mode-install" onclick="setCliPill(0)">install</button>
+          <button class="cli-pill-btn" id="pill-mode-run" onclick="setCliPill(1)">run</button>
+          <span class="cli-prompt">$</span>
+          <span class="cli-text" id="cli-pill-text">uv tool install "agentquantix[full] @ git+https://github.com/NANInithin/AgentQuantix"</span>
+          <button class="copy-btn" id="cli-copy-btn" onclick="copyHeroCli()" aria-label="Copy command">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Terminal Area -->
+      <div class="term-wrapper">
+        <div class="term-tabs">
+          <button class="term-tab active" id="tab-text" onclick="switchScenario('text')">Text · Qwen3-0.6B</button>
+          <button class="term-tab" id="tab-voice" onclick="switchScenario('voice')">Voice / TTS · VoxCPM2</button>
+        </div>
+        <div class="term-card">
+          <div class="term-header">
+            <span class="term-dot term-dot-red"></span>
+            <span class="term-dot term-dot-yellow"></span>
+            <span class="term-dot term-dot-green"></span>
+            <span class="term-title">aqx — zsh</span>
+            <button class="term-replay" onclick="replayTerminal()">↻ replay</button>
+          </div>
+          <div class="term-body" id="term-body"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 01: Workflow -->
+  <section class="content-section" id="workflow">
+    <div class="wrap">
+      <p class="eyebrow">01 · Pipeline</p>
+      <h2 class="section-title">Four gates between a trending model and a verified release</h2>
+      <p class="section-sub">Click a step to inspect what AgentQuantix does at each stage.</p>
+      <div class="section-body pipeline-grid">
+        <div class="step-list" id="step-btns"></div>
+        <div class="step-detail-card" id="step-detail-card"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 02: Engines Matrix -->
+  <section class="content-section" id="matrix">
+    <div class="wrap">
+      <p class="eyebrow">02 · Multimodal</p>
+      <h2 class="section-title">One pipeline, every modality</h2>
+      <p class="section-sub">Native C++ engines for text, audio, vision, retrieval and multimodal models.</p>
+      <div class="section-body">
+        <div class="filter-tabs" id="matrix-filters"></div>
+        <div class="matrix-grid" id="matrix-grid"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 03: Architecture -->
+  <section class="content-section" id="architecture">
+    <div class="wrap">
+      <p class="eyebrow">03 · Architecture</p>
+      <h2 class="section-title">Lean core, MCP-native</h2>
+      <p class="section-sub">A tiny, dependency-free core that plugs into the agent tools you already use.</p>
+      <div class="section-body arch-wrapper">
+        <div class="arch-flow-box">
+          <div class="arch-flow-grid">
+            <div class="flow-clients">
+              <div class="flow-item">Claude Code</div>
+              <div class="flow-item">Codex</div>
+              <div class="flow-item">OpenCode</div>
+              <div class="flow-item">any MCP client</div>
+            </div>
+            <div class="flow-arrow">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            </div>
+            <div class="flow-core">
+              <div class="flow-core-title">aqx core</div>
+              <div class="flow-core-tree">
+                <div>├─ stdio JSON-RPC (MCP)</div>
+                <div>├─ agent loop (urllib)</div>
+                <div>├─ sysprobe · planner</div>
+                <div>└─ gates · publisher</div>
+              </div>
+            </div>
+            <div class="flow-arrow">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            </div>
+            <div class="flow-clients">
+              <div class="flow-item accent-text">.venv/torch-convert</div>
+              <div class="flow-item accent-text">.venv/transformers</div>
+              <div class="flow-item accent-text">native C++ engines</div>
+              <div class="flow-item accent-text">Hugging Face Hub</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="arch-cards-grid">
+          <div class="arch-card">
+            <svg class="arch-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+            <h3 class="arch-card-title">Zero-Dependency Core</h3>
+            <p class="arch-card-desc">MCP server speaks raw stdio JSON-RPC — no mcp package required. The agent loop uses only standard-library urllib.</p>
+          </div>
+          <div class="arch-card">
+            <svg class="arch-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+            <h3 class="arch-card-title">Isolated Virtual Environments</h3>
+            <p class="arch-card-desc">Heavy converter stacks like PyTorch and Transformers install into automatic sandboxed sub-environments, keeping the core lean.</p>
+          </div>
+          <div class="arch-card">
+            <svg class="arch-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6m0 8v6M4.93 4.93l4.24 4.24m5.66 5.66l4.24 4.24M2 12h6m8 0h6M4.93 19.07l4.24-4.24m5.66-5.66l4.24-4.24"></path></svg>
+            <h3 class="arch-card-title">Any MCP Client</h3>
+            <p class="arch-card-desc">Connects out of the box to Claude Code, Codex, OpenCode and any MCP-compatible client.</p>
+          </div>
+        </div>
+
+        <!-- NEW v0.5.9 Runtime box -->
+        <div class="runtime-box">
+          <div class="runtime-head">
+            <span class="runtime-badge">NEW · v0.5.9</span>
+            <h3 class="runtime-title">Engine runtime lifecycle</h3>
+          </div>
+          <div class="runtime-grid">
+            <div class="runtime-card">
+              <svg class="runtime-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+              <h4 class="runtime-card-title">Flat Per-Engine Installs & In-Place Updates</h4>
+              <p class="runtime-card-desc">Engine checkouts stay persistent and update in place — no more full reinstalls. Deleted runtime folders or foreign CMake build directories are detected and recovered automatically.</p>
+            </div>
+            <div class="runtime-card">
+              <svg class="runtime-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"></path></svg>
+              <h4 class="runtime-card-title">Live Build & Inference Streaming</h4>
+              <p class="runtime-card-desc">Native CMake/ninja compiler output and model inference stream straight to stderr in real time — you watch the engine build and the model think as it happens.</p>
+            </div>
+            <div class="runtime-card">
+              <svg class="runtime-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="2"></circle></svg>
+              <h4 class="runtime-card-title">Windows Short Path Handling</h4>
+              <p class="runtime-card-desc">Native support for short build roots like AQX_WORK_ROOT=C:qx keeps MSVC nested-object paths under the limit, so deep engine builds don't fail on Windows.</p>
+            </div>
+            <div class="runtime-card">
+              <svg class="runtime-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+              <h4 class="runtime-card-title">Provenance & Upstream Licensing</h4>
+              <p class="runtime-card-desc">Publications strictly preserve upstream voice licenses, NOTICE files and model-spec language options inside every published bundle.</p>
+            </div>
+            <div class="runtime-card">
+              <svg class="runtime-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <h4 class="runtime-card-title">Multimodal Research Discovery</h4>
+              <p class="runtime-card-desc">aqx research automatically discovers and routes non-text candidates — vision, audio, multimodal, retrieval — with a --text-only flag when you want to narrow scope.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 04: Calculator -->
+  <section class="content-section" id="calculator">
+    <div class="wrap">
+      <p class="eyebrow">04 · Playground</p>
+      <h2 class="section-title">Hardware feasibility calculator</h2>
+      <p class="section-sub">See which quant levels your machine can produce before you start a run.</p>
+      <div class="section-body calc-card">
+        <div class="calc-controls">
+          <div>
+            <div style="font-size: 0.875rem; font-weight: 500;">Model</div>
+            <div class="calc-models-list" id="calc-models-list"></div>
+          </div>
+          <div class="calc-slider-block">
+            <label>
+              <span style="font-weight: 500;">System RAM</span>
+              <output id="calc-ram-val">16 GB</output>
+            </label>
+            <input type="range" id="calc-ram-slider" min="8" max="64" step="4" value="16" oninput="updateCalc()">
+          </div>
+          <div class="calc-slider-block">
+            <label>
+              <span style="font-weight: 500;">Free disk</span>
+              <output id="calc-disk-val">50 GB</output>
+            </label>
+            <input type="range" id="calc-disk-slider" min="5" max="200" step="5" value="50" oninput="updateCalc()">
+          </div>
+        </div>
+
+        <div class="calc-terminal">
+          <div class="calc-cmd-line" id="calc-cmd">$ aqx plan Llama-3.2-3B --ram 16G --disk 50G</div>
+          <div class="calc-engine-line" id="calc-engine-spec">task=text-generation  engine=llama.cpp</div>
+          <div class="calc-rows" id="calc-rows"></div>
+          <div class="calc-stats-grid">
+            <div class="calc-stat-box">
+              <div style="color: var(--muted-foreground);">est. conversion</div>
+              <div class="calc-stat-val" id="calc-stat-min">~10 min</div>
+            </div>
+            <div class="calc-stat-box">
+              <div style="color: var(--muted-foreground);">disk required</div>
+              <div class="calc-stat-val" id="calc-stat-disk">3.6 GB ✓</div>
+            </div>
+          </div>
+          <p style="margin-top: 1rem; font-size: 11px; color: var(--muted-foreground); margin-bottom: 0;">Estimates only — the real sysprobe measures your machine before each run.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 05: Quick start -->
+  <section class="content-section" id="quickstart">
+    <div class="wrap">
+      <p class="eyebrow">05 · Quick start</p>
+      <h2 class="section-title">Up and running in a minute</h2>
+      <div class="section-body quick-grid">
+        <div>
+          <div class="filter-tabs" id="quick-tabs">
+            <button class="filter-btn active" id="tab-btn-uv" onclick="switchInstallTab('uv')">uv tool (Recommended)</button>
+            <button class="filter-btn" id="tab-btn-dev" onclick="switchInstallTab('dev')">Editable Checkout (Development)</button>
+          </div>
+          <div id="install-tab-content" style="margin-top: 1rem;"></div>
+        </div>
+
+        <div class="cheatsheet-card">
+          <div class="cheatsheet-head">Commands cheat sheet</div>
+          <div id="cheatsheet-rows"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="4 17 10 11 4 5"></polyline>
+          <line x1="12" y1="19" x2="20" y2="19"></line>
+        </svg>
+        <span>AgentQuantix</span>
+        <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted-foreground); margin-left: 0.25rem;">v0.5.9</span>
+      </div>
+      <nav class="footer-links">
+        <a href="https://github.com/NANInithin/AgentQuantix" target="_blank" rel="noreferrer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path><path d="M9 18c-4.51 2-5-2-7-2"></path></svg>
+          GitHub
+        </a>
+        <a href="https://github.com/NANInithin/AgentQuantix/blob/main/LICENSE" target="_blank" rel="noreferrer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"></path><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"></path><path d="M7 21h10"></path><path d="M12 3v18"></path><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"></path></svg>
+          Apache-2.0
+        </a>
+        <a href="https://huggingface.co/models?search=gguf" target="_blank" rel="noreferrer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="16.5" y1="9.4" x2="7.55" y2="4.24"></line><polyline points="3.29 7 12 12.01 20.72 7"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+          HF Hub releases
+        </a>
+        <a href="https://github.com/NANInithin/AgentQuantix#readme" target="_blank" rel="noreferrer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+          Docs
+        </a>
+      </nav>
+    </div>
+  </footer>
+
+  <script>
+    const GH = "https://github.com/NANInithin/AgentQuantix";
+
+    /* Hero CLI Pill */
+    const heroCommands = [
+      `uv tool install "agentquantix[full] @ git+${GH}"`,
+      "aqx run org/model"
+    ];
+    let activeHeroCli = 0;
+    function setCliPill(idx) {
+      activeHeroCli = idx;
+      document.getElementById("pill-mode-install").classList.toggle("active", idx === 0);
+      document.getElementById("pill-mode-run").classList.toggle("active", idx === 1);
+      document.getElementById("cli-pill-text").textContent = heroCommands[idx];
+    }
+    function copyHeroCli() {
+      const text = heroCommands[activeHeroCli];
+      navigator.clipboard?.writeText(text);
+      const btn = document.getElementById("cli-copy-btn");
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+      setTimeout(() => {
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+      }, 1400);
+    }
+
+    /* Terminal Scenarios */
+    const SCENARIOS = {
+      text: {
+        id: "text",
+        label: "Text · Qwen3-0.6B",
+        log: [
+          { t: "$ aqx run Qwen/Qwen3-0.6B", c: "cmd" },
+          { t: "▸ sysprobe   RAM 31.2 GB free · CPU 16 threads (AVX2) · disk 212 GB", c: "dim" },
+          { t: "✓ feasibility peak est. 3.4 GB  → OK", c: "ok" },
+          { t: "▸ resolve    task=text-generation  engine=llama.cpp@b5120", c: "acc" },
+          { t: "▸ convert    hf → F16 GGUF  [████████████████] 1.2 GB", c: "dim" },
+          { t: "▸ imatrix    calibrating on 512 chunks…  done (48s)", c: "dim" },
+          { t: "▸ quantize   Q4_K_M · Q5_K_M · Q8_0", c: "dim" },
+          { t: "▸ gates      perplexity Δ Q4_K_M +2.1%  (≤ 5%)  ✓", c: "ok" },
+          { t: "             perplexity Δ Q8_0   +0.1%  (≤ 1%)  ✓", c: "ok" },
+          { t: "▸ safety     model card + license check  ✓", c: "ok" },
+          { t: "? Review artifacts in runs/0x7f3a — publish to Hub? [y/N] ", c: "warn" }
+        ],
+        yes: "✓ published → hf.co/agentquantix/Qwen3-0.6B-GGUF (3 files, verified)",
+        no: "✗ publish skipped · artifacts kept in runs/0x7f3a"
+      },
+      voice: {
+        id: "voice",
+        label: "Voice / TTS · VoxCPM2",
+        log: [
+          { t: "$ aqx run openbmb/VoxCPM2", c: "cmd" },
+          { t: "▸ sysprobe   RAM 27.8 GB free · CPU 16 threads · disk 184 GB", c: "dim" },
+          { t: "✓ feasibility peak est. 8.6 GB  → OK", c: "ok" },
+          { t: "▸ resolve    task=text-to-speech  engine=audio.cpp@f7d2e", c: "acc" },
+          { t: "▸ build      cmake --build . --parallel  → streaming stderr…", c: "dim" },
+          { t: "▸ infer      native audio.cpp inference → stderr (live)", c: "dim" },
+          { t: "▸ listen     TTS review: fixture audio #1–#4 → quality cache 0x9c21", c: "dim" },
+          { t: "✓ gates      listening review PASSED (4/4 fixtures)", c: "ok" },
+          { t: "✓ provenance upstream voice license + NOTICE preserved in bundle", c: "ok" },
+          { t: "? Atomic bundle staged in runs/0x4e2b — publish? [y/N] ", c: "warn" }
+        ],
+        yes: "✓ bundle published atomically → hf.co/agentquantix/VoxCPM2-GGUF (license + notices intact)",
+        no: "✗ publish skipped · atomic bundle kept in runs/0x4e2b"
+      }
+    };
+
+    let curScenario = "text";
+    let termTimeout = null;
+    let currentLineIndex = 0;
+    let terminalAnswer = null;
+
+    function switchScenario(key) {
+      curScenario = key;
+      document.getElementById("tab-text").classList.toggle("active", key === "text");
+      document.getElementById("tab-voice").classList.toggle("active", key === "voice");
+      replayTerminal();
+    }
+
+    function replayTerminal() {
+      clearTimeout(termTimeout);
+      currentLineIndex = 0;
+      terminalAnswer = null;
+      renderTerminalFrame();
+    }
+
+    function renderTerminalFrame() {
+      const container = document.getElementById("term-body");
+      const scenario = SCENARIOS[curScenario];
+      const lines = scenario.log.slice(0, currentLineIndex);
+      
+      let html = lines.map(l => `<div class="term-line ${l.c || 'dim'}">${escapeHtml(l.t)}</div>`).join('');
+
+      if (currentLineIndex < scenario.log.length) {
+        html += '<span class="term-cursor"></span>';
+        container.innerHTML = html;
+        const delay = currentLineIndex === 0 ? 550 : 380;
+        currentLineIndex++;
+        termTimeout = setTimeout(renderTerminalFrame, delay);
+      } else {
+        if (terminalAnswer === null) {
+          html += `
+            <div class="term-action-btns">
+              <button class="term-action-btn publish" onclick="answerTerminal('y')">y — publish</button>
+              <button class="term-action-btn keep" onclick="answerTerminal('n')">N — keep local</button>
+            </div>
+          `;
+        } else if (terminalAnswer === "y") {
+          html += `<div class="term-line ok">${escapeHtml(scenario.yes)}</div>`;
+        } else if (terminalAnswer === "n") {
+          html += `<div class="term-line dim">${escapeHtml(scenario.no)}</div>`;
+        }
+        container.innerHTML = html;
+      }
+    }
+
+    function answerTerminal(ans) {
+      terminalAnswer = ans;
+      renderTerminalFrame();
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    /* Pipeline Component */
+    const STEPS = [
+      {
+        icon: '<svg class="step-detail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>',
+        title: "Hardware Feasibility Probe",
+        body: "Analyzes RAM, CPU/VRAM and disk before any job runs, estimating peak memory per stage to prevent OOM crashes and half-written artifacts.",
+        detail: ["sysprobe: RAM / swap / threads / AVX", "per-stage peak memory estimate", "disk budget for source + intermediates", "abort early with actionable reasons"]
+      },
+      {
+        icon: '<svg class="step-detail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>',
+        title: "Unified Native C++ Engine Routing",
+        body: "Maps each Hub task to the right native engine and pinned converter so every modality follows one pipeline.",
+        detail: ["llama.cpp · audio.cpp · whisper.cpp", "clip.cpp · vision.cpp", "depth-anything.cpp", "pinned engine revisions per release"]
+      },
+      {
+        icon: '<svg class="step-detail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"></path><path d="M3.34 19a10 10 0 1 1 17.32 0"></path></svg>',
+        title: "Automated Quality & Regression Gates",
+        body: "Each quant is scored on a fixed corpus against the reference model; anything regressing past thresholds is dropped.",
+        detail: ["WER/CER on fixed ASR corpus", "SDR ≥ +6 dB for audio separation", "cosine similarity for embeddings", "perplexity Δ for text generation"]
+      },
+      {
+        icon: '<svg class="step-detail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg>',
+        title: "Dual-Layer Safety & Human-in-the-Loop",
+        body: "Automated checks plus mandatory human review — listening for TTS, playback for video — before anything reaches the Hub.",
+        detail: ["license & model-card validation", "mandatory TTS listening review", "video playback review", "explicit y/N publish gate"]
+      }
+    ];
+
+    let activeStep = 0;
+    function renderPipeline() {
+      const btnsContainer = document.getElementById("step-btns");
+      btnsContainer.innerHTML = STEPS.map((s, i) => `
+        <button class="step-btn ${i === activeStep ? 'active' : ''}" onclick="selectStep(${i})">
+          <span class="step-num">0${i + 1}</span>
+          <div>
+            <div class="step-title">${s.title}</div>
+            <p class="step-desc">${s.body}</p>
+          </div>
+        </button>
+      `).join('');
+
+      const s = STEPS[activeStep];
+      document.getElementById("step-detail-card").innerHTML = `
+        ${s.icon}
+        <h3 class="step-detail-title">${s.title}</h3>
+        <p class="step-detail-desc">${s.body}</p>
+        <ul class="step-detail-list">
+          ${s.detail.map(d => `
+            <li class="step-detail-item">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span>${d}</span>
+            </li>
+          `).join('')}
+        </ul>
+        <div class="step-progress-bar">
+          ${STEPS.map((_, i) => `<span class="step-progress-seg ${i <= activeStep ? 'done' : ''}"></span>`).join('')}
+        </div>
+      `;
+    }
+    function selectStep(idx) {
+      activeStep = idx;
+      renderPipeline();
+    }
+
+    /* Matrix Component */
+    const MATRIX = [
+      { cat: "Text Generation", engines: ["llama.cpp"], tasks: ["text-generation"], feats: ["imatrix calibration", "perplexity gating", "K-quants"] },
+      { cat: "Voice & Audio", engines: ["audio.cpp", "whisper.cpp"], tasks: ["TTS", "ASR", "voice conversion", "audio separation", "forced alignment"], feats: ["WER/CER gate", "SDR +6 dB", "listening review"] },
+      { cat: "Vision & Spatial", engines: ["vision.cpp", "depth-anything.cpp", "rf-detr.cpp"], tasks: ["metric depth", "relative depth", "segmentation", "detection"], feats: ["reference-output diff", "playback review"] },
+      { cat: "Retrieval & Embeddings", engines: ["llama.cpp", "clip.cpp"], tasks: ["sentence similarity", "zero-shot classification"], feats: ["cosine similarity gate"] },
+      { cat: "Multimodal", engines: ["llama.cpp"], tasks: ["image-to-text", "video-to-text (VLM)"], feats: ["F16 mmproj projectors", "quantized LM backbone"] }
+    ];
+    let activeMatrixFilter = "All";
+
+    function renderMatrix() {
+      const filters = ["All", ...MATRIX.map(m => m.cat)];
+      document.getElementById("matrix-filters").innerHTML = filters.map(f => `
+        <button class="filter-btn ${f === activeMatrixFilter ? 'active' : ''}" onclick="setMatrixFilter('${f}')">${f}</button>
+      `).join('');
+
+      const filtered = activeMatrixFilter === "All" ? MATRIX : MATRIX.filter(m => m.cat === activeMatrixFilter);
+      document.getElementById("matrix-grid").innerHTML = filtered.map(m => `
+        <div class="matrix-card">
+          <h3 class="matrix-cat">${m.cat}</h3>
+          <div class="matrix-engines">
+            ${m.engines.map(e => `<code class="engine-tag">${e}</code>`).join('')}
+          </div>
+          <div class="matrix-label">Tasks</div>
+          <div class="matrix-tasks">${m.tasks.join(" · ")}</div>
+          <div class="matrix-label">Gates & features</div>
+          <ul class="matrix-features">
+            ${m.feats.map(x => `
+              <li class="matrix-feat-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>${x}</span>
+              </li>
+            `).join('')}
+          </ul>
+        </div>
+      `).join('');
+    }
+    function setMatrixFilter(cat) {
+      activeMatrixFilter = cat;
+      renderMatrix();
+    }
+
+    /* Calculator Component */
+    const MODELS = [
+      { id: "Qwen3-0.6B", params: 0.6, task: "text-generation", engine: "llama.cpp" },
+      { id: "SmolVLM2-500M", params: 0.5, task: "video-text-to-text", engine: "llama.cpp + mmproj" },
+      { id: "VoxCPM2", params: 2.0, task: "text-to-speech", engine: "audio.cpp" },
+      { id: "Llama-3.2-3B", params: 3.2, task: "text-generation", engine: "llama.cpp" },
+      { id: "Granite-3.1-8B", params: 8.1, task: "text-generation", engine: "llama.cpp" }
+    ];
+    const QUANTS = [
+      { name: "Q4_K_M", bits: 4.85 },
+      { name: "Q5_K_M", bits: 5.69 },
+      { name: "Q8_0", bits: 8.5 },
+      { name: "F16", bits: 16 }
+    ];
+
+    let calcModelId = "Llama-3.2-3B";
+
+    function updateCalc() {
+      const ram = +document.getElementById("calc-ram-slider").value;
+      const disk = +document.getElementById("calc-disk-slider").value;
+      document.getElementById("calc-ram-val").textContent = ram + " GB";
+      document.getElementById("calc-disk-val").textContent = disk + " GB";
+
+      const model = MODELS.find(m => m.id === calcModelId) || MODELS[3];
+      document.getElementById("calc-cmd").textContent = `$ aqx plan ${model.id} --ram ${ram}G --disk ${disk}G`;
+      document.getElementById("calc-engine-spec").textContent = `task=${model.task}  engine=${model.engine}`;
+
+      const f16 = (model.params * 16) / 8;
+      const results = QUANTS.map(q => {
+        const sizeGB = (model.params * q.bits) / 8;
+        const peakRamGB = f16 * 0.6 + sizeGB + 1.5;
+        const ratio = peakRamGB / ram;
+        const status = ratio <= 0.7 ? "fits" : (ratio <= 0.95 ? "tight" : "no");
+        return { name: q.name, sizeGB, peakRamGB, status };
+      });
+
+      const diskNeeded = f16 * 2 + results.reduce((s, r) => s + (r.name === "F16" ? 0 : r.sizeGB), 0);
+      const minutes = Math.max(1, Math.round(model.params * 2.4 + 2));
+      const diskOk = diskNeeded <= disk;
+
+      const badgeLabels = { fits: "fits comfortably", tight: "tight", no: "won't fit" };
+
+      document.getElementById("calc-rows").innerHTML = results.map(q => {
+        const pct = Math.min(100, (q.peakRamGB / ram) * 100);
+        const barColor = q.status === "fits" ? "var(--primary)" : (q.status === "tight" ? "var(--warn)" : "var(--destructive)");
+        return `
+          <div class="calc-row">
+            <span class="calc-row-name">${q.name}</span>
+            <span class="calc-row-size">${q.sizeGB.toFixed(2)} GB</span>
+            <div class="calc-bar-bg">
+              <div class="calc-bar-fill" style="width: ${pct}%; background-color: ${barColor};"></div>
+            </div>
+            <span class="calc-badge ${q.status}">${badgeLabels[q.status]}</span>
+          </div>
+        `;
+      }).join('');
+
+      document.getElementById("calc-stat-min").textContent = `~${minutes} min`;
+      const diskEl = document.getElementById("calc-stat-disk");
+      diskEl.textContent = `${diskNeeded.toFixed(1)} GB ${diskOk ? '✓' : '✗'}`;
+      diskEl.style.color = diskOk ? "var(--primary)" : "var(--destructive)";
+
+      // Models buttons
+      document.getElementById("calc-models-list").innerHTML = MODELS.map(m => `
+        <button class="calc-model-btn ${m.id === calcModelId ? 'active' : ''}" onclick="setCalcModel('${m.id}')">
+          <span>${m.id}</span>
+          <span style="font-size: 0.75rem;">${m.params}B</span>
+        </button>
+      `).join('');
+    }
+
+    function setCalcModel(id) {
+      calcModelId = id;
+      updateCalc();
+    }
+
+    /* Quickstart Component */
+    const INSTALL_TABS = {
+      uv: {
+        id: "uv",
+        label: "uv tool (Recommended)",
+        code: `uv tool install "agentquantix[full] @ git+${GH}"`,
+        points: [
+          "Installs as a standalone tool in its own isolated environment — your system Python stays untouched.",
+          "Automatic PATH integration: the aqx command is available everywhere immediately.",
+          "Extras: use [full,voice] to pull in the TTS listening-review tooling."
+        ],
+        upgrade: `uv tool install --force --reinstall "agentquantix[full] @ git+${GH}"`
+      },
+      dev: {
+        id: "dev",
+        label: "Editable Checkout (Development)",
+        code: `git clone ${GH}
+cd AgentQuantix
+python -m pip install -e '.[dev,media,detection]'`,
+        points: [
+          "Live-editable source checkout for hacking on the core.",
+          "Heavy converter stacks (PyTorch, Transformers) install into automatic isolated virtualenvs — the core stays lean.",
+          "dev / media / detection extras cover tests, audio-video review tooling and vision converters."
+        ]
+      }
+    };
+    let currentInstallTab = "uv";
+
+    function switchInstallTab(tab) {
+      currentInstallTab = tab;
+      document.getElementById("tab-btn-uv").classList.toggle("active", tab === "uv");
+      document.getElementById("tab-btn-dev").classList.toggle("active", tab === "dev");
+      renderInstallTab();
+    }
+
+    function renderInstallTab() {
+      const t = INSTALL_TABS[currentInstallTab];
+      let html = `
+        <div class="codebox-wrap">
+          <div class="codebox-head">
+            <span class="codebox-label">bash</span>
+            <button class="copy-btn" onclick="copySnippet('${encodeURIComponent(t.code)}', this)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            </button>
+          </div>
+          <pre class="codebox-pre"><code>${escapeHtml(t.code)}</code></pre>
+        </div>
+        <ul class="points-list">
+          ${t.points.map(p => `
+            <li class="points-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span>${p}</span>
+            </li>
+          `).join('')}
+        </ul>
+      `;
+
+      if (t.upgrade) {
+        html += `
+          <div class="codebox-wrap" style="margin-top: 1rem;">
+            <div class="codebox-head">
+              <span class="codebox-label">upgrade</span>
+              <button class="copy-btn" onclick="copySnippet('${encodeURIComponent(t.upgrade)}', this)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              </button>
+            </div>
+            <pre class="codebox-pre"><code>${escapeHtml(t.upgrade)}</code></pre>
+          </div>
+        `;
+      }
+      document.getElementById("install-tab-content").innerHTML = html;
+    }
+
+    const CHEATSHEET = [
+      [`uv tool install "agentquantix[full] @ git+${GH}"`, "Recommended install — standalone, isolated tool"],
+      ["aqx research", "Discover & route text + non-text candidates (vision, audio, multimodal, retrieval)"],
+      ["aqx research --text-only", "Restrict discovery to text-generation models"],
+      ["aqx run org/model --no-publish", "Full pipeline, keep artifacts local"],
+      ["aqx review RUN_ID", "TTS listening validation against fixture audio"],
+      ["aqx run --resume RUN_ID", "Resume an interrupted run"],
+      ["aqx runs", "List past runs and gate results"],
+      ["set AQX_WORK_ROOT=C:\aqx", "Windows: short build path; delete stale runtime folders to trigger auto-recovery"]
+    ];
+
+    function renderCheatsheet() {
+      document.getElementById("cheatsheet-rows").innerHTML = CHEATSHEET.map(([cmd, desc]) => `
+        <div class="cheat-row">
+          <div style="flex: 1;">
+            <code class="cheat-code">${escapeHtml(cmd)}</code>
+            <p class="cheat-desc">${desc}</p>
+          </div>
+          <button class="copy-btn" onclick="copySnippet('${encodeURIComponent(cmd)}', this)" aria-label="Copy command">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          </button>
+        </div>
+      `).join('');
+    }
+
+    function copySnippet(encoded, btn) {
+      const text = decodeURIComponent(encoded);
+      navigator.clipboard?.writeText(text);
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+      setTimeout(() => {
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+      }, 1400);
+    }
+
+    // Init
+    replayTerminal();
+    renderPipeline();
+    renderMatrix();
+    updateCalc();
+    renderInstallTab();
+    renderCheatsheet();
+  </script>
+</body>
+</html>
