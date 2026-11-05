@@ -144,7 +144,7 @@ def main():
             current = api("branches/main/protection", missing=True) or {}
             api("branches/main/protection", "PUT", protection_payload(current))
             pages = api("pages", missing=True)
-            api("pages", "PATCH" if pages else "POST", {"build_type": "workflow"})
+            api("pages", "PUT" if pages else "POST", {"build_type": "workflow"})
             configure_environment()
         verify()
     except (OSError, RuntimeError, AssertionError, KeyError) as error:
