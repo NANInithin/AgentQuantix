@@ -54,6 +54,14 @@ export function validateArtifact(directory) {
   if (!/<html[\s>]/i.test(html) || !/<title[\s>]/i.test(html)) {
     throw new Error('Static entry point must be an HTML document with a title.');
   }
+  // Only inspect markup, not HTML examples inside scripts, styles or comments.
+  const markup = html.replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
+  const ids = new Set();
+  for (const [, id] of markup.matchAll(/<[^>]*?\s+id\s*=\s*["']([^"']+)["'][^>]*>/gi)) {
+    if (ids.has(id)) throw new Error(`Duplicate HTML id in website entry point: ${id}`);
+    ids.add(id);
+  }
   if (/(?:src|href)=["']\/AgentQuantix\//i.test(html)) {
     throw new Error('Build assets target /AgentQuantix/. The custom domain requires base /.');
   }

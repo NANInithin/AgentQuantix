@@ -83,6 +83,20 @@ test('repository base paths fail on the custom domain', (t) => {
   assert.throws(() => validateArtifact(directory), /requires base/);
 });
 
+test('duplicated controls cannot share an HTML id in a published page', (t) => {
+  const directory = join(fixture(t), 'website/dist');
+  artifact(directory);
+  writeFileSync(join(directory, 'index.html'), '<html><title>Duplicate controls</title><span id="command">one</span><span id="command">two</span></html>');
+  assert.throws(() => validateArtifact(directory), /Duplicate HTML id/);
+});
+
+test('HTML examples in scripts and comments are not treated as live controls', (t) => {
+  const directory = join(fixture(t), 'website/dist');
+  artifact(directory);
+  writeFileSync(join(directory, 'index.html'), '<html><title>Examples</title><span id="command">one</span><!-- <span id="command">comment</span> --><script>const example = `<span id="command">example</span>`;</script></html>');
+  assert.ok(validateArtifact(directory) > 0);
+});
+
 test('npm ci, build, validation and staging work together without publishing source', (t) => {
   const directory = fixture(t);
   const app = join(directory, 'website');
