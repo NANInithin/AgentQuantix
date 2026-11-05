@@ -393,3 +393,25 @@ def test_agent_research_counts_task_route_statuses(monkeypatch, tmp_path):
         "choose": 1,
         "blocked": 2,
     }
+
+
+def test_research_survives_unusable_audio_cpp_runtime(monkeypatch, offline_research):
+    original_route = router.route
+
+    def route(repo_id, **kwargs):
+        if repo_id == "org/audio-model":
+            return router.Route(repo_id, task="text-to-speech", pipeline="voice",
+                                engine="audio.cpp", family="breeze_tts",
+                                reasons=["audio.cpp catalog route"])
+        return original_route(repo_id, **kwargs)
+
+    def broken():
+        raise research.voice.VoiceValidationError(
+            "selected audio.cpp runtime has no model_specs catalog")
+
+    monkeypatch.setattr(router, "route", route)
+    monkeypatch.setattr(research.voice, "audio_cpp_catalog", broken)
+    result = research.research(probe_disk=False, hunt_forks=False)
+    assert result["task_routes"]
+    audio = [item for item in result["task_routes"] if item["repo_id"] == "org/audio-model"]
+    assert all(item["status"] == "blocked" and "model_specs" in item["detail"] for item in audio)

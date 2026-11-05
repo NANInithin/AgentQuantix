@@ -369,3 +369,37 @@ def test_msvc_batch_arguments_reject_shell_injection(value):
     with pytest.raises(builders.RuntimeBuildError):
         builders._batch_quote(value)
     assert builders._batch_quote("C:/a&b/100% native") == '"C:/a&b/100%% native"'
+
+
+def _cache(build_dir, generator, home):
+    build_dir.mkdir(parents=True, exist_ok=True)
+    (build_dir / "CMakeCache.txt").write_text(
+        f"CMAKE_GENERATOR:INTERNAL={generator}\n"
+        f"CMAKE_HOME_DIRECTORY:INTERNAL={home}\n",
+        encoding="utf-8")
+
+
+def test_build_dir_from_other_generator_is_set_aside(native):
+    _cache(native.build, "Visual Studio 18 2026", native.source.as_posix())
+    (native.build / "keep.txt").write_text("old build", encoding="utf-8")
+    options = {**native.options, "generator": "Ninja"}
+    result = builders.build_runtime("llama.cpp", native.source, native.build, options)
+    aside = [p for p in native.build.parent.iterdir() if p.name.startswith(native.build.name + "-old-")]
+    assert len(aside) == 1 and (aside[0] / "keep.txt").read_text(encoding="utf-8") == "old build"
+    assert not (native.build / "keep.txt").exists()
+    assert result["binaries"]
+
+
+def test_build_dir_with_matching_generator_is_reused(native):
+    _cache(native.build, "Ninja", native.source.as_posix())
+    options = {**native.options, "generator": "Ninja"}
+    builders.build_runtime("llama.cpp", native.source, native.build, options)
+    assert (native.build / "CMakeCache.txt").is_file()
+    assert not [p for p in native.build.parent.iterdir() if "-old-" in p.name]
+
+
+def test_build_dir_for_other_source_is_set_aside(native, tmp_path):
+    _cache(native.build, "Ninja", (tmp_path / "elsewhere").as_posix())
+    builders.build_runtime("llama.cpp", native.source, native.build,
+                           {**native.options, "generator": "Ninja"})
+    assert [p for p in native.build.parent.iterdir() if "-old-" in p.name]

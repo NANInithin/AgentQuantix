@@ -487,6 +487,46 @@ def _batch_quote(value):
     return '"' + value.replace("%", "%%") + '"'
 
 
+def _cmake_cache_value(cache, key):
+    for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
+        name, _, value = line.partition("=")
+        if name.split(":", 1)[0] == key:
+            return value.strip()
+    return None
+
+
+def _set_aside_foreign_build_dir(engine, cmake_source, build_dir, generator):
+    """Rename a build dir CMake would refuse to reuse instead of failing.
+
+    A folder configured with another generator (e.g. a manual Visual Studio
+    build) or for another source tree makes CMake stop with an error.
+    """
+    cache = build_dir / "CMakeCache.txt"
+    if not cache.is_file():
+        return None
+    cached_generator = _cmake_cache_value(cache, "CMAKE_GENERATOR")
+    cached_home = _cmake_cache_value(cache, "CMAKE_HOME_DIRECTORY")
+    reasons = []
+    if generator and cached_generator and cached_generator != generator:
+        reasons.append(f"generator {cached_generator!r}, not {generator!r}")
+    if cached_home and os.path.normcase(str(Path(cached_home).resolve())) != os.path.normcase(
+            str(Path(cmake_source).resolve())):
+        reasons.append(f"source {cached_home}")
+    if not reasons:
+        return None
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = build_dir.with_name(f"{build_dir.name}-old-{stamp}")
+    suffix = 1
+    while target.exists():
+        suffix += 1
+        target = build_dir.with_name(f"{build_dir.name}-old-{stamp}-{suffix}")
+    build_dir.rename(target)
+    print(f"  .. {engine}: {build_dir} was configured with {'; '.join(reasons)}; "
+          f"moved it to {target} and building fresh (delete it if unneeded)",
+          file=sys.stderr, flush=True)
+    return target
+
+
 def build_runtime(engine, source, build_dir, options=None):
     """Build one candidate in its explicit directory and return its contract.
 
@@ -516,6 +556,7 @@ def build_runtime(engine, source, build_dir, options=None):
         raise RuntimeBuildError("build fingerprint belongs to a different engine")
     if engine == "vision.cpp":
         _vision_cmake()
+    _set_aside_foreign_build_dir(engine, cmake_source, build_dir, effective.get("generator"))
     build_dir.mkdir(parents=True, exist_ok=True)
     logs = build_dir / "aqx-logs"
     submodules = _submodules_for(engine)

@@ -215,6 +215,14 @@ class RuntimeManager:
         manifest = state.get("active")
         if not manifest:
             return None
+        if (manifest.get("storage_policy") == "persistent"
+                and not Path(manifest["root"]).exists()):
+            # The installation folder was deleted outside aqx: forget the
+            # record so the engine can be adopted or reinstalled again.
+            state.pop("active", None)
+            state.pop("previous", None)
+            _write(self._state(engine), state)
+            return None
         handle = RuntimeHandle.from_manifest(manifest)
         if verify:
             self.verify(handle)

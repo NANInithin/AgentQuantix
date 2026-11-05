@@ -77,7 +77,12 @@ def research(limit=None, probe_disk=True, workers=8, hunt_forks=True,
                 "model_type": candidate.model_type,
                 "architectures": candidate.architectures,
             }
-            route = router.route(candidate.repo_id, metadata=metadata)
+            try:
+                route = router.route(candidate.repo_id, metadata=metadata)
+            except voice.VoiceValidationError as error:
+                # One broken engine runtime must not sink the whole sweep.
+                candidate.dropped = f"audio.cpp runtime unusable: {error}"
+                continue
             if not route.task and not route.choices:
                 candidate.dropped = f"no AgentQuantix task ({route.blocker})"
                 continue
@@ -85,7 +90,10 @@ def research(limit=None, probe_disk=True, workers=8, hunt_forks=True,
             candidate.dropped = None
             audio_cpp_blocker = None
             if route.engine == "audio.cpp" and route.family:
-                spec = voice.audio_cpp_catalog()["registry"].get(route.family)
+                try:
+                    spec = voice.audio_cpp_catalog()["registry"].get(route.family)
+                except voice.VoiceValidationError as error:
+                    spec, audio_cpp_blocker = None, f"audio.cpp runtime unusable: {error}"
                 if spec is not None and not voice._audio_cpp_has_conversion(spec):
                     audio_cpp_blocker = voice._audio_cpp_source_blocker(route.family)
             if audio_cpp_blocker:

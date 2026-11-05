@@ -805,3 +805,22 @@ def test_source_setup_commands_are_reported_before_execution(lifecycle, capsys):
     assert len(setup["commands"]) == 4
     assert all(set(command) == {"argv", "returncode", "stdout", "stderr"}
                for command in setup["commands"])
+
+
+def test_deleted_persistent_root_drops_record_instead_of_failing(lifecycle, tmp_path):
+    handle = installed(lifecycle)
+    state_path = lifecycle.manager._state("llama.cpp")
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    gone = tmp_path / "work" / ".aqx-runtime-builds" / "llama.cpp" / "deleted"
+    state["active"] = {**handle.manifest, "root": str(gone), "source": str(gone / "source")}
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    assert lifecycle.manager.inspect("llama.cpp") is None
+    assert "active" not in json.loads(state_path.read_text(encoding="utf-8"))
+
+
+def test_changed_files_in_existing_root_still_fail_verification(lifecycle):
+    handle = installed(lifecycle)
+    Path(handle.binaries["native"]).write_bytes(b"tampered")
+    with pytest.raises(RuntimeErrorBase, match="changed or missing"):
+        lifecycle.manager.inspect("llama.cpp")
