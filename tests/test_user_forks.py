@@ -6,6 +6,8 @@ import pytest
 from agentquantix import actions, archsupport, cli, config, research
 from agentquantix.agent import runtime_tools, tools
 from agentquantix.pipeline.job import Job
+from agentquantix.pipeline import build
+import subprocess
 
 
 @pytest.fixture
@@ -125,6 +127,44 @@ def test_tool_schemas():
     for name in ("inspect_model", "plan_release", "start_release"):
         schema = next(t for t in tools.TOOLS if t["name"] == name)
         assert "fork" in schema["input_schema"]["properties"]
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_commit_fork_fetch(monkeypatch, tmp_path, existing):
+    monkeypatch.setattr(config, "FORKS_DIR", tmp_path)
+    ref = "ab12" * 10
+    root = tmp_path / build._slug("a/b", ref)
+    if existing:
+        root.mkdir()
+    commands = []
+    monkeypatch.setattr(build, "run", lambda cmd: commands.append([str(c) for c in cmd]))
+    monkeypatch.setattr(build, "binaries", lambda path: None)
+    monkeypatch.setattr(build, "compile_tools", lambda *args: ("quantize", "imatrix"))
+    assert build.ensure_fork("a/b", ref) == (root, "quantize", "imatrix")
+    prefix = ["git", "-C", str(root)]
+    if existing:
+        assert commands == [prefix + ["fetch", "--force", "--depth", "1", "origin", ref],
+                            prefix + ["reset", "--hard", "FETCH_HEAD"]]
+    else:
+        assert commands == [["git", "init", str(root)],
+                            prefix + ["remote", "add", "origin", "https://github.com/a/b.git"],
+                            prefix + ["fetch", "--depth", "1", "origin", ref],
+                            prefix + ["checkout", "--detach", "FETCH_HEAD"]]
+
+
+def test_commit_fork_refresh_failure_does_not_build(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FORKS_DIR", tmp_path)
+    ref = "a" * 40
+    (tmp_path / build._slug("a/b", ref)).mkdir()
+    monkeypatch.setattr(build, "binaries", lambda path: None)
+    monkeypatch.setattr(build, "compile_tools", lambda *args: pytest.fail("must not build stale checkout"))
+
+    def fail(cmd):
+        raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(build, "run", fail)
+    with pytest.raises(subprocess.CalledProcessError):
+        build.ensure_fork("a/b", ref)
 
 
 @pytest.mark.parametrize("command", ["inspect", "plan", "run"])

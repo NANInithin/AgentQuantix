@@ -406,17 +406,23 @@ def _slug(repo, ref):
 def ensure_fork(repo, ref):
     """Clone (or refresh) and build a fork. Returns (llama_dir, quantize, imatrix).
 
-    `repo` is "owner/name"; `ref` is a branch, a tag, or a "pull/N/head" refspec
+    `repo` is "owner/name"; `ref` is a commit, branch, tag, or "pull/N/head" refspec
     for an open upstream PR. Idempotent: an existing checkout with usable
     binaries is returned untouched, which is what makes fork reuse across
     models free.
     """
     llama_dir = config.FORKS_DIR / _slug(repo, ref)
     url = repo if repo.startswith("http") else f"https://github.com/{repo}.git"
+    commit_ref = bool(re.fullmatch(r"[0-9a-fA-F]{7,40}", ref))
 
     if not llama_dir.exists():
         llama_dir.parent.mkdir(parents=True, exist_ok=True)
-        if ref.startswith("pull/"):
+        if commit_ref:
+            run(["git", "init", llama_dir])
+            run(["git", "-C", llama_dir, "remote", "add", "origin", url])
+            run(["git", "-C", llama_dir, "fetch", "--depth", "1", "origin", ref])
+            run(["git", "-C", llama_dir, "checkout", "--detach", "FETCH_HEAD"])
+        elif ref.startswith("pull/"):
             # A PR head is not a branch, so it cannot be cloned directly —
             # clone the default branch shallowly, then fetch the PR ref into a
             # local branch and check that out.
@@ -441,6 +447,8 @@ def ensure_fork(repo, ref):
                      "origin", ref])
                 run(["git", "-C", llama_dir, "reset", "--hard", "FETCH_HEAD"])
         except subprocess.CalledProcessError:
+            if commit_ref:
+                raise
             print("Could not refresh the fork checkout - building what is there.")
 
     if (built := binaries(llama_dir)) is not None:
