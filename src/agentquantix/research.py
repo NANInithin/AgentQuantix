@@ -214,7 +214,7 @@ def research(limit=None, probe_disk=True, workers=8, hunt_forks=True,
     return result
 
 
-def assess_one(repo_id, sysinfo=None, hunt_forks=True, probe_disk=False):
+def assess_one(repo_id, sysinfo=None, hunt_forks=True, probe_disk=False, fork=None):
     """Assess a single named repo, trending or not.
 
     Same pipeline as research(), minus the trending fetch and the base-model
@@ -250,8 +250,14 @@ def assess_one(repo_id, sysinfo=None, hunt_forks=True, probe_disk=False):
     if not arch_ok and hunt_forks:
         leads = archsupport.find_fork(candidate)
 
+    if fork and not arch_ok:
+        leads = [archsupport.user_fork(fork, candidate), *leads]
+
     assessment = feasibility.assess(candidate, sysinfo, arch_ok, arch_detail,
                                     fork_leads=leads)
+
+    if fork and arch_ok:
+        assessment["warnings"].append("fork ignored: architecture is supported by the selected runtime")
 
     available = archsupport.supported_quants()
     if available and arch_ok:

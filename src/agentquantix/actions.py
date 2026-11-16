@@ -51,7 +51,7 @@ def _require_ready(item):
 # =====================================================
 # text
 # =====================================================
-def assessments_for(models):
+def assessments_for(models, *, fork=None, hunt_forks=True):
     """Assessments for named models, whether or not they were ever researched.
 
     Naming a model is the judgement the trending filter stands in for, so an
@@ -59,7 +59,9 @@ def assessments_for(models):
     a real model that is simply not trending once produced research at limit=1,
     100 and 300 and never an answer; this is the fix.
     """
-    result = research.load_latest()
+    if fork and len(models) != 1:
+        raise ValueError("fork applies to exactly one text model")
+    result = research.load_latest() if not fork else None
     order = {name: index for index, name in enumerate(models)}
     found, off_list = {}, []
     for name in models:
@@ -74,7 +76,10 @@ def assessments_for(models):
         # One probe for the batch rather than one per model.
         sysinfo = sysprobe.probe(measure_disk=False)
         for name in off_list:
-            found[name] = research.assess_one(name, sysinfo=sysinfo)
+            kwargs = {"fork": fork} if fork else {}
+            if not hunt_forks:
+                kwargs["hunt_forks"] = False
+            found[name] = research.assess_one(name, sysinfo=sysinfo, **kwargs)
     return [found[name] for name in sorted(found, key=order.get)]
 
 
@@ -90,8 +95,8 @@ def text_options(sequential=False, upload_workers=None, quantize_threads=None):
     return options
 
 
-def text_plan(models, options):
-    assessments = assessments_for(models)
+def text_plan(models, options, *, fork=None, hunt_forks=True):
+    assessments = assessments_for(models, fork=fork, hunt_forks=hunt_forks)
     blocked = [a for a in assessments if a["verdict"] == "blocked"]
     done = [a for a in assessments if a["verdict"] == "done"]
     jobs = sorted((Job.from_assessment(a) for a in assessments
@@ -130,7 +135,7 @@ def text_plan(models, options):
     }
 
 
-def start_text(models, options, *, user_approved, on_event=None):
+def start_text(models, options, *, user_approved, on_event=None, fork=None, hunt_forks=True):
     """Run approved text jobs, then verify and publish a floor card."""
     from . import hub, runtime_control
     from .pipeline import run as run_mod
@@ -139,7 +144,12 @@ def start_text(models, options, *, user_approved, on_event=None):
             "start_release requires user_approved=true, and that is only honest "
             "when the user has named these models and said to go ahead. Show "
             "them plan_release and ask.")
-    assessments = assessments_for(models)
+    assessment_options = {}
+    if fork:
+        assessment_options["fork"] = fork
+    if not hunt_forks:
+        assessment_options["hunt_forks"] = False
+    assessments = assessments_for(models, **assessment_options)
     jobs = sorted((Job.from_assessment(a) for a in assessments
                    if a["verdict"] not in ("blocked", "done")),
                   key=lambda j: j.assessment["hours"]["total"])
@@ -508,14 +518,16 @@ def start_multimodal(plan, *, user_approved, publish=False):
 # =====================================================
 # shared actions
 # =====================================================
-def inspect(model, *, task=None, engine=None, family=None, hunt_forks=True):
+def inspect(model, *, task=None, engine=None, family=None, hunt_forks=True, fork=None):
     """Read-only. Routes the model and returns the matching assessment."""
     item = route_named(model, task=task, engine=engine, family=family)
+    if fork and item.pipeline != TEXT:
+        raise ValueError("fork applies only to text-generation models")
     result = {"route": item.to_dict()}
     if not item.ready:
         return result
     if item.pipeline == TEXT:
-        assessment = assessments_for([item.repo_id])[0]
+        assessment = assessments_for([item.repo_id], fork=fork, hunt_forks=hunt_forks)[0]
         result.update(text=report.detail(assessment), assessment=assessment)
     elif item.pipeline == VOICE:
         result["voice"] = voice_plan(item.repo_id, task=item.task,
@@ -535,7 +547,7 @@ def inspect(model, *, task=None, engine=None, family=None, hunt_forks=True):
 
 
 def plan(models, *, task=None, engine=None, family=None, hunt_forks=True,
-         text=None, voice_args=None, media_args=None, retrieval_args=None,
+         fork=None, text=None, voice_args=None, media_args=None, retrieval_args=None,
          multimodal_args=None, vision_args=None):
     """Read-only plans for named models, grouped by their resolved pipeline."""
     if isinstance(models, str):
@@ -543,6 +555,8 @@ def plan(models, *, task=None, engine=None, family=None, hunt_forks=True,
     if not models:
         raise ValueError("name at least one model")
     routes = [route_named(name, task=task, engine=engine, family=family) for name in models]
+    if fork and sum(route.pipeline == TEXT for route in routes) != 1:
+        raise ValueError("fork applies to exactly one text model")
     if sum(route.pipeline == RETRIEVAL for route in routes) > 1:
         raise ValueError("retrieval releases run one model per plan")
     if sum(route.pipeline == MULTIMODAL for route in routes) > 1:
@@ -565,7 +579,7 @@ def plan(models, *, task=None, engine=None, family=None, hunt_forks=True,
     if text_models:
         if voice_args and any(voice_args.get(k) for k in ("target_repo", "quants")):
             raise ValueError("text sweeps are resolved by the assessment; --target/--quant apply to voice and media")
-        output["text"] = text_plan(text_models, text or text_options())
+        output["text"] = text_plan(text_models, text or text_options(), fork=fork, hunt_forks=hunt_forks)
     for name, r in ready:
         if r.pipeline == VOICE:
             entry = voice_plan(r.repo_id, task=r.task,

@@ -14,6 +14,14 @@ def _tool(name, description, properties, required=()):
 
 
 ENGINE = {"type": "string", "enum": list(RUNTIMES)}
+
+
+def validate_adopt_source(source):
+    if re.match(r"(?i)^(https?://|git@|github\.com/)", str(source).strip()):
+        raise ValueError("adopt only takes a local built checkout; pass a fork URL as fork to "
+                         "plan_release/start_release (aqx run <model> --fork <url>)")
+
+
 TOOLS = [
     _tool("get_runtime_status", "Inspect installed native runtime revisions, storage and provenance. Does not build or contact upstream.",
           {"engine": ENGINE}),
@@ -25,7 +33,7 @@ TOOLS = [
            "target_revision": {"type": "object"}, "compute_backend": {"type": "string"},
            "targets": {"type": "array", "items": {"type": "string"}}},
           ["engine", "persistent", "target_revision", "user_approved"]),
-    _tool("adopt_runtime", "Register and verify a user-owned existing original runtime without modifying its checkout or compiling. Requires explicit approval of the source path.",
+    _tool("adopt_runtime", "Verify a local built original runtime checkout, never a URL. Use fork on plan_release/start_release when the user names a fork URL. Requires explicit approval of the local source path.",
           {"engine": ENGINE, "source": {"type": "string"},
            "user_approved": {"type": "boolean"}}, ["engine", "source", "user_approved"]),
     _tool("rollback_runtime", "Restore a previous verified installation when one exists. Persistent in-place installs require reinstalling a pinned revision; running jobs keep their recorded runtime.",
@@ -82,6 +90,8 @@ def call(name, arguments=None):
     if name != "get_runtime_status" and engine is None:
         raise ValueError("engine is required")
 
+    if name == "adopt_runtime":
+        validate_adopt_source(arguments["source"])
     manager = RuntimeManager()
     if name == "get_runtime_status":
         if engine:

@@ -36,6 +36,7 @@ from ..tasks import MEDIA, MULTIMODAL, RETRIEVAL, TASKS, TEXT, VISION, VOICE
 STRING = {"type": "string"}
 STRINGS = {"type": "array", "items": STRING}
 ROUTING = {
+    "fork": {"type": "string", "description": "Text only, one model: use when the user names a llama.cpp fork. GitHub URL or owner/repo, optionally #ref or @ref; pass the same fork to inspect, plan and start."},
     "task": {"type": "string", "enum": sorted(TASKS),
              "description": "Only to settle an ambiguity the route reported."},
     "engine": {"type": "string",
@@ -426,6 +427,8 @@ def _start(arguments):
     if len(pipelines) > 1:
         raise ValueError("these models resolve to different pipelines; start each separately")
     pipeline = pipelines.pop()
+    if arguments.get("fork") and pipeline != TEXT:
+        raise ValueError("fork applies only to text-generation models")
     if pipeline == MEDIA:
         raise ValueError("media releases execute the exact plan the user approved: pass the "
                          "unchanged `plan` from plan_release")
@@ -433,7 +436,8 @@ def _start(arguments):
         options = actions.text_options(arguments.get("sequential"), arguments.get("upload_workers"),
                                        arguments.get("quantize_threads"))
         events = []
-        return actions.start_text(models, options, user_approved=True, on_event=events.append)
+        return actions.start_text(models, options, user_approved=True, on_event=events.append,
+                                  fork=arguments.get("fork"), hunt_forks=arguments.get("hunt_forks", True))
     if pipeline == RETRIEVAL:
         if len(models) > 1:
             raise ValueError("retrieval releases run one model per call")
@@ -542,12 +546,14 @@ def _call(name, arguments=None):
 
     if name == "inspect_model":
         return actions.inspect(arguments["model"], hunt_forks=arguments.get("hunt_forks", True),
+                               fork=arguments.get("fork"),
                                **_routing(arguments))
 
     if name == "plan_release":
         models = arguments["models"]
         text = actions.text_options(arguments.get("sequential"), arguments.get("upload_workers"))
         return actions.plan(models, hunt_forks=arguments.get("hunt_forks", True), text=text,
+                            fork=arguments.get("fork"),
                             voice_args=_voice_args(arguments), media_args=_media_args(arguments),
                             retrieval_args={key: arguments[key] for key in ("target_repo", "quants")
                                             if arguments.get(key) is not None},
