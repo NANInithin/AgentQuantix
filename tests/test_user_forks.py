@@ -173,3 +173,14 @@ def test_cli_fork(command, monkeypatch):
     parser = cli.build_parser()
     args = parser.parse_args([command, "zenteiq-ai/Dhir-2B", "--fork", "a/b#dhir"])
     assert args.fork == "a/b#dhir"
+
+
+def test_fork_keeps_full_repo_id_over_saved_variant(monkeypatch):
+    saved = {"repo_id": "org/Model-Instruct", "fork_leads": []}
+    monkeypatch.setattr(research, "load_latest", lambda: {"assessments": [saved]})
+    monkeypatch.setattr(actions.sysprobe, "probe", lambda **kwargs: {})
+    calls = []
+    monkeypatch.setattr(research, "assess_one",
+                        lambda repo_id, **kwargs: calls.append(repo_id) or {"repo_id": repo_id})
+    actions.assessments_for(["org/Model"], fork="a/b#dhir")
+    assert calls == ["org/Model"]

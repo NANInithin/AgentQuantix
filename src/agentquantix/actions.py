@@ -71,7 +71,9 @@ def assessments_for(models, *, fork=None, hunt_forks=True):
         if assessment and not fork:
             found[name] = assessment
         else:
-            off_list.append((name, assessment["repo_id"] if assessment else name))
+            # A full repo id is taken literally: find() also matches substrings.
+            resolved = assessment["repo_id"] if assessment and "/" not in name else name
+            off_list.append((name, resolved))
     if off_list:
         # One probe for the batch rather than one per model.
         sysinfo = sysprobe.probe(measure_disk=False)
