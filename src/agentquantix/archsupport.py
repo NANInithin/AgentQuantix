@@ -281,6 +281,42 @@ def _voice_fork_cache_put(key, leads):
         pass
 
 
+def parse_fork(value):
+    """Normalize a GitHub repository and optional branch/tag/commit."""
+    value = value.strip()
+    if value.startswith("https://github.com/"):
+        value = value[len("https://github.com/"):]
+    repo, separator, ref = value.partition("#")
+    if not separator:
+        repo, separator, ref = value.partition("@")
+    if "/tree/" in repo:
+        if separator:
+            raise ValueError("fork has more than one ref")
+        repo, ref = repo.split("/tree/", 1)
+        separator = "/tree/"
+    repo = repo.removesuffix("/").removesuffix(".git")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or any(
+            part in (".", "..") for part in repo.split("/")):
+        raise ValueError("fork must be a GitHub URL or owner/repo, optionally with #ref or @ref")
+    if separator and (not ref or ref.startswith("-") or any(c.isspace() for c in ref)
+                      or any(c in ref for c in "?#@\\")):
+        raise ValueError("fork requires a valid explicit ref")
+    return {"repo": repo, "ref": ref or None}
+
+
+def user_fork(value, candidate):
+    lead = parse_fork(value)
+    if not lead["ref"]:
+        branches = _branches_matching(lead["repo"], _needles(candidate))
+        metadata = None if branches else _github_json(f"{GITHUB_API}/repos/{lead['repo']}")
+        lead["ref"] = branches[0] if branches else (metadata or {}).get("default_branch")
+        if not lead["ref"]:
+            raise ValueError("cannot resolve fork branch from GitHub; provide an explicit ref with #ref or @ref")
+    return {**lead, "kind": "user-fork", "confidence": "user",
+            "url": f"https://github.com/{lead['repo']}",
+            "why": "fork explicitly selected by the user; support is not yet verified"}
+
+
 def find_fork(candidate, use_cache=True):
     """Repos/branches that plausibly add support for this architecture.
 
@@ -301,7 +337,7 @@ def find_fork(candidate, use_cache=True):
 
     # Keyed by architecture, not by model: every K2-Horizon size needs the same
     # branch, so one search answers for all of them.
-    key = (candidate.architectures or [candidate.model_type or ""])[0]
+    key = "v2:" + candidate.org + ":" + (candidate.architectures or [candidate.model_type or ""])[0]
     if use_cache and key:
         entry = _fork_cache().get(key)
         if entry:
@@ -316,11 +352,19 @@ def find_fork(candidate, use_cache=True):
     # The GitHub org rarely matches the Hub org exactly (Hub "IFM" is GitHub
     # "MBZUAI-IFM"), so search GitHub for llama.cpp forks whose owner looks
     # related rather than guessing a single name.
-    query = f"{candidate.org} llama.cpp in:name fork:true"
-    found = _github_json(
-        f"{GITHUB_API}/search/repositories?q={urllib.parse.quote(query)}"
-        "&per_page=10")
-    for repo in (found or {}).get("items", [])[:10]:
+    orgs = [candidate.org]
+    stem = re.split(r"[-_]", candidate.org)[0]
+    if len(stem) >= 4 and stem != candidate.org:
+        orgs.append(stem)
+    repos = {}
+    for org in orgs:
+        query = f"{org} llama.cpp in:name fork:true"
+        found = _github_json(
+            f"{GITHUB_API}/search/repositories?q={urllib.parse.quote(query)}"
+            "&per_page=10")
+        for repo in (found or {}).get("items", [])[:10]:
+            repos.setdefault(repo.get("full_name", "").casefold(), repo)
+    for repo in repos.values():
         full_name = repo.get("full_name", "")
         if not full_name.lower().endswith("/llama.cpp"):
             continue

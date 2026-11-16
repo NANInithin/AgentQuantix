@@ -47,6 +47,9 @@ shared lifecycle checks the required engines for updates, preferring a stable
 release and otherwise the upstream default branch. Ask whether a new original
 runtime should be kept for regular use: yes installs outside temp; no selects
 a temporary original. Compatibility forks and PRs remain temporary.
+When the user says "use this fork <url>", pass that URL as `fork` to
+inspect_model, plan_release and start_release for the single text model.
+Never send a URL to adopt_runtime: adoption only takes a local built checkout.
 Use check_runtime_updates to show an exact target, then prepare_runtime only
 after the user approves that runtime action and storage choice. An update
 requires update_approved=true; model approval never implies runtime-update

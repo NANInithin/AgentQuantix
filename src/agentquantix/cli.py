@@ -150,7 +150,7 @@ def cmd_show(args):
 
 def cmd_inspect(args):
     result = actions.inspect(args.model, task=args.task, engine=args.engine,
-                             family=args.family, hunt_forks=not args.no_fork_hunt)
+                             family=args.family, hunt_forks=not args.no_fork_hunt, fork=args.fork)
     if "text" in result and not args.json:
         _print(result["text"])
     else:
@@ -301,6 +301,8 @@ def cmd_run(args):
     if args.xet:
         os.environ["AQX_XET"] = args.xet
     if args.resume:
+        if getattr(args, "fork", None):
+            raise ValueError("--resume keeps its saved fork; do not pass --fork")
         if args.model:
             raise ValueError("--resume takes a run id instead of model names")
         return _resume(args)
@@ -339,6 +341,8 @@ def cmd_run(args):
         raise ValueError(f"these models resolve to different pipelines ({', '.join(pipelines)}); "
                          "run each pipeline separately")
     pipeline = pipelines[0]
+    if getattr(args, "fork", None) and pipeline != TEXT:
+        raise ValueError("--fork applies only to text-generation models")
     _check_applicable(args, pipeline)
     if pipeline == TEXT:
         code = _run_text(args, [name for name, _ in ready])
@@ -362,6 +366,11 @@ def cmd_run(args):
 
 def _run_text(args, names):
     result = research.load_latest()
+    if getattr(args, "fork", None):
+        if len(names) != 1:
+            raise ValueError("--fork applies to exactly one named text model")
+        result = {"assessments": actions.assessments_for(
+            names, fork=args.fork, hunt_forks=not args.no_fork_hunt)}
     if not result and not names:
         _print("No research on file. Run `aqx research` first, or name a "
                "model directly: `aqx run org/model`.")
@@ -907,6 +916,7 @@ def cmd_plan(args):
         _check_applicable(args, pipeline)
     media_args = _media_args(args, next((r for r in routes if r.pipeline == MEDIA), None))
     result = actions.plan(args.model, task=args.task, engine=args.engine, family=args.family,
+                          fork=args.fork,
                           hunt_forks=not args.no_fork_hunt, text=_text_run_options(args),
                           voice_args=_voice_args(args), media_args=media_args,
                           retrieval_args={"target_repo": args.target, "quants": args.quant},
@@ -1040,6 +1050,7 @@ def _add_routing(parser):
     group.add_argument("--family", help="engine catalog family for a custom or renamed repository")
     group.add_argument("--no-fork-hunt", action="store_true",
                        help="do not search engine forks and open PRs for unresolved sources")
+    group.add_argument("--fork", help="Text: user-selected llama.cpp GitHub URL or owner/repo, optionally #ref or @ref")
 
 
 def _add_release_options(parser, *, execution):

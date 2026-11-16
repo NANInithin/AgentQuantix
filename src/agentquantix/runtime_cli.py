@@ -57,6 +57,7 @@ def command(args):
         if action in ("adopt", "rollback"):
             details = {"engine": args.engine, "action": action}
             if action == "adopt":
+                runtime_tools.validate_adopt_source(args.source)
                 details["source"] = args.source
             _print(details)
             if not _approve(args, "Verify and register this existing runtime?" if action == "adopt"
