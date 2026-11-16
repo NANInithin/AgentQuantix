@@ -95,6 +95,23 @@ def test_batch_rejected():
         actions.assessments_for(["a/b", "a/c"], fork="a/fork#dhir")
 
 
+def test_fork_reassesses_researched_shorthand(monkeypatch):
+    saved = {"repo_id": "zenteiq-ai/Dhir-2B", "fork_leads": []}
+    monkeypatch.setattr(research, "load_latest", lambda: {"assessments": [saved]})
+    monkeypatch.setattr(actions.sysprobe, "probe", lambda **kwargs: {})
+    calls = []
+    fresh = {"repo_id": saved["repo_id"], "fork_leads": [{"kind": "user-fork"}]}
+
+    def assess(repo_id, **kwargs):
+        calls.append((repo_id, kwargs))
+        return fresh
+
+    monkeypatch.setattr(research, "assess_one", assess)
+    assert actions.assessments_for(["Dhir-2B"], fork="a/b#dhir") == [fresh]
+    assert calls == [("zenteiq-ai/Dhir-2B", {"sysinfo": {}, "fork": "a/b#dhir"})]
+    assert saved["fork_leads"] == []
+
+
 @pytest.mark.parametrize("source", ["https://github.com/a/b", "http://github.com/a/b",
                                     "git@github.com:a/b", "github.com/a/b"])
 def test_adopt_rejects_url(source, monkeypatch):

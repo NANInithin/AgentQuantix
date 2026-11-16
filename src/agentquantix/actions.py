@@ -61,25 +61,25 @@ def assessments_for(models, *, fork=None, hunt_forks=True):
     """
     if fork and len(models) != 1:
         raise ValueError("fork applies to exactly one text model")
-    result = research.load_latest() if not fork else None
+    result = research.load_latest()
     order = {name: index for index, name in enumerate(models)}
     found, off_list = {}, []
     for name in models:
         # find() raises when a short name is ambiguous, which is a genuine
         # question for the user and must not be swallowed into a Hub lookup.
         assessment = research.find(result, name) if result else None
-        if assessment:
+        if assessment and not fork:
             found[name] = assessment
         else:
-            off_list.append(name)
+            off_list.append((name, assessment["repo_id"] if assessment else name))
     if off_list:
         # One probe for the batch rather than one per model.
         sysinfo = sysprobe.probe(measure_disk=False)
-        for name in off_list:
+        for name, repo_id in off_list:
             kwargs = {"fork": fork} if fork else {}
             if not hunt_forks:
                 kwargs["hunt_forks"] = False
-            found[name] = research.assess_one(name, sysinfo=sysinfo, **kwargs)
+            found[name] = research.assess_one(repo_id, sysinfo=sysinfo, **kwargs)
     return [found[name] for name in sorted(found, key=order.get)]
 
 
